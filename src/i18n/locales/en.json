@@ -1,0 +1,237 @@
+{
+    "common": {
+        "switchToArabic": "العربية",
+        "switchToEnglish": "English"
+    },
+    "splash": {
+        "welcome": "Welcome MAK OVERSEAS",
+        "title": "Secure Client Access"
+    },
+    "theme": {
+        "dark": "Dark Mode",
+        "light": "Light Mode",
+        "system": "System Theme"
+    },
+    "auth": {
+        "language": "العربية"
+    },
+    "login": {
+        "titleWelcome": "Welcome",
+        "titleBack": "Back",
+        "subtitle": "Invited users, please enter your details to continue.",
+        "usernamePlaceholder": "Username",
+        "fullNamePlaceholder": "Full Name",
+        "continue": "Continue",
+        "privatePartOne": "For invited users only.",
+        "privatePartTwo": "Private access.",
+        "missingUsernameTitle": "Missing Username",
+        "missingUsernameMessage": "Please enter your username.",
+        "missingFullNameTitle": "Missing Full Name",
+        "missingFullNameMessage": "Please enter your full name.",
+        "loginFailedTitle": "Login Failed",
+        "loginFailedMessage": "Please try again.",
+        "errorTitle": "Error",
+        "errorMessage": "Something went wrong. Please try again.",
+        "userAccepted": "User accepted",
+        "phonePlaceholder": "phone number",
+        "missingphoneTitle": "Phone number required",
+        "missingphoneMessage": "Please enter the client's phone number."
+    },
+    "accessCode": {
+        "titleEnter": "Enter",
+        "titleAccessCode": "Access Code",
+        "subtitle": "Please enter the 6-digit access code provided to you manually by the administrator.",
+        "verifyButton": "Verify & Enter",
+        "privatePartOne": "Code provided manually by",
+        "privatePartTwo": "Admin",
+        "privatePartThree": "For invited users only.",
+        "invalidCodeTitle": "Invalid Code",
+        "invalidCodeMessage": "Please enter the 6-digit access code.",
+        "wrongCodeTitle": "Wrong Code",
+        "wrongCodeMessage": "Please try again.",
+        "errorTitle": "Error",
+        "errorMessage": "Something went wrong. Please try again."
+    },
+    "home": {
+        "navTitle": "Home",
+        "searchPlaceholder": "Search...",
+        "welcomeText": "Welcome to",
+        "title": "MAK Overseas",
+        "subtitle": "Access company services, channels, calls, and updates from one secure place.",
+        "heroTitle": "Global Shipping. Seamless Clearance.",
+        "heroText": "Reliable logistics, freight, customs clearance, and support services.",
+        "servicesTitle": "Services",
+        "viewAll": "View all",
+        "services": {
+            "sea": "Sea Freight",
+            "land": "Land Freight",
+            "air": "Air Freight"
+        },
+        "aboutTitle": "About Us",
+        "aboutText": "MAK Overseas Shipping & Clearance provides professional logistics, freight, customs clearance, and reliable support services across multiple branches.",
+        "branchesTitle": "Our Branches & Contact Info",
+        "branches": {
+            "lebanon": "Lebanon",
+            "uae": "UAE",
+            "albania": "Albania",
+            "lebanonAddress": "Bekaa Gharbi - Rafid - plot no. 1311",
+            "uaeAddress": "Sharjah Free Zone - UAE",
+            "albaniaAddress": "Rruga Vasil Shami, Tirane"
+        },
+        "exchangeTitle": "Exchange Rates",
+        "updatedNow": "Updated just now",
+        "contactTitle": "Contact Us",
+        "contactText": "Need help? Our team is ready to assist you.",
+        "chatButton": "Chat",
+        "menuLanguage": "العربية",
+        "menuSettings": "Settings",
+        "menuPrivacy": "Privacy"
+    },
+    "bottomTabs": {
+        "home": "Home",
+        "channels": "Channels",
+        "chat": "Chats",
+        "profile": "Profile",
+        "calls": "calls"
+    },
+    "chat": {
+        "title": "Chats",
+        "subtitle": "Stay connected with our team.",
+        "searchPlaceholder": "Search conversations...",
+        "menuLanguage": "العربية",
+        "menuSelectChats": "Select Chats",
+        "menuCancelSelect": "Cancel Selection",
+        "menuReadAll": "Read All",
+        "filters": {
+            "all": "All",
+            "groups": "Groups",
+            "sales": "Sales",
+            "airFreightSales": "Air Freight Sales",
+            "seaFreightSales": "Sea Freight Sales",
+            "landFreightSales": "Land Freight Sales",
+            "accounting": "Accounting"
+        }
+    },
+    "notifications": {
+        "navTitle": "Notifications",
+        "title": "Notifications",
+        "subtitle": "Stay updated with your messages and important alerts.",
+        "markAllAsRead": "Mark all as read",
+        "notificationSettings": "Notification Settings",
+        "followedChannel": "Followed Channel",
+        "followNote": "You will only receive notifications from channels you follow.",
+        "groups": {
+            "today": "Today",
+            "yesterday": "Yesterday",
+            "earlier": "Earlier this week"
+        },
+        "times": {
+            "twoHoursAgo": "2h ago",
+            "fourHoursAgo": "4h ago",
+            "sixHoursAgo": "6h ago",
+            "yesterday": "Yesterday",
+            "twoDaysAgo": "2d ago"
+        },
+        "items": {
+            "newMessage": {
+                "title": "New Message",
+                "body": "You have a new message from Sales Department"
+            },
+            "companyNews": {
+                "title": "Company News",
+                "body": "MAK Overseas posted a new company update"
+            },
+            "exchangeRates": {
+                "title": "Exchange Rates Update",
+                "body": "Daily exchange rates have been updated"
+            },
+            "accountActivated": {
+                "title": "Account Activated",
+                "body": "Your account has been approved successfully"
+            },
+            "chatGroup": {
+                "title": "New Chat Group",
+                "body": "You were added to a new support conversation"
+            },
+            "shippingRates": {
+                "title": "Shipping Rates Channel",
+                "body": "A new update was posted in the channel you follow"
+            }
+        }
+    },
+    "individualChat": {
+        "now": "Now",
+        "department": "Sales Department",
+        "blocked": "Blocked",
+        "online": "Online",
+        "inputPlaceholder": "Type a message...",
+        "send": "Send",
+        "cancel": "Cancel",
+        "save": "Save",
+        "saved": "Saved",
+        "camera": "Camera",
+        "photos": "Photos",
+        "document": "Document",
+        "attachmentTitle": "Attach",
+        "selectedImage": "Selected image",
+        "cameraPhoto": "Camera photo",
+        "confirmImageTitle": "Send this image?",
+        "attachedFile": "Attached file",
+        "file": "File",
+        "openFile": "Open file",
+        "saveFile": "Save file",
+        "recordVoiceMessage": "Record voice message",
+        "voiceMessageTitle": "Voice Message",
+        "voiceMessageMessage": "Here we will start recording an audio message later.",
+        "recording": "Recording",
+        "stopRecording": "Stop recording",
+        "playVoiceMessage": "Play voice message",
+        "pauseVoiceMessage": "Pause voice message",
+        "permissionNeeded": "Permission needed",
+        "photosPermissionMessage": "Please allow access to your photos to attach images.",
+        "cameraPermissionMessage": "Please allow camera access to take a photo.",
+        "microphonePermissionMessage": "Please allow microphone access to record voice messages.",
+        "mediaLibraryPermissionMessage": "Please allow access to save images to your device.",
+        "errorTitle": "Something went wrong",
+        "imagePickerError": "Could not select the image. Please try again.",
+        "cameraPickerError": "Could not take a photo. Please try again.",
+        "documentPickerError": "Could not select the file. Please try again.",
+        "voiceRecordStartError": "Could not start recording. Please try again.",
+        "voiceRecordStopError": "Could not send the voice message. Please try again.",
+        "voiceRecordUriError": "The voice message was not saved correctly.",
+        "saveUnavailableTitle": "Save unavailable",
+        "saveUnavailableMessage": "This image cannot be saved from the local demo sample.",
+        "saveDocumentUnavailableMessage": "Saving this file is not available on this device.",
+        "imageSavedMessage": "Image saved to your device.",
+        "saveImageError": "Could not save the image. Please try again.",
+        "saveDocumentError": "Could not save the file. Please try again.",
+        "openUnavailableTitle": "Open unavailable",
+        "openUnavailableMessage": "No app is available to open this file on this device.",
+        "openDocumentError": "Could not open the file. Please try again.",
+        "menuTitle": "Chat Options",
+        "theme": "Theme",
+        "darkMode": "Dark Mode",
+        "lightMode": "Light Mode",
+        "language": "Language",
+        "english": "English",
+        "arabic": "Arabic",
+        "block": "Block Contact",
+        "unblock": "Unblock Contact",
+        "deleteChat": "Delete Conversation",
+        "confirmBlockTitle": "Block contact?",
+        "confirmBlockMessage": "You will no longer receive messages from this contact.",
+        "confirmUnblockTitle": "Unblock contact?",
+        "confirmUnblockMessage": "You will be able to receive messages from this contact again.",
+        "confirmDeleteTitle": "Delete conversation?",
+        "confirmDeleteMessage": "This will remove the conversation from this device.",
+        "quoteSummary": "Quote Summary",
+        "route": "Route",
+        "cargoType": "Cargo Type",
+        "container": "Container",
+        "volumeWeight": "Volume / Weight",
+        "totalPrice": "Total Price (All-In)",
+        "validUntil": "Valid Until",
+        "includes": "Includes",
+        "viewFullQuote": "View Full Quote"
+    }
+}

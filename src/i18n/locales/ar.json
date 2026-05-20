@@ -1,0 +1,237 @@
+{
+    "common": {
+        "switchToArabic": "العربية",
+        "switchToEnglish": "English"
+    },
+    "splash": {
+        "welcome": "أهلاً بكم في ماك اوفر سيز",
+        "title": "دخول آمن لعملاء MAK Overseas"
+    },
+    "theme": {
+        "dark": "الوضع الداكن",
+        "light": "الوضع الفاتح",
+        "system": "حسب الجهاز"
+    },
+    "auth": {
+        "language": "English"
+    },
+    "login": {
+        "titleWelcome": "مرحبًا",
+        "titleBack": "بعودتك",
+        "subtitle": "للمستخدمين المدعوين فقط، يرجى إدخال بياناتك للمتابعة.",
+        "usernamePlaceholder": "اسم المستخدم",
+        "fullNamePlaceholder": "الاسم الكامل",
+        "continue": "متابعة",
+        "privatePartOne": "للمستخدمين المدعوين فقط.",
+        "privatePartTwo": "دخول خاص.",
+        "missingUsernameTitle": "اسم المستخدم مطلوب",
+        "missingUsernameMessage": "يرجى إدخال اسم المستخدم.",
+        "missingFullNameTitle": "الاسم الكامل مطلوب",
+        "missingFullNameMessage": "يرجى إدخال الاسم الكامل.",
+        "loginFailedTitle": "فشل تسجيل الدخول",
+        "loginFailedMessage": "يرجى المحاولة مرة أخرى.",
+        "errorTitle": "خطأ",
+        "errorMessage": "حدث خطأ ما. يرجى المحاولة مرة أخرى.",
+        "userAccepted": "تم قبول المستخدم",
+        "phonePlaceholder": "رقم الهاتف ",
+        "missingphoneTitle": "رقم الهاتف مطلوب",
+        "missingphoneMessage": "يرجى إدخال رقم هاتف العميل."
+    },
+    "accessCode": {
+        "titleEnter": "أدخل",
+        "titleAccessCode": "رمز الدخول",
+        "subtitle": "يرجى إدخال رمز الدخول المكوّن من 6 أرقام والذي تم تزويدك به يدويًا من قبل المسؤول.",
+        "verifyButton": "تحقق و ادخل ",
+        "privatePartOne": "يتم تزويد الرمز يدويًا من قبل",
+        "privatePartTwo": "المسؤول",
+        "privatePartThree": "للمستخدمين المدعوين فقط.",
+        "invalidCodeTitle": "رمز غير مكتمل",
+        "invalidCodeMessage": "يرجى إدخال رمز الدخول المكوّن من 6 أرقام.",
+        "wrongCodeTitle": "رمز غير صحيح",
+        "wrongCodeMessage": "يرجى المحاولة مرة أخرى.",
+        "errorTitle": "خطأ",
+        "errorMessage": "حدث خطأ ما. يرجى المحاولة مرة أخرى."
+    },
+    "home": {
+        "navTitle": "الرئيسية",
+        "searchPlaceholder": "بحث...",
+        "welcomeText": "أهلاً بك في",
+        "title": "MAK Overseas",
+        "subtitle": "تابعي خدمات الشركة، القنوات، المكالمات، والتحديثات من مكان آمن واحد.",
+        "heroTitle": "شحن عالمي وتخليص سلس",
+        "heroText": "خدمات لوجستية موثوقة للشحن، التخليص الجمركي، والدعم.",
+        "servicesTitle": "الخدمات",
+        "viewAll": "عرض الكل",
+        "services": {
+            "sea": "الشحن البحري",
+            "land": "الشحن البري",
+            "air": "الشحن الجوي"
+        },
+        "aboutTitle": "من نحن",
+        "aboutText": "تقدم MAK Overseas Shipping & Clearance خدمات لوجستية احترافية تشمل الشحن، التخليص الجمركي، والدعم الموثوق عبر عدة فروع.",
+        "branchesTitle": "فروعنا ومعلومات التواصل",
+        "branches": {
+            "lebanon": "لبنان",
+            "uae": "الإمارات",
+            "albania": "ألبانيا",
+            "lebanonAddress": "البقاع الغربي - رافد - العقار رقم 1311",
+            "uaeAddress": "منطقة الشارقة الحرة - الإمارات",
+            "albaniaAddress": "Rruga Vasil Shami, Tirane"
+        },
+        "exchangeTitle": "أسعار الصرف",
+        "updatedNow": "تم التحديث الآن",
+        "contactTitle": "تواصل معنا",
+        "contactText": "بحاجة للمساعدة؟ فريقنا جاهز لمساعدتك.",
+        "chatButton": "محادثة",
+        "menuLanguage": "English",
+        "menuSettings": "الإعدادات",
+        "menuPrivacy": "الخصوصية"
+    },
+    "bottomTabs": {
+        "home": "الرئيسية",
+        "channels": "القنوات",
+        "chat": "الدردشات",
+        "profile": "الملف الشخصي",
+        "calls": "المكالمات"
+    },
+    "chat": {
+        "title": "الدردشة",
+        "subtitle": "ابقي على تواصل مع فريقنا.",
+        "searchPlaceholder": "ابحثي في المحادثات...",
+        "menuLanguage": "English",
+        "menuSelectChats": "تحديد المحادثات",
+        "menuCancelSelect": "إلغاء التحديد",
+        "menuReadAll": "قراءة الكل",
+        "filters": {
+            "all": "الكل",
+            "groups": "المجموعات",
+            "sales": "المبيعات",
+            "airFreightSales": "مبيعات الشحن الجوي",
+            "seaFreightSales": "مبيعات الشحن البحري",
+            "landFreightSales": "مبيعات الشحن البري",
+            "accounting": "المحاسبة"
+        }
+    },
+    "notifications": {
+        "navTitle": "الإشعارات",
+        "title": "الإشعارات",
+        "subtitle": "ابقي على اطلاع برسائلك والتنبيهات المهمة.",
+        "markAllAsRead": "تحديد الكل كمقروء",
+        "notificationSettings": "إعدادات الإشعارات",
+        "followedChannel": "قناة مُتابعة",
+        "followNote": "ستصلك الإشعارات فقط من القنوات التي تتابعينها.",
+        "groups": {
+            "today": "اليوم",
+            "yesterday": "الأمس",
+            "earlier": "في وقت سابق هذا الأسبوع"
+        },
+        "times": {
+            "twoHoursAgo": "منذ ساعتين",
+            "fourHoursAgo": "منذ 4 ساعات",
+            "sixHoursAgo": "منذ 6 ساعات",
+            "yesterday": "الأمس",
+            "twoDaysAgo": "منذ يومين"
+        },
+        "items": {
+            "newMessage": {
+                "title": "رسالة جديدة",
+                "body": "لديكِ رسالة جديدة من قسم المبيعات"
+            },
+            "companyNews": {
+                "title": "أخبار الشركة",
+                "body": "نشرت MAK Overseas تحديثاً جديداً للشركة"
+            },
+            "exchangeRates": {
+                "title": "تحديث أسعار الصرف",
+                "body": "تم تحديث أسعار الصرف اليومية"
+            },
+            "accountActivated": {
+                "title": "تم تفعيل الحساب",
+                "body": "تمت الموافقة على حسابكِ بنجاح"
+            },
+            "chatGroup": {
+                "title": "مجموعة محادثة جديدة",
+                "body": "تمت إضافتكِ إلى محادثة دعم جديدة"
+            },
+            "shippingRates": {
+                "title": "قناة أسعار الشحن",
+                "body": "تم نشر تحديث جديد في القناة التي تتابعينها"
+            }
+        }
+    },
+    "individualChat": {
+        "now": "الآن",
+        "department": "قسم المبيعات",
+        "blocked": "محظور",
+        "online": "متصل",
+        "inputPlaceholder": "اكتبي رسالة...",
+        "send": "إرسال",
+        "cancel": "إلغاء",
+        "save": "حفظ",
+        "saved": "تم الحفظ",
+        "camera": "الكاميرا",
+        "photos": "الصور",
+        "document": "ملف",
+        "attachmentTitle": "إرفاق",
+        "selectedImage": "صورة مختارة",
+        "cameraPhoto": "صورة من الكاميرا",
+        "confirmImageTitle": "هل تريدين إرسال هذه الصورة؟",
+        "attachedFile": "ملف مرفق",
+        "file": "ملف",
+        "openFile": "فتح الملف",
+        "saveFile": "حفظ الملف",
+        "recordVoiceMessage": "تسجيل رسالة صوتية",
+        "voiceMessageTitle": "رسالة صوتية",
+        "voiceMessageMessage": "هنا سيتم بدء تسجيل رسالة صوتية لاحقًا.",
+        "recording": "جاري التسجيل",
+        "stopRecording": "إيقاف التسجيل",
+        "playVoiceMessage": "تشغيل الرسالة الصوتية",
+        "pauseVoiceMessage": "إيقاف الرسالة الصوتية مؤقتًا",
+        "permissionNeeded": "الصلاحية مطلوبة",
+        "photosPermissionMessage": "يرجى السماح بالوصول إلى الصور لإرفاق الصور.",
+        "cameraPermissionMessage": "يرجى السماح باستخدام الكاميرا لالتقاط صورة.",
+        "microphonePermissionMessage": "يرجى السماح باستخدام الميكروفون لتسجيل الرسائل الصوتية.",
+        "mediaLibraryPermissionMessage": "يرجى السماح بالوصول إلى المعرض لحفظ الصور على جهازك.",
+        "errorTitle": "حدث خطأ",
+        "imagePickerError": "تعذر اختيار الصورة. يرجى المحاولة مرة أخرى.",
+        "cameraPickerError": "تعذر التقاط الصورة. يرجى المحاولة مرة أخرى.",
+        "documentPickerError": "تعذر اختيار الملف. يرجى المحاولة مرة أخرى.",
+        "voiceRecordStartError": "تعذر بدء التسجيل. يرجى المحاولة مرة أخرى.",
+        "voiceRecordStopError": "تعذر إرسال الرسالة الصوتية. يرجى المحاولة مرة أخرى.",
+        "voiceRecordUriError": "لم يتم حفظ الرسالة الصوتية بشكل صحيح.",
+        "saveUnavailableTitle": "الحفظ غير متاح",
+        "saveUnavailableMessage": "لا يمكن حفظ هذه الصورة من المثال التجريبي المحلي.",
+        "saveDocumentUnavailableMessage": "حفظ هذا الملف غير متاح على هذا الجهاز.",
+        "imageSavedMessage": "تم حفظ الصورة على جهازك.",
+        "saveImageError": "تعذر حفظ الصورة. يرجى المحاولة مرة أخرى.",
+        "saveDocumentError": "تعذر حفظ الملف. يرجى المحاولة مرة أخرى.",
+        "openUnavailableTitle": "الفتح غير متاح",
+        "openUnavailableMessage": "لا يوجد تطبيق متاح لفتح هذا الملف على هذا الجهاز.",
+        "openDocumentError": "تعذر فتح الملف. يرجى المحاولة مرة أخرى.",
+        "menuTitle": "خيارات المحادثة",
+        "theme": "المظهر",
+        "darkMode": "الوضع الداكن",
+        "lightMode": "الوضع الفاتح",
+        "language": "اللغة",
+        "english": "الإنجليزية",
+        "arabic": "العربية",
+        "block": "حظر جهة الاتصال",
+        "unblock": "إلغاء الحظر",
+        "deleteChat": "حذف المحادثة",
+        "confirmBlockTitle": "حظر جهة الاتصال؟",
+        "confirmBlockMessage": "لن تستلمي رسائل من هذه الجهة بعد الآن.",
+        "confirmUnblockTitle": "إلغاء حظر جهة الاتصال؟",
+        "confirmUnblockMessage": "ستتمكنين من استقبال الرسائل من هذه الجهة مرة أخرى.",
+        "confirmDeleteTitle": "حذف المحادثة؟",
+        "confirmDeleteMessage": "سيتم حذف هذه المحادثة من هذا الجهاز.",
+        "quoteSummary": "ملخص العرض",
+        "route": "المسار",
+        "cargoType": "نوع البضاعة",
+        "container": "الحاوية",
+        "volumeWeight": "الحجم / الوزن",
+        "totalPrice": "السعر الإجمالي شامل الكل",
+        "validUntil": "صالح حتى",
+        "includes": "يشمل",
+        "viewFullQuote": "عرض السعر الكامل"
+    }
+}
