@@ -19,16 +19,16 @@ import {
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 
 const COUNTRIES = [
-    { name: "Lebanon", nameAr: "لبنان", code: "+961", flag: "🇱🇧" },
     { name: "Syria", nameAr: "سوريا", code: "+963", flag: "🇸🇾" },
     { name: "United Arab Emirates", nameAr: "الإمارات", code: "+971", flag: "🇦🇪" },
+    { name: "Albania", nameAr: "ألبانيا", code: "+355", flag: "🇦🇱" },
+    { name: "Lebanon", nameAr: "لبنان", code: "+961", flag: "🇱🇧" },
     { name: "Saudi Arabia", nameAr: "السعودية", code: "+966", flag: "🇸🇦" },
     { name: "Kuwait", nameAr: "الكويت", code: "+965", flag: "🇰🇼" },
     { name: "Qatar", nameAr: "قطر", code: "+974", flag: "🇶🇦" },
     { name: "Iraq", nameAr: "العراق", code: "+964", flag: "🇮🇶" },
     { name: "Jordan", nameAr: "الأردن", code: "+962", flag: "🇯🇴" },
     { name: "Turkey", nameAr: "تركيا", code: "+90", flag: "🇹🇷" },
-    { name: "Albania", nameAr: "ألبانيا", code: "+355", flag: "🇦🇱" },
     { name: "Egypt", nameAr: "مصر", code: "+20", flag: "🇪🇬" },
     { name: "United States", nameAr: "أمريكا", code: "+1", flag: "🇺🇸" },
 ];

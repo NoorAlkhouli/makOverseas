@@ -8,12 +8,11 @@
     "scheme": "makoverseas",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    
     "ios": {
       "supportsTablet": true
     },
-    
     "android": {
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./src/assets/MAK/icon.png",
@@ -21,7 +20,12 @@
         "monochromeImage": "./src/assets/MAK/icon.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "package": "com.anonymous.makoverseas"
     },
     "web": {
       "output": "static",
@@ -33,17 +37,31 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#ffffff",
+          "image": "./src/assets/MAK/icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#000000",
+            "image": "./src/assets/MAK/icon.png"
           }
         }
       ],
       "expo-localization",
-      "expo-audio"
+      "expo-audio",
+      "expo-video",
+      "react-native-document-scanner-plugin",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "dd4fdd0d-224a-47c7-b621-8e81149d1b1e"
+      }
+    },
+    "owner": "nooralkhouli"
   }
 }

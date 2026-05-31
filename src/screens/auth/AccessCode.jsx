@@ -6,6 +6,10 @@ import {
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 
+import { authService } from "@/src/services/api/authService";
+import { apiClient } from "@/src/services/api/apiClient";
+import { getOrCreateDeviceInfo } from "@/src/services/device/deviceService";
+
 import { Feather } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
@@ -41,6 +45,7 @@ export default function AccessCode({ navigation, route }) {
     const phone = route?.params?.phone || "";
     const countryCode = route?.params?.countryCode || "";
     const fullPhoneNumber = route?.params?.fullPhoneNumber || "";
+    const routeDeviceInfo = route?.params?.deviceInfo || null;
 
     const [code, setCode] = useState(["", "", "", "", "", ""]);
     const [loading, setLoading] = useState(false);
@@ -56,8 +61,6 @@ export default function AccessCode({ navigation, route }) {
     );
 
     const imageSource = isDark ? appImages.splashDark : appImages.splashLight;
-
-    console.log("AccessCode route params:", route?.params);
 
     useEffect(() => {
         const showEvent =
@@ -141,16 +144,25 @@ export default function AccessCode({ navigation, route }) {
 
         if (finalCode.length !== 6) {
             Alert.alert(
-                t("accessCode.invalidCodeTitle"),
-                t("accessCode.invalidCodeMessage")
+                t("accessCode.invalidCodeTitle", {
+                    defaultValue: "Invalid code",
+                }),
+                t("accessCode.invalidCodeMessage", {
+                    defaultValue: "Please enter the 6-digit activation code.",
+                })
             );
             return;
         }
 
-        if (!fullName || !phone || !countryCode || !fullPhoneNumber) {
+        if (!phone || !countryCode) {
             Alert.alert(
-                t("accessCode.errorTitle"),
-                "User information is missing. Please go back and login again."
+                t("accessCode.errorTitle", {
+                    defaultValue: "Error",
+                }),
+                t("accessCode.missingUserInfoMessage", {
+                    defaultValue:
+                        "User information is missing. Please go back and login again.",
+                })
             );
             return;
         }
@@ -158,27 +170,90 @@ export default function AccessCode({ navigation, route }) {
         try {
             setLoading(true);
 
-            const response = await verifyAccessCodeApi({
-                fullName,
-                countryCode,
-                phone,
-                fullPhoneNumber,
+            const currentDeviceInfo =
+                route?.params?.deviceInfo || (await getOrCreateDeviceInfo());
+
+            const deviceId = currentDeviceInfo.device_id;
+
+            const payload = {
+                phone_country_code: countryCode,
+                phone_number: phone,
                 code: finalCode,
+
+                // لازم يكون string
+                device_id: deviceId,
+
+                // لازم يكون object
+                device: {
+                    platform: currentDeviceInfo.platform,
+                    device_name: currentDeviceInfo.device_name,
+                    os_version: currentDeviceInfo.os_version,
+                    app_version: currentDeviceInfo.app_version,
+                },
+            };
+
+            console.log("Verify Auth Payload:", JSON.stringify(payload, null, 2));
+
+            const response = await authService.verify(payload);
+
+            console.log("Verify Auth Success:", {
+                success: response?.success,
+                action: response?.data?.action,
+                userId: response?.data?.user?.id,
             });
 
-            if (response.success) {
-                navigation.reset({
-                    index: 0,
-                    routes: [{ name: "MainTabsNavigator" }],
-                });
-            } else {
+            const token = response?.data?.token;
+            const user = response?.data?.user;
+
+            if (!token || !user) {
                 Alert.alert(
-                    t("accessCode.wrongCodeTitle"),
-                    response.message || t("accessCode.wrongCodeMessage")
+                    t("accessCode.wrongCodeTitle", {
+                        defaultValue: "Verification failed",
+                    }),
+                    response?.message ||
+                    t("accessCode.wrongCodeMessage", {
+                        defaultValue:
+                            "The activation code could not be verified. Please try again.",
+                    })
                 );
+                return;
             }
+
+            await apiClient.setToken(token);
+            await apiClient.setDeviceId(deviceId);
+
+            navigation.reset({
+                index: 0,
+                routes: [
+                    {
+                        name: "MainTabsNavigator",
+                        params: {
+                            user,
+                            fullName,
+                            phone,
+                            countryCode,
+                            fullPhoneNumber,
+                        },
+                    },
+                ],
+            });
         } catch (error) {
-            Alert.alert(t("accessCode.errorTitle"), t("accessCode.errorMessage"));
+            console.log("Verify Auth Error Status:", error?.status);
+            console.log("Verify Auth Error Code:", error?.code);
+            console.log("Verify Auth Error Message:", error?.message);
+            console.log("Verify Auth Validation Errors:", error?.errors);
+            console.log("Verify Auth Raw Error:", error?.raw);
+
+            Alert.alert(
+                t("accessCode.errorTitle", {
+                    defaultValue: "Error",
+                }),
+                error?.userMessage ||
+                error?.message ||
+                t("accessCode.errorMessage", {
+                    defaultValue: "Something went wrong. Please try again.",
+                })
+            );
         } finally {
             setLoading(false);
         }
@@ -199,7 +274,6 @@ export default function AccessCode({ navigation, route }) {
                     resizeMode="cover"
                 >
                     <View style={styles.overlay}>
-                        {/* Fixed Header */}
                         <View style={styles.fixedHeader}>
                             <AppTopBar disabled={loading} />
 
@@ -223,7 +297,6 @@ export default function AccessCode({ navigation, route }) {
                             </Animated.View>
                         </View>
 
-                        {/* Scrollable Section */}
                         <KeyboardAvoidingView
                             style={styles.contentSection}
                             behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -283,7 +356,10 @@ export default function AccessCode({ navigation, route }) {
 
                                     <TouchableOpacity
                                         activeOpacity={0.85}
-                                        style={styles.buttonWrapper}
+                                        style={[
+                                            styles.buttonWrapper,
+                                            loading && styles.buttonDisabled,
+                                        ]}
                                         onPress={handleVerify}
                                         disabled={loading}
                                     >
@@ -342,26 +418,6 @@ export default function AccessCode({ navigation, route }) {
             </View>
         </TouchableWithoutFeedback>
     );
-}
-
-async function verifyAccessCodeApi(data) {
-    console.log("Access code data:", data);
-
-    return new Promise((resolve) => {
-        setTimeout(() => {
-            resolve({
-                success: true,
-                message: "Code verified",
-                token: "fake-user-token",
-                user: {
-                    fullName: data.fullName,
-                    countryCode: data.countryCode,
-                    phone: data.phone,
-                    fullPhoneNumber: data.fullPhoneNumber,
-                },
-            });
-        }, 1000);
-    });
 }
 
 const createStyles = (colors, height, keyboardOpen) => {
@@ -506,6 +562,10 @@ const createStyles = (colors, height, keyboardOpen) => {
             shadowOpacity: 0.85,
             shadowRadius: 13,
             elevation: 10,
+        },
+
+        buttonDisabled: {
+            opacity: 0.8,
         },
 
         gradientButton: {

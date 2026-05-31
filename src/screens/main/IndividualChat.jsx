@@ -1,22 +1,17 @@
 import {
     getRowDirectionStyle,
     getTextDirectionStyle,
-    getWritingDirectionStyle,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import * as ImagePicker from "expo-image-picker";
 import * as IntentLauncher from "expo-intent-launcher";
-import * as MediaLibrary from "expo-media-library";
 import * as Sharing from "expo-sharing";
 import {
     AudioModule,
     RecordingPresets,
     setAudioModeAsync,
-    useAudioPlayer,
-    useAudioPlayerStatus,
     useAudioRecorder,
     useAudioRecorderState,
 } from "expo-audio";
@@ -31,18 +26,27 @@ import {
     Modal,
     Platform,
     Pressable,
-    ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     TouchableOpacity,
     useWindowDimensions,
     View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { WebView } from "react-native-webview";
-
 import { appImages } from "@/src/constants/images";
+import IndividualChatHeader from "../../components/IndividualChatHeader";
+import IndividualChatComposer from "../../components/IndividualChatComposer";
+import IndividualChatMessagesList from "../../components/IndividualChatMessagesList";
+// import {
+//     ScannedDocumentConfirmModal,
+//     useScanDocument,
+// } from "../../components/ScanDocumentTools";
+import {
+    ChatCameraCaptureModal,
+    MediaConfirmModal,
+    MediaPreviewModal,
+    useIndividualChatMedia,
+} from "../../components/useIndividualChatMedia";
 
 const chatSampleImage = appImages.homeShipSea;
 
@@ -191,7 +195,6 @@ const getFileIconName = (mimeType = "", fileName = "") => {
 };
 
 
-
 const getFileExtension = (fileName = "", mimeType = "") => {
     const cleanName = String(fileName || "").split("?")[0];
     const dotIndex = cleanName.lastIndexOf(".");
@@ -297,11 +300,8 @@ export default function IndividualChatScreen({ navigation, route }) {
     const [messageText, setMessageText] = useState("");
     const [messages, setMessages] = useState(INITIAL_MESSAGES);
     const [isBlocked, setIsBlocked] = useState(false);
-    const [keyboardHeight, setKeyboardHeight] = useState(0);
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-    const [previewImage, setPreviewImage] = useState(null);
     const [previewDocument, setPreviewDocument] = useState(null);
-    const [selectedImageToSend, setSelectedImageToSend] = useState(null);
 
     const tr = (key, fallback) =>
         t(`individualChat.${key}`, {
@@ -345,7 +345,7 @@ export default function IndividualChatScreen({ navigation, route }) {
             modalCard: appColors.cardStrong,
             modalOverlay: appColors.overlay,
             modalStatusBar: headerSurface,
-            previewBackground: isDark ? appColors.background : "#000000",
+            previewBackground: appColors.background,
         };
     }, [appColors, isDark]);
 
@@ -373,11 +373,8 @@ export default function IndividualChatScreen({ navigation, route }) {
         const hideEvent =
             Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
-        const keyboardShowListener = Keyboard.addListener(showEvent, (event) => {
-            const nextKeyboardHeight = event?.endCoordinates?.height || 0;
-
+        const keyboardShowListener = Keyboard.addListener(showEvent, () => {
             setIsKeyboardVisible(true);
-            setKeyboardHeight(nextKeyboardHeight);
 
             setTimeout(() => {
                 scrollToBottom(true);
@@ -386,7 +383,6 @@ export default function IndividualChatScreen({ navigation, route }) {
 
         const keyboardHideListener = Keyboard.addListener(hideEvent, () => {
             setIsKeyboardVisible(false);
-            setKeyboardHeight(0);
 
             setTimeout(() => {
                 scrollToBottom(true);
@@ -567,6 +563,35 @@ export default function IndividualChatScreen({ navigation, route }) {
         await startVoiceRecording();
     };
 
+    const {
+        previewMedia,
+        setPreviewMedia,
+        selectedMediaToSend,
+        cameraCaptureVisible,
+        pickMediaFromLibrary,
+        takePhotoWithCamera,
+        handleCloseCameraCapture,
+        handleCameraCaptured,
+        handleConfirmSendMedia,
+        handleCancelSelectedMedia,
+        handleSaveMediaToDevice,
+    } = useIndividualChatMedia({
+        tr,
+        addMessages,
+        cancelVoiceRecordingIfActive,
+    });
+
+    // const {
+    //     selectedScannedDocument,
+    //     scanDocumentWithCamera,
+    //     handleConfirmSendScannedDocument,
+    //     handleCancelScannedDocument,
+    // } = useScanDocument({
+    //     tr,
+    //     addMessages,
+    //     cancelVoiceRecordingIfActive,
+    // });
+
     const openAttachMenu = async () => {
         Keyboard.dismiss();
         await cancelVoiceRecordingIfActive();
@@ -584,118 +609,6 @@ export default function IndividualChatScreen({ navigation, route }) {
         }, Platform.OS === "android" ? 90 : 40);
     };
 
-    const pickImagesFromLibrary = async () => {
-        try {
-            await cancelVoiceRecordingIfActive();
-            console.log("Opening image library...");
-
-            const permissionResult =
-                await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-            console.log("Photo permission:", permissionResult);
-
-            if (!permissionResult.granted) {
-                Alert.alert(
-                    tr("permissionNeeded", "Permission needed"),
-                    tr(
-                        "photosPermissionMessage",
-                        "Please allow access to your photos to attach images."
-                    )
-                );
-                return;
-            }
-
-            const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ["images"],
-                quality: 0.85,
-            });
-
-            console.log("Gallery picker result:", result);
-
-            if (result.canceled || !result.assets?.length) {
-                return;
-            }
-
-            const asset = result.assets[0];
-
-            const nextImageMessage = {
-                id: `${Date.now()}-image`,
-                side: "me",
-                type: "image",
-                image: { uri: asset.uri },
-                uri: asset.uri,
-                fileName: asset.fileName || `image-${Date.now()}.jpg`,
-                mimeType: asset.mimeType || "image/jpeg",
-                width: asset.width,
-                height: asset.height,
-                caption: asset.fileName || tr("selectedImage", "Selected image"),
-                time: tr("now", "Now"),
-            };
-
-            setSelectedImageToSend(nextImageMessage);
-        } catch (error) {
-            console.log("Image picker error:", error);
-
-            Alert.alert(
-                tr("errorTitle", "Something went wrong"),
-                tr("imagePickerError", "Could not select the image. Please try again.")
-            );
-        }
-    };
-
-    const takePhotoWithCamera = async () => {
-        try {
-            await cancelVoiceRecordingIfActive();
-
-            const permissionResult =
-                await ImagePicker.requestCameraPermissionsAsync();
-
-            if (!permissionResult.granted) {
-                Alert.alert(
-                    tr("permissionNeeded", "Permission needed"),
-                    tr(
-                        "cameraPermissionMessage",
-                        "Please allow camera access to take a photo."
-                    )
-                );
-                return;
-            }
-
-            const result = await ImagePicker.launchCameraAsync({
-                mediaTypes: ["images"],
-                quality: 0.85,
-            });
-
-            if (result.canceled || !result.assets?.length) {
-                return;
-            }
-
-            const asset = result.assets[0];
-
-            const nextImageMessage = {
-                id: `${Date.now()}-camera`,
-                side: "me",
-                type: "image",
-                image: { uri: asset.uri },
-                uri: asset.uri,
-                fileName: asset.fileName || `camera-photo-${Date.now()}.jpg`,
-                mimeType: asset.mimeType || "image/jpeg",
-                width: asset.width,
-                height: asset.height,
-                caption: tr("cameraPhoto", "Camera photo"),
-                time: tr("now", "Now"),
-            };
-
-            setSelectedImageToSend(nextImageMessage);
-        } catch (error) {
-            console.log("Camera picker error:", error);
-
-            Alert.alert(
-                tr("errorTitle", "Something went wrong"),
-                tr("cameraPickerError", "Could not take a photo. Please try again.")
-            );
-        }
-    };
     const pickDocumentsFromDevice = async () => {
         try {
             await cancelVoiceRecordingIfActive();
@@ -744,78 +657,22 @@ export default function IndividualChatScreen({ navigation, route }) {
             return;
         }
 
+
         if (type === "photos") {
-            await pickImagesFromLibrary();
+            await pickMediaFromLibrary();
             return;
         }
 
         if (type === "document") {
             await pickDocumentsFromDevice();
+            return;
+        }
+
+        if (type === "scan") {
+            await scanDocumentWithCamera();
         }
     };
 
-
-    const handleConfirmSendImage = () => {
-        if (!selectedImageToSend) return;
-
-        addMessages([
-            {
-                ...selectedImageToSend,
-                id: selectedImageToSend.id || `${Date.now()}-image`,
-                time: tr("now", "Now"),
-            },
-        ]);
-        setSelectedImageToSend(null);
-    };
-
-    const handleCancelSelectedImage = () => {
-        setSelectedImageToSend(null);
-    };
-
-    const getImageUriForSaving = (imageItem) => {
-        if (!imageItem) return null;
-        if (imageItem.uri) return imageItem.uri;
-        if (imageItem.image?.uri) return imageItem.image.uri;
-        return null;
-    };
-
-    const handleSaveImageToDevice = async (imageItem) => {
-        try {
-            const imageUri = getImageUriForSaving(imageItem);
-
-            if (!imageUri) {
-                Alert.alert(
-                    tr("saveUnavailableTitle", "Save unavailable"),
-                    tr("saveUnavailableMessage", "This image cannot be saved from the local demo sample.")
-                );
-                return;
-            }
-
-            const permissionResult = await MediaLibrary.requestPermissionsAsync();
-
-            if (!permissionResult.granted) {
-                Alert.alert(
-                    tr("permissionNeeded", "Permission needed"),
-                    tr("mediaLibraryPermissionMessage", "Please allow access to save images to your device.")
-                );
-                return;
-            }
-
-            await MediaLibrary.saveToLibraryAsync(imageUri);
-
-            Alert.alert(
-                tr("saved", "Saved"),
-                tr("imageSavedMessage", "Image saved to your device.")
-            );
-        } catch (error) {
-            console.log("Save image error:", error);
-
-            Alert.alert(
-                tr("errorTitle", "Something went wrong"),
-                tr("saveImageError", "Could not save the image. Please try again.")
-            );
-        }
-    };
 
     const handleOpenDocument = async (documentItem) => {
         try {
@@ -978,10 +835,10 @@ export default function IndividualChatScreen({ navigation, route }) {
         );
     };
 
-    const androidKeyboardSpace =
-        Platform.OS === "android" && isKeyboardVisible
-            ? Math.max(keyboardHeight - insets.bottom, 0)
-            : 0;
+    // KeyboardAvoidingView now owns keyboard resizing on both iOS and Android.
+    // Keep this value at 0 so the composer does not receive an extra manual offset
+    // that can push it incorrectly on different Android screen sizes.
+    const androidKeyboardSpace = 0;
 
     return (
         <SafeAreaView
@@ -996,374 +853,64 @@ export default function IndividualChatScreen({ navigation, route }) {
 
             <KeyboardAvoidingView
                 style={[styles.flex, { backgroundColor: colors.screen }]}
-                behavior={Platform.OS === "ios" ? "padding" : undefined}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
                 keyboardVerticalOffset={0}
+                enabled
             >
                 <View style={[styles.container, { backgroundColor: colors.screen }]}>
-                    <View
-                        style={[
-                            styles.header,
-                            isCompactScreen && styles.headerCompact,
-                            isShortScreen && styles.headerShort,
-                            {
-                                backgroundColor: colors.header,
-                                borderBottomColor: colors.border,
-                            },
-                        ]}
-                    >
-                        <TouchableOpacity
-                            style={styles.iconButton}
-                            activeOpacity={0.8}
-                            onPress={() => navigation.goBack()}
-                        >
-                            <Ionicons name="arrow-back" size={24} color={colors.text} />
-                        </TouchableOpacity>
+                    <IndividualChatHeader
+                        navigation={navigation}
+                        colors={colors}
+                        employeeInitials={employeeInitials}
+                        employeeName={employeeName}
+                        employeeDepartment={employeeDepartment}
+                        isBlocked={isBlocked}
+                        tr={tr}
+                        isCompactScreen={isCompactScreen}
+                        isVeryCompactScreen={isVeryCompactScreen}
+                        isShortScreen={isShortScreen}
+                        onOpenMenu={openChatMenu}
+                    />
 
-                        <View style={styles.avatarWrapper}>
-                            <View
-                                style={[
-                                    styles.avatar,
-                                    isCompactScreen && styles.avatarCompact,
-                                    {
-                                        backgroundColor: colors.avatarBackground,
-                                        borderColor: colors.avatarBorder,
-                                    },
-                                ]}
-                            >
-                                <Text
-                                    style={[
-                                        styles.avatarText,
-                                        isCompactScreen && styles.avatarTextCompact,
-                                        { color: colors.text },
-                                    ]}
-                                >
-                                    {employeeInitials}
-                                </Text>
-                            </View>
-                        </View>
-
-                        <View style={styles.headerInfo}>
-                            <Text
-                                style={[
-                                    styles.employeeName,
-                                    isCompactScreen && styles.employeeNameCompact,
-                                    isVeryCompactScreen && styles.employeeNameVeryCompact,
-                                    { color: colors.text },
-                                ]}
-                                numberOfLines={1}
-                                ellipsizeMode="tail"
-                            >
-                                {employeeName}
-                            </Text>
-
-                            <Text
-                                style={[
-                                    styles.department,
-                                    isCompactScreen && styles.departmentCompact,
-                                    isVeryCompactScreen && styles.departmentVeryCompact,
-                                    { color: colors.blue },
-                                ]}
-                                numberOfLines={1}
-                                ellipsizeMode="tail"
-                            >
-                                {employeeDepartment || tr("department", "Sales Department")}
-                            </Text>
-
-                            <View style={styles.statusRow}>
-                                <View
-                                    style={[
-                                        styles.onlineDot,
-                                        { backgroundColor: colors.primary },
-                                    ]}
-                                />
-
-                                <Text
-                                    style={[
-                                        styles.onlineText,
-                                        isVeryCompactScreen && styles.onlineTextVeryCompact,
-                                        { color: colors.primary },
-                                    ]}
-                                    numberOfLines={1}
-                                >
-                                    {isBlocked
-                                        ? tr("blocked", "Blocked")
-                                        : tr("online", "Online")}
-                                </Text>
-                            </View>
-                        </View>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.callButton,
-                                isCompactScreen && styles.callButtonCompact,
-                                isVeryCompactScreen && styles.callButtonVeryCompact,
-                                { borderColor: colors.border },
-                            ]}
-                            activeOpacity={0.8}
-                        >
-                            <Ionicons
-                                name="call-outline"
-                                size={isVeryCompactScreen ? 19 : isCompactScreen ? 21 : 23}
-                                color={colors.text}
-                            />
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.callButton,
-                                isCompactScreen && styles.callButtonCompact,
-                                isVeryCompactScreen && styles.callButtonVeryCompact,
-                                { borderColor: colors.border },
-                            ]}
-                            activeOpacity={0.8}
-                            onPress={openChatMenu}
-                        >
-                            <Ionicons
-                                name="ellipsis-vertical"
-                                size={isVeryCompactScreen ? 19 : isCompactScreen ? 20 : 22}
-                                color={colors.text}
-                            />
-                        </TouchableOpacity>
-                    </View>
-
-                    <ScrollView
-                        ref={messagesScrollRef}
-                        style={styles.messagesList}
-                        contentContainerStyle={[
-                            styles.messagesContent,
-                            isCompactScreen && styles.messagesContentCompact,
-                            isShortScreen && styles.messagesContentShort,
-                            {
-                                paddingBottom:
-                                    Platform.OS === "android" && isKeyboardVisible ? 18 : 14,
-                            },
-                        ]}
-                        showsVerticalScrollIndicator={false}
-                        keyboardShouldPersistTaps="handled"
-                        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+                    <IndividualChatMessagesList
+                        messages={messages}
+                        messagesScrollRef={messagesScrollRef}
+                        colors={colors}
+                        tr={tr}
+                        isArabic={isArabic}
+                        isCompactScreen={isCompactScreen}
+                        isShortScreen={isShortScreen}
+                        isKeyboardVisible={isKeyboardVisible}
+                        imageMessageWidth={imageMessageWidth}
+                        imageMessageHeight={imageMessageHeight}
                         onContentSizeChange={() => scrollToBottom(false)}
-                    >
-                        {messages.map((item) => {
-                            if (item.type === "quote") {
-                                return (
-                                    <QuoteCard
-                                        key={item.id}
-                                        colors={colors}
-                                        tr={tr}
-                                        time={item.time}
-                                        isArabic={isArabic}
-                                        isCompactScreen={isCompactScreen}
-                                    />
-                                );
-                            }
+                        onOpenImage={setPreviewMedia}
+                        onOpenVideo={setPreviewMedia}
+                        onOpenDocument={setPreviewDocument}
+                    />
 
-                            if (item.type === "image") {
-                                return (
-                                    <ImageMessage
-                                        key={item.id}
-                                        item={item}
-                                        colors={colors}
-                                        isCompactScreen={isCompactScreen}
-                                        imageWidth={imageMessageWidth}
-                                        imageHeight={imageMessageHeight}
-                                        onOpen={() => setPreviewImage(item)}
-                                    />
-                                );
-                            }
-
-                            if (item.type === "document") {
-                                return (
-                                    <DocumentMessage
-                                        key={item.id}
-                                        item={item}
-                                        colors={colors}
-                                        isCompactScreen={isCompactScreen}
-                                        tr={tr}
-                                        onOpen={() => setPreviewDocument(item)}
-                                    />
-                                );
-                            }
-
-                            if (item.type === "audio") {
-                                return (
-                                    <AudioMessage
-                                        key={item.id}
-                                        item={item}
-                                        colors={colors}
-                                        isCompactScreen={isCompactScreen}
-                                        tr={tr}
-                                    />
-                                );
-                            }
-
-                            const isMine = item.side === "me";
-
-                            return (
-                                <View
-                                    key={item.id}
-                                    style={[
-                                        styles.messageRow,
-                                        isMine
-                                            ? styles.myMessageRow
-                                            : styles.employeeMessageRow,
-                                    ]}
-                                >
-                                    <View
-                                        style={[
-                                            styles.bubble,
-                                            isCompactScreen && styles.bubbleCompact,
-                                            {
-                                                backgroundColor: isMine
-                                                    ? colors.myBubble
-                                                    : colors.employeeBubble,
-                                                borderColor: colors.border,
-                                            },
-                                        ]}
-                                    >
-                                        <Text
-                                            style={[
-                                                styles.messageText,
-                                                isCompactScreen && styles.messageTextCompact,
-                                                { color: colors.text },
-                                            ]}
-                                        >
-                                            {item.text}
-                                        </Text>
-
-                                        <View style={styles.messageMetaRow}>
-                                            <Text
-                                                style={[
-                                                    styles.timeText,
-                                                    { color: colors.muted },
-                                                ]}
-                                            >
-                                                {item.time}
-                                            </Text>
-
-                                            {isMine && (
-                                                <Ionicons
-                                                    name="checkmark-done"
-                                                    size={15}
-                                                    color={colors.blue}
-                                                />
-                                            )}
-                                        </View>
-                                    </View>
-                                </View>
-                            );
-                        })}
-                    </ScrollView>
-
-                    <View
-                        style={[
-                            styles.composerWrapper,
-                            isCompactScreen && styles.composerWrapperCompact,
-                            {
-                                borderTopColor: colors.border,
-                                backgroundColor: colors.navScrolled,
-                                paddingBottom:
-                                    Platform.OS === "ios" ? Math.max(insets.bottom, 8) : 8,
-                                marginBottom: androidKeyboardSpace,
-                            },
-                        ]}
-                    >
-                        <TouchableOpacity
-                            style={styles.attachButton}
-                            activeOpacity={0.8}
-                            onPress={openAttachMenu}
-                        >
-                            <Ionicons name="attach" size={27} color={colors.text} />
-                        </TouchableOpacity>
-
-                        <View
-                            style={[
-                                styles.inputWrapper,
-                                isCompactScreen && styles.inputWrapperCompact,
-                                {
-                                    backgroundColor: colors.input,
-                                    borderColor: colors.inputBorder,
-                                },
-                            ]}
-                        >
-                            {isRecordingVoice ? (
-                                <View style={styles.recordingInputContent}>
-                                    <View style={styles.recordingDot} />
-                                    <Text
-                                        style={[
-                                            styles.recordingInputText,
-                                            { color: colors.text },
-                                        ]}
-                                        numberOfLines={1}
-                                    >
-                                        {tr("recording", "Recording")} {recordingDurationText}
-                                    </Text>
-                                </View>
-                            ) : (
-                                <TextInput
-                                    value={messageText}
-                                    onChangeText={setMessageText}
-                                    onFocus={() => {
-                                        setTimeout(() => {
-                                            scrollToBottom(true);
-                                        }, 220);
-                                    }}
-                                    placeholder={tr("inputPlaceholder", "Type a message...")}
-                                    placeholderTextColor={colors.muted}
-                                    style={[
-                                        styles.input,
-                                        isCompactScreen && styles.inputCompact,
-                                        { color: colors.text },
-                                        getWritingDirectionStyle(isArabic),
-                                    ]}
-                                    multiline
-                                    scrollEnabled
-                                    textAlign={isArabic ? "right" : "left"}
-                                />
-                            )}
-
-                            {!isRecordingVoice && (
-                                <TouchableOpacity
-                                    activeOpacity={0.8}
-                                    onPress={takePhotoWithCamera}
-                                >
-                                    <Ionicons
-                                        name="camera-outline"
-                                        size={25}
-                                        color={colors.text}
-                                    />
-                                </TouchableOpacity>
-                            )}
-                        </View>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.actionButton,
-                                isCompactScreen && styles.actionButtonCompact,
-                                {
-                                    backgroundColor: isRecordingVoice
-                                        ? colors.danger
-                                        : hasMessage
-                                            ? colors.blue
-                                            : colors.primary,
-                                },
-                            ]}
-                            activeOpacity={0.85}
-                            onPress={hasMessage && !isRecordingVoice ? handleSend : handleMicPress}
-                            accessibilityLabel={
-                                isRecordingVoice
-                                    ? tr("stopRecording", "Stop recording")
-                                    : hasMessage
-                                        ? tr("send", "Send")
-                                        : tr("recordVoiceMessage", "Record voice message")
-                            }
-                        >
-                            <Ionicons
-                                name={isRecordingVoice ? "stop" : hasMessage ? "send" : "mic"}
-                                size={isCompactScreen ? 20 : 22}
-                                color="#FFFFFF"
-                            />
-                        </TouchableOpacity>
-                    </View>
+                    <IndividualChatComposer
+                        colors={colors}
+                        tr={tr}
+                        isArabic={isArabic}
+                        isCompactScreen={isCompactScreen}
+                        messageText={messageText}
+                        onChangeMessageText={setMessageText}
+                        isRecordingVoice={isRecordingVoice}
+                        recordingDurationText={recordingDurationText}
+                        hasMessage={hasMessage}
+                        insetsBottom={insets.bottom}
+                        androidKeyboardSpace={androidKeyboardSpace}
+                        onOpenAttachMenu={openAttachMenu}
+                        onTakePhoto={takePhotoWithCamera}
+                        onSend={handleSend}
+                        onMicPress={handleMicPress}
+                        onFocusInput={() => {
+                            setTimeout(() => {
+                                scrollToBottom(true);
+                            }, 220);
+                        }}
+                    />
                 </View>
 
                 <AttachmentOptionsModal
@@ -1391,29 +938,64 @@ export default function IndividualChatScreen({ navigation, route }) {
                     isArabic={isArabic}
                 />
 
-                <ImagePreviewModal
-                    visible={!!previewImage}
-                    image={previewImage?.image}
-                    caption={previewImage?.caption}
-                    time={previewImage?.time}
-                    imageItem={previewImage}
+                <ChatCameraCaptureModal
+                    visible={cameraCaptureVisible}
                     colors={colors}
-                    isDark={isDark}
                     tr={tr}
-                    onClose={() => setPreviewImage(null)}
-                    onSave={() => handleSaveImageToDevice(previewImage)}
+                    onClose={handleCloseCameraCapture}
+                    onCaptured={handleCameraCaptured}
+                    onOpenLibrary={async () => {
+                        handleCloseCameraCapture();
+                        setTimeout(() => {
+                            pickMediaFromLibrary();
+                        }, Platform.OS === "android" ? 180 : 80);
+                    }}
                 />
 
-                <ImageConfirmModal
-                    visible={!!selectedImageToSend}
-                    image={selectedImageToSend?.image}
-                    caption={selectedImageToSend?.caption}
+                <MediaPreviewModal
+                    visible={!!previewMedia}
+                    mediaItem={previewMedia}
+                    image={previewMedia?.image}
+                    video={previewMedia?.video || (previewMedia?.type === "video" && previewMedia?.uri ? { uri: previewMedia.uri } : null)}
+                    caption={previewMedia?.caption}
+                    time={previewMedia?.time}
                     colors={colors}
                     isDark={isDark}
                     tr={tr}
-                    onCancel={handleCancelSelectedImage}
-                    onSend={handleConfirmSendImage}
+                    onClose={() => setPreviewMedia(null)}
+                    onSave={() => handleSaveMediaToDevice(previewMedia)}
                 />
+
+                <MediaConfirmModal
+                    visible={!!selectedMediaToSend}
+                    mediaItem={selectedMediaToSend}
+                    image={selectedMediaToSend?.image}
+                    video={selectedMediaToSend?.video || (selectedMediaToSend?.type === "video" && selectedMediaToSend?.uri ? { uri: selectedMediaToSend.uri } : null)}
+                    caption={selectedMediaToSend?.caption}
+                    colors={colors}
+                    isDark={isDark}
+                    tr={tr}
+                    onCancel={handleCancelSelectedMedia}
+                    onSend={(finalMedia) => {
+                        const isPressEvent =
+                            !!finalMedia?.nativeEvent ||
+                            !!finalMedia?.dispatchConfig ||
+                            !!finalMedia?.target;
+
+                        handleConfirmSendMedia(isPressEvent ? undefined : finalMedia);
+                    }}
+                />
+
+                {/* <ScannedDocumentConfirmModal
+                    visible={!!selectedScannedDocument}
+                    documentItem={selectedScannedDocument}
+                    colors={colors}
+                    tr={tr}
+                    isArabic={isArabic}
+                    onCancel={handleCancelScannedDocument}
+                    onSend={handleConfirmSendScannedDocument}
+                    onRetake={scanDocumentWithCamera}
+                /> */}
 
                 <DocumentPreviewModal
                     visible={!!previewDocument}
@@ -1427,441 +1009,6 @@ export default function IndividualChatScreen({ navigation, route }) {
                 />
             </KeyboardAvoidingView>
         </SafeAreaView>
-    );
-}
-
-function ImageMessage({
-    item,
-    colors,
-    isCompactScreen,
-    imageWidth,
-    imageHeight,
-    onOpen,
-}) {
-    const isMine = item.side === "me";
-
-    return (
-        <View
-            style={[
-                styles.messageRow,
-                isMine ? styles.myMessageRow : styles.employeeMessageRow,
-            ]}
-        >
-            <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={onOpen}
-                style={[
-                    styles.imageBubble,
-                    isCompactScreen && styles.imageBubbleCompact,
-                    {
-                        width: imageWidth,
-                        backgroundColor: isMine ? colors.myBubble : colors.employeeBubble,
-                        borderColor: colors.border,
-                    },
-                ]}
-            >
-                <Image
-                    source={item.image}
-                    style={[
-                        styles.chatImage,
-                        {
-                            width: imageWidth - 10,
-                            height: imageHeight,
-                        },
-                    ]}
-                    resizeMode="cover"
-                />
-
-                {!!item.caption && (
-                    <Text
-                        style={[
-                            styles.imageCaption,
-                            { color: colors.text },
-                        ]}
-                        numberOfLines={2}
-                    >
-                        {item.caption}
-                    </Text>
-                )}
-
-                <View style={styles.imageMetaRow}>
-                    <Text style={[styles.timeText, { color: colors.muted }]}>
-                        {item.time}
-                    </Text>
-
-                    {isMine && (
-                        <Ionicons
-                            name="checkmark-done"
-                            size={15}
-                            color={colors.blue}
-                        />
-                    )}
-                </View>
-            </TouchableOpacity>
-        </View>
-    );
-}
-
-function DocumentMessage({ item, colors, isCompactScreen, tr, onOpen }) {
-    const isMine = item.side === "me";
-    const fileIconName = getFileIconName(item.mimeType, item.fileName);
-    const fileSizeText = formatFileSize(item.size);
-
-    return (
-        <View
-            style={[
-                styles.messageRow,
-                isMine ? styles.myMessageRow : styles.employeeMessageRow,
-            ]}
-        >
-            <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={onOpen}
-                style={[
-                    styles.documentBubble,
-                    isCompactScreen && styles.documentBubbleCompact,
-                    {
-                        backgroundColor: isMine ? colors.myBubble : colors.employeeBubble,
-                        borderColor: colors.border,
-                    },
-                ]}
-            >
-                <View
-                    style={[
-                        styles.documentIconBox,
-                        {
-                            backgroundColor: colors.cardSoft,
-                            borderColor: colors.border,
-                        },
-                    ]}
-                >
-                    <MaterialCommunityIcons
-                        name={fileIconName}
-                        size={32}
-                        color={colors.blue}
-                    />
-                </View>
-
-                <View style={styles.documentInfo}>
-                    <Text
-                        style={[styles.documentName, { color: colors.text }]}
-                        numberOfLines={2}
-                    >
-                        {item.fileName || tr("attachedFile", "Attached file")}
-                    </Text>
-
-                    <Text
-                        style={[styles.documentMeta, { color: colors.muted }]}
-                        numberOfLines={1}
-                    >
-                        {fileSizeText || item.mimeType || tr("file", "File")}
-                    </Text>
-
-                    <View style={styles.documentTimeRow}>
-                        <Text style={[styles.timeText, { color: colors.muted }]}>
-                            {item.time}
-                        </Text>
-
-                        {isMine && (
-                            <Ionicons
-                                name="checkmark-done"
-                                size={15}
-                                color={colors.blue}
-                            />
-                        )}
-                    </View>
-                </View>
-            </TouchableOpacity>
-        </View>
-    );
-}
-
-function AudioMessage({ item, colors, isCompactScreen, tr }) {
-    const isMine = item.side === "me";
-    const player = useAudioPlayer({ uri: item.uri });
-    const playerStatus = useAudioPlayerStatus(player);
-    const isPlaying = !!playerStatus?.playing;
-    const durationText = formatAudioDuration(item.durationMillis || 0);
-
-    const handleTogglePlayback = () => {
-        if (isPlaying) {
-            player.pause();
-            return;
-        }
-
-        player.seekTo(0);
-        player.play();
-    };
-
-    return (
-        <View
-            style={[
-                styles.messageRow,
-                isMine ? styles.myMessageRow : styles.employeeMessageRow,
-            ]}
-        >
-            <View
-                style={[
-                    styles.audioBubble,
-                    isCompactScreen && styles.audioBubbleCompact,
-                    {
-                        backgroundColor: isMine ? colors.myBubble : colors.employeeBubble,
-                        borderColor: colors.border,
-                    },
-                ]}
-            >
-                <TouchableOpacity
-                    style={[
-                        styles.audioPlayButton,
-                        { backgroundColor: colors.primary },
-                    ]}
-                    activeOpacity={0.85}
-                    onPress={handleTogglePlayback}
-                    accessibilityLabel={
-                        isPlaying
-                            ? tr("pauseVoiceMessage", "Pause voice message")
-                            : tr("playVoiceMessage", "Play voice message")
-                    }
-                >
-                    <Ionicons
-                        name={isPlaying ? "pause" : "play"}
-                        size={18}
-                        color="#FFFFFF"
-                    />
-                </TouchableOpacity>
-
-                <View style={styles.audioContent}>
-                    <View style={styles.audioWaveRow}>
-                        {Array.from({ length: 18 }).map((_, index) => (
-                            <View
-                                key={`wave-${item.id}-${index}`}
-                                style={[
-                                    styles.audioWaveBar,
-                                    {
-                                        height: 8 + ((index % 5) * 4),
-                                        backgroundColor: colors.primary,
-                                    },
-                                ]}
-                            />
-                        ))}
-                    </View>
-
-                    <View style={styles.audioMetaRow}>
-                        <Text style={[styles.audioDuration, { color: colors.muted }]}>
-                            {durationText}
-                        </Text>
-
-                        <View style={styles.audioTimeWrapper}>
-                            <Text style={[styles.timeText, { color: colors.muted }]}>
-                                {item.time}
-                            </Text>
-
-                            {isMine && (
-                                <Ionicons
-                                    name="checkmark-done"
-                                    size={15}
-                                    color={colors.blue}
-                                />
-                            )}
-                        </View>
-                    </View>
-                </View>
-            </View>
-        </View>
-    );
-}
-
-function ImagePreviewModal({
-    visible,
-    image,
-    caption,
-    time,
-    imageItem,
-    colors,
-    isDark,
-    tr,
-    onClose,
-    onSave,
-}) {
-    return (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="fade"
-            onRequestClose={onClose}
-            statusBarTranslucent
-            navigationBarTranslucent
-            presentationStyle="overFullScreen"
-        >
-            <View
-                style={[
-                    styles.imagePreviewRoot,
-                    { backgroundColor: colors.previewBackground },
-                ]}
-            >
-                <StatusBar
-                    style="light"
-                    translucent
-                    backgroundColor="transparent"
-                />
-
-                <TouchableOpacity
-                    style={styles.imagePreviewClose}
-                    activeOpacity={0.85}
-                    onPress={onClose}
-                >
-                    <Ionicons name="close" size={28} color="#ffffff" />
-                </TouchableOpacity>
-
-                {!!imageItem && (
-                    <TouchableOpacity
-                        style={styles.imagePreviewSave}
-                        activeOpacity={0.85}
-                        onPress={onSave}
-                    >
-                        <Ionicons name="download-outline" size={22} color="#ffffff" />
-                        <Text style={styles.imagePreviewSaveText}>
-                            {tr("save", "Save")}
-                        </Text>
-                    </TouchableOpacity>
-                )}
-
-                <View style={styles.imagePreviewContent}>
-                    <Image
-                        source={image}
-                        style={styles.fullImage}
-                        resizeMode="contain"
-                    />
-                </View>
-
-                {(!!caption || !!time) && (
-                    <View
-                        style={[
-                            styles.imagePreviewFooter,
-                            {
-                                backgroundColor: isDark
-                                    ? "rgba(2, 11, 24, 0.82)"
-                                    : "rgba(0, 0, 0, 0.56)",
-                            },
-                        ]}
-                    >
-                        {!!caption && (
-                            <Text style={styles.imagePreviewCaption}>
-                                {caption}
-                            </Text>
-                        )}
-
-                        {!!time && (
-                            <Text style={styles.imagePreviewTime}>
-                                {time}
-                            </Text>
-                        )}
-                    </View>
-                )}
-            </View>
-        </Modal>
-    );
-}
-
-
-function ImageConfirmModal({
-    visible,
-    image,
-    caption,
-    colors,
-    isDark,
-    tr,
-    onCancel,
-    onSend,
-}) {
-    return (
-        <Modal
-            visible={visible}
-            transparent
-            animationType="fade"
-            onRequestClose={onCancel}
-            statusBarTranslucent
-            navigationBarTranslucent
-            presentationStyle="overFullScreen"
-        >
-            <View
-                style={[
-                    styles.imageConfirmRoot,
-                    { backgroundColor: colors.previewBackground },
-                ]}
-            >
-                <StatusBar
-                    style="light"
-                    translucent
-                    backgroundColor="transparent"
-                />
-
-                <View style={styles.imageConfirmHeader}>
-                    <TouchableOpacity
-                        style={styles.imageConfirmClose}
-                        activeOpacity={0.85}
-                        onPress={onCancel}
-                    >
-                        <Ionicons name="close" size={27} color="#ffffff" />
-                    </TouchableOpacity>
-
-                    <Text style={styles.imageConfirmTitle}>
-                        {tr("confirmImageTitle", "Send this image?")}
-                    </Text>
-                </View>
-
-                <View style={styles.imageConfirmContent}>
-                    <Image
-                        source={image}
-                        style={styles.fullImage}
-                        resizeMode="contain"
-                    />
-                </View>
-
-                <View
-                    style={[
-                        styles.imageConfirmFooter,
-                        {
-                            backgroundColor: isDark
-                                ? "rgba(2, 11, 24, 0.88)"
-                                : "rgba(0, 0, 0, 0.64)",
-                        },
-                    ]}
-                >
-                    {!!caption && (
-                        <Text style={styles.imageConfirmCaption} numberOfLines={2}>
-                            {caption}
-                        </Text>
-                    )}
-
-                    <View style={styles.confirmActionsRow}>
-                        <TouchableOpacity
-                            style={styles.confirmCancelButton}
-                            activeOpacity={0.85}
-                            onPress={onCancel}
-                        >
-                            <Text style={styles.confirmCancelText}>
-                                {tr("cancel", "Cancel")}
-                            </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[
-                                styles.confirmSendButton,
-                                { backgroundColor: colors.primary },
-                            ]}
-                            activeOpacity={0.85}
-                            onPress={onSend}
-                        >
-                            <Ionicons name="send" size={18} color="#ffffff" />
-                            <Text style={styles.confirmSendText}>
-                                {tr("send", "Send")}
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
-        </Modal>
     );
 }
 
@@ -1933,7 +1080,7 @@ function DocumentPreviewModal({
     const renderPreviewContent = () => {
         if (isPreparingPreview) {
             return (
-                <View style={styles.documentPreviewLoading}>
+                <View style={[styles.documentPreviewLoading, { backgroundColor: colors.cardSoft, borderColor: colors.border }]}>
                     <MaterialCommunityIcons
                         name={fileIconName}
                         size={58}
@@ -1964,9 +1111,7 @@ function DocumentPreviewModal({
                     style={[
                         styles.documentPreviewCard,
                         {
-                            backgroundColor: isDark
-                                ? "rgba(15, 23, 42, 0.96)"
-                                : "rgba(255, 255, 255, 0.96)",
+                            backgroundColor: colors.cardStrong,
                             borderColor: colors.border,
                         },
                     ]}
@@ -2012,9 +1157,7 @@ function DocumentPreviewModal({
                 style={[
                     styles.documentPreviewCard,
                     {
-                        backgroundColor: isDark
-                            ? "rgba(15, 23, 42, 0.96)"
-                            : "rgba(255, 255, 255, 0.96)",
+                        backgroundColor: colors.cardStrong,
                         borderColor: colors.border,
                     },
                 ]}
@@ -2078,18 +1221,18 @@ function DocumentPreviewModal({
 
                 <View style={styles.documentPreviewHeader}>
                     <TouchableOpacity
-                        style={styles.documentPreviewHeaderButton}
+                        style={[styles.documentPreviewHeaderButton, { backgroundColor: colors.buttonSoft, borderColor: colors.border }]}
                         activeOpacity={0.85}
                         onPress={onClose}
                     >
-                        <Ionicons name="close" size={28} color="#ffffff" />
+                        <Ionicons name="close" size={28} color={colors.text} />
                     </TouchableOpacity>
 
-                    <View style={styles.documentPreviewHeaderTextWrapper}>
-                        <Text style={styles.documentPreviewHeaderTitle} numberOfLines={1}>
+                    <View style={[styles.documentPreviewHeaderTextWrapper, { backgroundColor: colors.cardStrong, borderColor: colors.border }]}>
+                        <Text style={[styles.documentPreviewHeaderTitle, { color: colors.text }]} numberOfLines={1}>
                             {documentItem?.fileName || tr("attachedFile", "Attached file")}
                         </Text>
-                        <Text style={styles.documentPreviewHeaderMeta} numberOfLines={1}>
+                        <Text style={[styles.documentPreviewHeaderMeta, { color: colors.muted }]} numberOfLines={1}>
                             {fileSizeText || documentItem?.mimeType || tr("file", "File")}
                         </Text>
                     </View>
@@ -2104,9 +1247,7 @@ function DocumentPreviewModal({
                         styles.documentPreviewBottomBar,
                         shouldStackActions && styles.documentPreviewBottomBarStacked,
                         {
-                            backgroundColor: isDark
-                                ? "rgba(2, 11, 24, 0.88)"
-                                : "rgba(0, 0, 0, 0.62)",
+                            backgroundColor: colors.cardStrong,
                         },
                     ]}
                 >
@@ -2119,8 +1260,8 @@ function DocumentPreviewModal({
                         activeOpacity={0.85}
                         onPress={onOpen}
                     >
-                        <Ionicons name="open-outline" size={19} color="#ffffff" />
-                        <Text style={styles.documentPreviewButtonText} numberOfLines={1}>
+                        <Ionicons name="open-outline" size={19} color={colors.darkText} />
+                        <Text style={[styles.documentPreviewButtonText, { color: colors.darkText }]} numberOfLines={1}>
                             {canPreviewAsPdf
                                 ? tr("openWithApp", "Open with app")
                                 : tr("openFile", "Open file")}
@@ -2131,13 +1272,14 @@ function DocumentPreviewModal({
                         style={[
                             styles.documentPreviewButton,
                             styles.documentPreviewSaveButton,
+                            { backgroundColor: colors.buttonSoft, borderColor: colors.border },
                             shouldStackActions && styles.documentPreviewButtonStacked,
                         ]}
                         activeOpacity={0.85}
                         onPress={onSave}
                     >
-                        <Ionicons name="download-outline" size={19} color="#ffffff" />
-                        <Text style={styles.documentPreviewButtonText} numberOfLines={1}>
+                        <Ionicons name="download-outline" size={19} color={colors.text} />
+                        <Text style={[styles.documentPreviewButtonText, { color: colors.text }]} numberOfLines={1}>
                             {tr("save", "Save")}
                         </Text>
                     </TouchableOpacity>
@@ -2170,7 +1312,7 @@ function AttachmentOptionsModal({
         },
         {
             key: "photos",
-            label: tr("photos", "Photos"),
+            label: tr("photosAndVideos", "Photos & Videos"),
             iconType: "ion",
             iconName: "images",
             color: colors.blue,
@@ -2181,6 +1323,13 @@ function AttachmentOptionsModal({
             iconType: "material",
             iconName: "file-document",
             color: colors.blue,
+        },
+        {
+            key: "scan",
+            label: tr("scanDocument", "Scan Document"),
+            iconType: "ion",
+            iconName: "scan-outline",
+            color: colors.primary || colors.blue,
         },
     ];
 
@@ -2267,221 +1416,6 @@ function AttachmentOptionsModal({
                     </View>
                 </Pressable>
             </Pressable>
-        </View>
-    );
-}
-
-function QuoteCard({ colors, tr, time, isArabic, isCompactScreen }) {
-    return (
-        <View style={styles.quoteRow}>
-            <View
-                style={[
-                    styles.quoteCard,
-                    isCompactScreen && styles.quoteCardCompact,
-                    {
-                        backgroundColor: colors.card,
-                        borderColor: colors.primary,
-                    },
-                ]}
-            >
-                <Text
-                    style={[
-                        styles.quoteTitle,
-                        isCompactScreen && styles.quoteTitleCompact,
-                        { color: colors.primary },
-                        getTextDirectionStyle(isArabic),
-                    ]}
-                >
-                    {tr("quoteSummary", "Quote Summary")}
-                </Text>
-
-                <View
-                    style={[
-                        styles.quoteBody,
-                        isCompactScreen && styles.quoteBodyCompact,
-                        !isCompactScreen && getRowDirectionStyle(isArabic),
-                    ]}
-                >
-                    <View style={styles.quoteDetails}>
-                        <QuoteLine
-                            icon="map-marker-path"
-                            label={tr("route", "Route")}
-                            value="Shanghai (CN) → Dubai (UAE)"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="package-variant-closed"
-                            label={tr("cargoType", "Cargo Type")}
-                            value="General Cargo"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="shipping-pallet"
-                            label={tr("container", "Container")}
-                            value="20ft FCL"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="cube-outline"
-                            label={tr("volumeWeight", "Volume / Weight")}
-                            value="12 CBM / 8,000 KG"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="calendar-clock"
-                            label="ETD"
-                            value="May 28, 2024"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="calendar-check"
-                            label="ETA"
-                            value="Jun 04, 2024"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                    </View>
-
-                    <View
-                        style={[
-                            styles.priceCard,
-                            isCompactScreen && styles.priceCardCompact,
-                            {
-                                borderColor: colors.border,
-                                backgroundColor: colors.cardSoft,
-                            },
-                        ]}
-                    >
-                        <Text style={[styles.priceLabel, { color: colors.text }]}>
-                            {tr("totalPrice", "Total Price (All-In)")}
-                        </Text>
-
-                        <Text
-                            style={[
-                                styles.priceValue,
-                                isCompactScreen && styles.priceValueCompact,
-                                { color: colors.primary },
-                            ]}
-                        >
-                            USD 1,250
-                        </Text>
-
-                        <Text style={[styles.validText, { color: colors.muted }]}>
-                            {tr("validUntil", "Valid Until")}: May 31, 2024
-                        </Text>
-
-                        <View
-                            style={[
-                                styles.divider,
-                                { backgroundColor: colors.border },
-                            ]}
-                        />
-
-                        <Text
-                            style={[
-                                styles.includesTitle,
-                                { color: colors.primary },
-                            ]}
-                        >
-                            {tr("includes", "Includes")}:
-                        </Text>
-
-                        {[
-                            "Ocean Freight",
-                            "Terminal Handling",
-                            "Documentation",
-                            "Customs Clearance",
-                            "Delivery in Dubai",
-                        ].map((item) => (
-                            <View key={item} style={styles.includeRow}>
-                                <Ionicons
-                                    name="checkmark"
-                                    size={14}
-                                    color={colors.primary}
-                                />
-                                <Text
-                                    style={[
-                                        styles.includeText,
-                                        { color: colors.text },
-                                    ]}
-                                >
-                                    {item}
-                                </Text>
-                            </View>
-                        ))}
-                    </View>
-                </View>
-
-                <TouchableOpacity
-                    style={[
-                        styles.viewQuoteButton,
-                        { borderColor: colors.border },
-                    ]}
-                    activeOpacity={0.8}
-                >
-                    <View style={styles.viewQuoteLeft}>
-                        <MaterialCommunityIcons
-                            name="file-document-outline"
-                            size={20}
-                            color={colors.primary}
-                        />
-
-                        <Text
-                            style={[
-                                styles.viewQuoteText,
-                                { color: colors.text },
-                            ]}
-                        >
-                            {tr("viewFullQuote", "View Full Quote")}
-                        </Text>
-                    </View>
-
-                    <Ionicons
-                        name={isArabic ? "chevron-back" : "chevron-forward"}
-                        size={20}
-                        color={colors.text}
-                    />
-                </TouchableOpacity>
-
-                <Text style={[styles.quoteTime, { color: colors.muted }]}>
-                    {time}
-                </Text>
-            </View>
-        </View>
-    );
-}
-
-function QuoteLine({ icon, label, value, colors, isArabic }) {
-    return (
-        <View style={[styles.quoteLine, getRowDirectionStyle(isArabic)]}>
-            <MaterialCommunityIcons name={icon} size={21} color={colors.primary} />
-
-            <View style={styles.quoteLineTextWrapper}>
-                <Text
-                    style={[
-                        styles.quoteLineLabel,
-                        { color: colors.muted },
-                        getTextDirectionStyle(isArabic),
-                    ]}
-                >
-                    {label}
-                </Text>
-
-                <Text
-                    style={[
-                        styles.quoteLineValue,
-                        { color: colors.text },
-                        getTextDirectionStyle(isArabic),
-                    ]}
-                >
-                    {value}
-                </Text>
-            </View>
         </View>
     );
 }
@@ -2669,778 +1603,6 @@ const styles = StyleSheet.create({
         flex: 1,
     },
 
-    header: {
-        minHeight: 90,
-        paddingHorizontal: 16,
-        paddingTop: 8,
-        paddingBottom: 12,
-        flexDirection: "row",
-        alignItems: "center",
-        borderBottomWidth: 1,
-    },
-
-    headerCompact: {
-        minHeight: 84,
-        paddingHorizontal: 12,
-        paddingTop: 6,
-        paddingBottom: 10,
-    },
-
-    headerShort: {
-        minHeight: 80,
-        paddingTop: 6,
-        paddingBottom: 8,
-    },
-
-    iconButton: {
-        width: 36,
-        height: 36,
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-    },
-
-    avatarWrapper: {
-        marginHorizontal: 8,
-        flexShrink: 0,
-    },
-
-    avatar: {
-        width: 52,
-        height: 52,
-        borderRadius: 26,
-        borderWidth: 1,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-
-    avatarCompact: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-    },
-
-    avatarText: {
-        fontSize: 17,
-        fontWeight: "800",
-    },
-
-    avatarTextCompact: {
-        fontSize: 15,
-    },
-
-    headerInfo: {
-        flex: 1,
-        minWidth: 0,
-        paddingRight: 4,
-    },
-
-    employeeName: {
-        fontSize: 18,
-        fontWeight: "800",
-        includeFontPadding: false,
-    },
-
-    employeeNameCompact: {
-        fontSize: 16,
-    },
-
-    employeeNameVeryCompact: {
-        fontSize: 15,
-    },
-
-    department: {
-        marginTop: 4,
-        fontSize: 13,
-        fontWeight: "600",
-        includeFontPadding: false,
-    },
-
-    departmentCompact: {
-        fontSize: 12,
-    },
-
-    departmentVeryCompact: {
-        fontSize: 11,
-    },
-
-    statusRow: {
-        marginTop: 5,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-    },
-
-    onlineDot: {
-        width: 9,
-        height: 9,
-        borderRadius: 5,
-    },
-
-    onlineText: {
-        fontSize: 13,
-        fontWeight: "700",
-        includeFontPadding: false,
-    },
-
-    onlineTextVeryCompact: {
-        fontSize: 12,
-    },
-
-    callButton: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
-        borderWidth: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        marginLeft: 8,
-        flexShrink: 0,
-    },
-
-    callButtonCompact: {
-        width: 38,
-        height: 38,
-        borderRadius: 13,
-        marginLeft: 6,
-    },
-
-    callButtonVeryCompact: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
-        marginLeft: 4,
-    },
-
-    messagesList: {
-        flex: 1,
-    },
-
-    messagesContent: {
-        flexGrow: 1,
-        justifyContent: "flex-end",
-        paddingHorizontal: 16,
-        paddingTop: 18,
-        paddingBottom: 14,
-    },
-
-    messagesContentCompact: {
-        paddingHorizontal: 12,
-        paddingTop: 14,
-    },
-
-    messagesContentShort: {
-        paddingBottom: 10,
-    },
-
-    messageRow: {
-        marginBottom: 10,
-        flexDirection: "row",
-    },
-
-    myMessageRow: {
-        justifyContent: "flex-end",
-    },
-
-    employeeMessageRow: {
-        justifyContent: "flex-start",
-    },
-
-    bubble: {
-        maxWidth: "82%",
-        borderRadius: 16,
-        borderWidth: 1,
-        paddingHorizontal: 14,
-        paddingTop: 10,
-        paddingBottom: 7,
-    },
-
-    bubbleCompact: {
-        maxWidth: "88%",
-        paddingHorizontal: 12,
-    },
-
-    messageText: {
-        fontSize: 15.5,
-        lineHeight: 22,
-    },
-
-    messageTextCompact: {
-        fontSize: 14.5,
-        lineHeight: 21,
-    },
-
-    messageMetaRow: {
-        marginTop: 5,
-        flexDirection: "row",
-        justifyContent: "flex-end",
-        alignItems: "center",
-        gap: 4,
-    },
-
-    imageBubble: {
-        borderWidth: 1,
-        borderRadius: 18,
-        padding: 5,
-        overflow: "hidden",
-    },
-
-    imageBubbleCompact: {
-        borderRadius: 16,
-    },
-
-    chatImage: {
-        borderRadius: 14,
-        backgroundColor: "#000000",
-    },
-
-    imageCaption: {
-        marginTop: 7,
-        paddingHorizontal: 6,
-        fontSize: 13.5,
-        fontWeight: "600",
-        lineHeight: 19,
-    },
-
-    imageMetaRow: {
-        marginTop: 5,
-        paddingHorizontal: 6,
-        paddingBottom: 2,
-        flexDirection: "row",
-        justifyContent: "flex-end",
-        alignItems: "center",
-        gap: 4,
-    },
-
-    documentBubble: {
-        width: "82%",
-        maxWidth: 330,
-        borderRadius: 18,
-        borderWidth: 1,
-        padding: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-    },
-
-    documentBubbleCompact: {
-        width: "88%",
-        borderRadius: 16,
-        padding: 9,
-    },
-
-    documentIconBox: {
-        width: 54,
-        height: 54,
-        borderRadius: 16,
-        borderWidth: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-    },
-
-    documentInfo: {
-        flex: 1,
-        minWidth: 0,
-    },
-
-    documentName: {
-        fontSize: 14,
-        fontWeight: "800",
-        lineHeight: 19,
-    },
-
-    documentMeta: {
-        marginTop: 3,
-        fontSize: 12,
-        fontWeight: "600",
-    },
-
-    documentTimeRow: {
-        marginTop: 6,
-        flexDirection: "row",
-        justifyContent: "flex-end",
-        alignItems: "center",
-        gap: 4,
-    },
-
-    audioBubble: {
-        width: "76%",
-        maxWidth: 310,
-        borderRadius: 18,
-        borderWidth: 1,
-        padding: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-    },
-
-    audioBubbleCompact: {
-        width: "84%",
-        borderRadius: 16,
-        padding: 9,
-    },
-
-    audioPlayButton: {
-        width: 42,
-        height: 42,
-        borderRadius: 21,
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-    },
-
-    audioContent: {
-        flex: 1,
-        minWidth: 0,
-    },
-
-    audioWaveRow: {
-        height: 34,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 3,
-    },
-
-    audioWaveBar: {
-        width: 3,
-        borderRadius: 2,
-        opacity: 0.8,
-    },
-
-    audioMetaRow: {
-        marginTop: 2,
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        gap: 8,
-    },
-
-    audioDuration: {
-        fontSize: 12,
-        fontWeight: "700",
-    },
-
-    audioTimeWrapper: {
-        flexDirection: "row",
-        justifyContent: "flex-end",
-        alignItems: "center",
-        gap: 4,
-    },
-
-    imagePreviewRoot: {
-        flex: 1,
-    },
-
-    imagePreviewClose: {
-        position: "absolute",
-        top: Platform.OS === "ios" ? 58 : 34,
-        right: 18,
-        zIndex: 10,
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: "rgba(0, 0, 0, 0.45)",
-        alignItems: "center",
-        justifyContent: "center",
-    },
-
-    imagePreviewContent: {
-        flex: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        paddingHorizontal: 10,
-    },
-
-    fullImage: {
-        width: "100%",
-        height: "100%",
-    },
-
-    imagePreviewFooter: {
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        paddingHorizontal: 18,
-        paddingTop: 14,
-        paddingBottom: Platform.OS === "ios" ? 34 : 18,
-    },
-
-    imagePreviewCaption: {
-        color: "#ffffff",
-        fontSize: 15,
-        fontWeight: "700",
-        lineHeight: 22,
-    },
-
-    imagePreviewTime: {
-        marginTop: 4,
-        color: "rgba(255, 255, 255, 0.72)",
-        fontSize: 12,
-        fontWeight: "600",
-    },
-
-    timeText: {
-        fontSize: 11.5,
-    },
-
-    quoteRow: {
-        marginBottom: 10,
-        alignItems: "flex-start",
-    },
-
-    quoteCard: {
-        width: "100%",
-        borderRadius: 18,
-        borderWidth: 1.4,
-        padding: 14,
-    },
-
-    quoteCardCompact: {
-        padding: 12,
-        borderRadius: 16,
-    },
-
-    quoteTitle: {
-        fontSize: 16,
-        fontWeight: "900",
-        marginBottom: 12,
-    },
-
-    quoteTitleCompact: {
-        fontSize: 15,
-        marginBottom: 10,
-    },
-
-    quoteBody: {
-        flexDirection: "row",
-        gap: 12,
-    },
-
-    quoteBodyCompact: {
-        flexDirection: "column",
-        gap: 12,
-    },
-
-    quoteDetails: {
-        flex: 1,
-        gap: 9,
-    },
-
-    quoteLine: {
-        flexDirection: "row",
-        gap: 8,
-        alignItems: "flex-start",
-    },
-
-    quoteLineTextWrapper: {
-        flex: 1,
-    },
-
-    quoteLineLabel: {
-        fontSize: 12,
-    },
-
-    quoteLineValue: {
-        fontSize: 13,
-        fontWeight: "700",
-        marginTop: 1,
-    },
-
-    priceCard: {
-        width: 158,
-        borderRadius: 16,
-        borderWidth: 1,
-        padding: 10,
-    },
-
-    priceCardCompact: {
-        width: "100%",
-    },
-
-    priceLabel: {
-        fontSize: 12,
-        textAlign: "center",
-    },
-
-    priceValue: {
-        marginTop: 5,
-        fontSize: 21,
-        fontWeight: "900",
-        textAlign: "center",
-    },
-
-    priceValueCompact: {
-        fontSize: 20,
-    },
-
-    validText: {
-        marginTop: 6,
-        fontSize: 11,
-        textAlign: "center",
-    },
-
-    divider: {
-        height: 1,
-        marginVertical: 8,
-    },
-
-    includesTitle: {
-        fontSize: 12,
-        fontWeight: "800",
-        marginBottom: 4,
-    },
-
-    includeRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        marginTop: 3,
-    },
-
-    includeText: {
-        flex: 1,
-        fontSize: 10.5,
-    },
-
-    viewQuoteButton: {
-        marginTop: 13,
-        borderWidth: 1,
-        borderRadius: 13,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-
-    viewQuoteLeft: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-    },
-
-    viewQuoteText: {
-        fontSize: 14,
-        fontWeight: "800",
-    },
-
-    quoteTime: {
-        marginTop: 5,
-        textAlign: "right",
-        fontSize: 11.5,
-    },
-
-    composerWrapper: {
-        paddingHorizontal: 14,
-        paddingTop: 8,
-        borderTopWidth: 1,
-        flexDirection: "row",
-        alignItems: "flex-end",
-        gap: 8,
-    },
-
-    composerWrapperCompact: {
-        paddingHorizontal: 10,
-        gap: 6,
-    },
-
-    attachButton: {
-        width: 40,
-        minHeight: 46,
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-    },
-
-    inputWrapper: {
-        flex: 1,
-        minHeight: 46,
-        maxHeight: 116,
-        borderWidth: 1,
-        borderRadius: 18,
-        paddingLeft: 14,
-        paddingRight: 12,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-        minWidth: 0,
-    },
-
-    inputWrapperCompact: {
-        minHeight: 44,
-        borderRadius: 16,
-        paddingLeft: 12,
-        paddingRight: 10,
-    },
-
-    input: {
-        flex: 1,
-        fontSize: 15,
-        paddingVertical: Platform.OS === "ios" ? 11 : 8,
-        maxHeight: 96,
-        minWidth: 0,
-    },
-
-    inputCompact: {
-        fontSize: 14.5,
-        maxHeight: 86,
-    },
-
-    recordingInputContent: {
-        flex: 1,
-        minHeight: 44,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 9,
-        minWidth: 0,
-    },
-
-    recordingDot: {
-        width: 10,
-        height: 10,
-        borderRadius: 5,
-        backgroundColor: "#EF4444",
-    },
-
-    recordingInputText: {
-        flex: 1,
-        fontSize: 15,
-        fontWeight: "800",
-    },
-
-    actionButton: {
-        width: 50,
-        height: 50,
-        borderRadius: 25,
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-    },
-
-    actionButtonCompact: {
-        width: 46,
-        height: 46,
-        borderRadius: 23,
-    },
-
-
-    imagePreviewSave: {
-        position: "absolute",
-        top: Platform.OS === "ios" ? 58 : 34,
-        left: 18,
-        zIndex: 10,
-        minWidth: 88,
-        height: 44,
-        borderRadius: 22,
-        paddingHorizontal: 14,
-        backgroundColor: "rgba(0, 0, 0, 0.45)",
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 6,
-    },
-
-    imagePreviewSaveText: {
-        color: "#ffffff",
-        fontSize: 13,
-        fontWeight: "800",
-    },
-
-    imageConfirmRoot: {
-        flex: 1,
-    },
-
-    imageConfirmHeader: {
-        position: "absolute",
-        top: Platform.OS === "ios" ? 58 : 34,
-        left: 18,
-        right: 18,
-        zIndex: 10,
-        minHeight: 44,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 12,
-    },
-
-    imageConfirmClose: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        backgroundColor: "rgba(0, 0, 0, 0.45)",
-        alignItems: "center",
-        justifyContent: "center",
-    },
-
-    imageConfirmTitle: {
-        flex: 1,
-        color: "#ffffff",
-        fontSize: 18,
-        fontWeight: "900",
-    },
-
-    imageConfirmContent: {
-        flex: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        paddingHorizontal: 10,
-    },
-
-    imageConfirmFooter: {
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        paddingHorizontal: 18,
-        paddingTop: 14,
-        paddingBottom: Platform.OS === "ios" ? 34 : 18,
-    },
-
-    imageConfirmCaption: {
-        color: "#ffffff",
-        fontSize: 14,
-        fontWeight: "700",
-        marginBottom: 12,
-    },
-
-    confirmActionsRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-    },
-
-    confirmCancelButton: {
-        flex: 1,
-        height: 48,
-        borderRadius: 16,
-        backgroundColor: "rgba(255, 255, 255, 0.14)",
-        alignItems: "center",
-        justifyContent: "center",
-    },
-
-    confirmCancelText: {
-        color: "#ffffff",
-        fontSize: 15,
-        fontWeight: "900",
-    },
-
-    confirmSendButton: {
-        flex: 1,
-        height: 48,
-        borderRadius: 16,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 8,
-    },
-
-    confirmSendText: {
-        color: "#ffffff",
-        fontSize: 15,
-        fontWeight: "900",
-    },
-
     documentPreviewRoot: {
         flex: 1,
     },
@@ -3514,7 +1676,6 @@ const styles = StyleSheet.create({
     },
 
     documentPreviewButtonText: {
-        color: "#ffffff",
         fontSize: 15,
         fontWeight: "900",
     },
@@ -3540,7 +1701,7 @@ const styles = StyleSheet.create({
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: "rgba(0, 0, 0, 0.45)",
+        borderWidth: 1,
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
@@ -3552,18 +1713,16 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
         paddingHorizontal: 12,
         borderRadius: 16,
-        backgroundColor: "rgba(0, 0, 0, 0.42)",
+        borderWidth: 1,
     },
 
     documentPreviewHeaderTitle: {
-        color: "#ffffff",
         fontSize: 14,
         fontWeight: "900",
     },
 
     documentPreviewHeaderMeta: {
         marginTop: 2,
-        color: "rgba(255, 255, 255, 0.72)",
         fontSize: 11,
         fontWeight: "700",
     },
@@ -3583,22 +1742,14 @@ const styles = StyleSheet.create({
         borderRadius: 18,
     },
 
-    documentPdfWebView: {
-        width: "100%",
-        height: "100%",
-        borderRadius: 18,
-        overflow: "hidden",
-        backgroundColor: "#ffffff",
-    },
-
     documentPreviewLoading: {
         width: "100%",
         maxWidth: 340,
         minHeight: 220,
         borderRadius: 24,
+        borderWidth: 1,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "rgba(255, 255, 255, 0.10)",
         padding: 22,
     },
 
@@ -3630,9 +1781,7 @@ const styles = StyleSheet.create({
     },
 
     documentPreviewSaveButton: {
-        backgroundColor: "rgba(255, 255, 255, 0.16)",
         borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.22)",
     },
 
     attachmentOverlayRoot: {
@@ -3679,12 +1828,14 @@ const styles = StyleSheet.create({
 
     attachmentGrid: {
         flexDirection: "row",
+        flexWrap: "wrap",
         justifyContent: "space-between",
-        gap: 12,
+        rowGap: 16,
+        columnGap: 10,
     },
 
     attachmentItem: {
-        flex: 1,
+        width: "48%",
         alignItems: "center",
         gap: 9,
         minWidth: 0,

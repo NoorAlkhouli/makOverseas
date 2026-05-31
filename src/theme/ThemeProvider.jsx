@@ -11,9 +11,9 @@ import { Appearance } from "react-native";
 
 import { darkColors, lightColors } from "@/src/theme/colors";
 
-const THEME_STORAGE_KEY = "appThemeMode";
+const THEME_STORAGE_KEY = "appManualTheme";
 
-const VALID_THEME_MODES = ["light", "dark", "system"];
+const VALID_THEME_MODES = ["light", "dark"];
 
 const ThemeContext = createContext(null);
 
@@ -22,8 +22,8 @@ function getSystemTheme() {
 }
 
 export function ThemeProvider({ children }) {
-    const [themeMode, setThemeMode] = useState("system");
-    const [systemTheme, setSystemTheme] = useState(getSystemTheme);
+    const [systemTheme, setSystemTheme] = useState(getSystemTheme());
+    const [manualTheme, setManualTheme] = useState(null);
     const [isThemeReady, setIsThemeReady] = useState(false);
 
     useEffect(() => {
@@ -36,12 +36,19 @@ export function ThemeProvider({ children }) {
                 if (!isMounted) return;
 
                 if (VALID_THEME_MODES.includes(savedTheme)) {
-                    setThemeMode(savedTheme);
+                    setManualTheme(savedTheme);
+                } else {
+                    setManualTheme(null);
                 }
             } catch (error) {
                 console.log("Failed to load theme mode:", error);
+
+                if (isMounted) {
+                    setManualTheme(null);
+                }
             } finally {
                 if (isMounted) {
+                    setSystemTheme(getSystemTheme());
                     setIsThemeReady(true);
                 }
             }
@@ -50,7 +57,8 @@ export function ThemeProvider({ children }) {
         loadSavedTheme();
 
         const subscription = Appearance.addChangeListener(({ colorScheme }) => {
-            setSystemTheme(colorScheme === "dark" ? "dark" : "light");
+            const nextSystemTheme = colorScheme === "dark" ? "dark" : "light";
+            setSystemTheme(nextSystemTheme);
         });
 
         return () => {
@@ -60,8 +68,8 @@ export function ThemeProvider({ children }) {
     }, []);
 
     const activeTheme = useMemo(() => {
-        return themeMode === "system" ? systemTheme : themeMode;
-    }, [themeMode, systemTheme]);
+        return manualTheme ?? systemTheme;
+    }, [manualTheme, systemTheme]);
 
     const colors = useMemo(() => {
         return activeTheme === "dark" ? darkColors : lightColors;
@@ -70,25 +78,20 @@ export function ThemeProvider({ children }) {
     const changeThemeMode = useCallback((nextMode) => {
         if (!VALID_THEME_MODES.includes(nextMode)) return;
 
-        setThemeMode((currentMode) => {
-            if (currentMode === nextMode) return currentMode;
-            return nextMode;
-        });
+        setManualTheme(nextMode);
 
         AsyncStorage.setItem(THEME_STORAGE_KEY, nextMode).catch((error) => {
-            console.log("Failed to save theme mode:", error);
+            console.log("Failed to save manual theme:", error);
         });
     }, []);
 
     const toggleTheme = useCallback(() => {
-        setThemeMode((currentMode) => {
-            const currentActiveTheme =
-                currentMode === "system" ? getSystemTheme() : currentMode;
-
+        setManualTheme((currentManualTheme) => {
+            const currentActiveTheme = currentManualTheme ?? getSystemTheme();
             const nextMode = currentActiveTheme === "dark" ? "light" : "dark";
 
             AsyncStorage.setItem(THEME_STORAGE_KEY, nextMode).catch((error) => {
-                console.log("Failed to save theme mode:", error);
+                console.log("Failed to save manual theme:", error);
             });
 
             return nextMode;
@@ -96,24 +99,41 @@ export function ThemeProvider({ children }) {
     }, []);
 
     const resetToSystemTheme = useCallback(() => {
-        changeThemeMode("system");
-    }, [changeThemeMode]);
+        setManualTheme(null);
+        setSystemTheme(getSystemTheme());
+
+        AsyncStorage.removeItem(THEME_STORAGE_KEY).catch((error) => {
+            console.log("Failed to remove manual theme:", error);
+        });
+    }, []);
 
     const value = useMemo(
         () => ({
             colors,
-            themeMode,
+
+            // ثيم الموبايل الحقيقي
+            systemTheme,
+
+            // الثيم اليدوي إذا المستخدم اختاره، وإذا null يعني التطبيق ماشي مع الموبايل
+            manualTheme,
+
+            // الثيم الفعال حالياً داخل التطبيق
             activeTheme,
+
             isDark: activeTheme === "dark",
             isLight: activeTheme === "light",
+            isUsingSystemTheme: manualTheme === null,
+
             isThemeReady,
+
             changeThemeMode,
             toggleTheme,
             resetToSystemTheme,
         }),
         [
             colors,
-            themeMode,
+            systemTheme,
+            manualTheme,
             activeTheme,
             isThemeReady,
             changeThemeMode,
