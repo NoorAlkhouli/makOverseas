@@ -1,5 +1,5 @@
 //MICrephone
-import { getWritingDirectionStyle } from "@/src/styles/globalStyles";
+import { getTextInputDirectionFromValue } from "@/src/styles/globalStyles";
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import {
@@ -85,11 +85,10 @@ export default function IndividualChatComposer({
                             styles.input,
                             isCompactScreen && styles.inputCompact,
                             { color: colors.text },
-                            getWritingDirectionStyle(isArabic),
+                            getTextInputDirectionFromValue(messageText, isArabic),
                         ]}
                         multiline
                         scrollEnabled
-                        textAlign={isArabic ? "right" : "left"}
                     />
                 )}
 

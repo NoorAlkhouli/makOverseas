@@ -1,3 +1,4 @@
+// IMAGE_EDITOR_THEME_FIXED_FINAL
 import { Ionicons } from "@expo/vector-icons";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as MediaLibrary from "expo-media-library";
@@ -18,8 +19,8 @@ import {
 import { captureRef } from "react-native-view-shot";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-const DRAW_COLORS = ["#FFFFFF", "#22C55E", "#38BDF8", "#F97316", "#EF4444"];
 const DRAW_WIDTH = 7;
+const MIN_CROP_SIZE = 72;
 
 const getImageUri = (mediaItem, image) => {
     if (image?.uri) return image.uri;
@@ -60,33 +61,166 @@ const getImageSizeAsync = (uri, fallbackWidth, fallbackHeight) =>
         );
     });
 
-function ToolButton({ icon, active, disabled, onPress, children }) {
+const getEditorThemeColors = (colors = {}) => {
+    const text = colors.textPrimary || colors.textSecondary || colors.darkText;
+    const muted = colors.textMuted || colors.textSecondary || text;
+    const primary = colors.primary || colors.success || text;
+    const primaryText = colors.darkText || colors.background || text;
+    const border = colors.border || colors.borderSoft || colors.borderLight;
+    const borderLight = colors.borderLight || colors.border || colors.borderSoft;
+    const buttonBackground = colors.buttonSoft || colors.cardSoft || colors.card;
+
+    return {
+        background: colors.background,
+        barBackground: colors.cardStrong || colors.card || colors.background,
+        cardBackground: colors.cardSoft || colors.card || colors.background,
+        buttonBackground,
+        inputBackground: colors.inputBackground || colors.cardSoft || colors.card,
+        text,
+        muted,
+        primary,
+        primaryText,
+        border,
+        borderLight,
+        overlay: colors.overlay || colors.homeOverlay || colors.authOverlay || colors.cardSoft,
+        blue: colors.blue || primary,
+        warning: colors.warning || primary,
+        danger: colors.danger || primary,
+        success: colors.success || primary,
+        primarySoft: colors.primarySoft || buttonBackground,
+    };
+};
+
+const getDrawColors = (themeColors) =>
+    [
+        themeColors.text,
+        themeColors.primary,
+        themeColors.blue,
+        themeColors.warning,
+        themeColors.danger,
+    ].filter(Boolean);
+
+const clamp = (value, min, max) => Math.max(min, Math.min(value, max));
+
+const getCropAspectRatio = (cropRatio) => {
+    if (cropRatio === "square") return 1;
+    if (cropRatio === "portrait") return 4 / 5;
+    if (cropRatio === "landscape") return 16 / 9;
+    return null;
+};
+
+const createCenteredCropBox = (displaySize, cropRatio = "free") => {
+    const safeWidth = Math.max(1, displaySize.width);
+    const safeHeight = Math.max(1, displaySize.height);
+    const aspectRatio = getCropAspectRatio(cropRatio);
+
+    let width = safeWidth * 0.82;
+    let height = safeHeight * 0.82;
+
+    if (aspectRatio) {
+        if (width / Math.max(height, 1) > aspectRatio) {
+            width = height * aspectRatio;
+        } else {
+            height = width / aspectRatio;
+        }
+    }
+
+    width = clamp(width, Math.min(MIN_CROP_SIZE, safeWidth), safeWidth);
+    height = clamp(height, Math.min(MIN_CROP_SIZE, safeHeight), safeHeight);
+
+    return {
+        x: (safeWidth - width) / 2,
+        y: (safeHeight - height) / 2,
+        width,
+        height,
+    };
+};
+
+const clampCropBox = (box, displaySize) => {
+    const safeWidth = Math.max(1, displaySize.width);
+    const safeHeight = Math.max(1, displaySize.height);
+    const minWidth = Math.min(MIN_CROP_SIZE, safeWidth);
+    const minHeight = Math.min(MIN_CROP_SIZE, safeHeight);
+    const width = clamp(box.width, minWidth, safeWidth);
+    const height = clamp(box.height, minHeight, safeHeight);
+
+    return {
+        x: clamp(box.x, 0, Math.max(0, safeWidth - width)),
+        y: clamp(box.y, 0, Math.max(0, safeHeight - height)),
+        width,
+        height,
+    };
+};
+
+function ToolButton({ icon, active, disabled, onPress, children, themeColors }) {
     return (
         <TouchableOpacity
             style={[
                 styles.toolButton,
-                active && styles.toolButtonActive,
-                disabled && styles.toolButtonDisabled,
+                {
+                    backgroundColor: active
+                        ? themeColors.primarySoft
+                        : themeColors.buttonBackground,
+                    borderColor: active ? themeColors.primary : themeColors.borderLight,
+                },
+                disabled && styles.disabled,
             ]}
             activeOpacity={0.85}
             disabled={disabled}
             onPress={onPress}
         >
-            {children || <Ionicons name={icon} size={24} color="#ffffff" />}
+            {children || <Ionicons name={icon} size={24} color={themeColors.text} />}
         </TouchableOpacity>
     );
 }
 
-function CropPill({ label, active, onPress }) {
+function CropPill({ label, active, onPress, themeColors }) {
     return (
         <TouchableOpacity
-            style={[styles.cropPill, active && styles.cropPillActive]}
+            style={[
+                styles.cropPill,
+                {
+                    backgroundColor: active ? themeColors.text : themeColors.buttonBackground,
+                    borderColor: active ? themeColors.text : themeColors.borderLight,
+                },
+            ]}
             activeOpacity={0.85}
             onPress={onPress}
         >
-            <Text style={[styles.cropPillText, active && styles.cropPillTextActive]}>
+            <Text
+                style={[
+                    styles.cropPillText,
+                    { color: active ? themeColors.primaryText : themeColors.text },
+                ]}
+            >
                 {label}
             </Text>
+        </TouchableOpacity>
+    );
+}
+
+function CropControlButton({ icon, label, onPress, disabled, themeColors }) {
+    return (
+        <TouchableOpacity
+            style={[
+                styles.cropControlButton,
+                {
+                    backgroundColor: themeColors.buttonBackground,
+                    borderColor: themeColors.borderLight,
+                },
+                disabled && styles.disabled,
+            ]}
+            activeOpacity={0.85}
+            disabled={disabled}
+            onPress={onPress}
+        >
+            {icon ? (
+                <Ionicons name={icon} size={20} color={themeColors.text} />
+            ) : (
+                <Text style={[styles.cropControlButtonText, { color: themeColors.text }]}>
+                    {label}
+                </Text>
+            )}
         </TouchableOpacity>
     );
 }
@@ -178,6 +312,8 @@ export default function ImageMediaEditor({
 }) {
     const insets = useSafeAreaInsets();
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+    const themeColors = useMemo(() => getEditorThemeColors(colors), [colors]);
+    const drawColors = useMemo(() => getDrawColors(themeColors), [themeColors]);
 
     const originalUri = getImageUri(mediaItem, image);
     const imageCanvasRef = useRef(null);
@@ -189,11 +325,20 @@ export default function ImageMediaEditor({
     });
     const [isHdEnabled, setIsHdEnabled] = useState(true);
     const [isCropMode, setIsCropMode] = useState(false);
-    const [cropRatio, setCropRatio] = useState("original");
+    const [cropRatio, setCropRatio] = useState("free");
     const [isDrawMode, setIsDrawMode] = useState(false);
-    const [drawColor, setDrawColor] = useState(DRAW_COLORS[0]);
+    const [drawColor, setDrawColor] = useState(null);
     const [paths, setPaths] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [cropBox, setCropBox] = useState(() =>
+        createCenteredCropBox({ width: 1, height: 1 })
+    );
+
+    useEffect(() => {
+        if (!drawColor && drawColors.length) {
+            setDrawColor(drawColors[0]);
+        }
+    }, [drawColor, drawColors]);
 
     useEffect(() => {
         let isMounted = true;
@@ -205,8 +350,9 @@ export default function ImageMediaEditor({
             setPaths([]);
             setIsCropMode(false);
             setIsDrawMode(false);
-            setCropRatio("original");
+            setCropRatio("free");
             setIsHdEnabled(true);
+            setDrawColor((prev) => prev || drawColors[0]);
 
             const nextSize = await getImageSizeAsync(
                 originalUri,
@@ -224,7 +370,7 @@ export default function ImageMediaEditor({
         return () => {
             isMounted = false;
         };
-    }, [visible, originalUri, mediaItem?.width, mediaItem?.height]);
+    }, [visible, originalUri, mediaItem?.width, mediaItem?.height, drawColors]);
 
     const topHeight = insets.top + 102;
     const bottomHeight = Math.max(insets.bottom, 12) + 154;
@@ -249,6 +395,69 @@ export default function ImageMediaEditor({
         };
     }, [screenWidth, mediaAreaHeight, imageSize.width, imageSize.height]);
 
+    useEffect(() => {
+        if (!isCropMode) return;
+        setCropBox(createCenteredCropBox(displaySize, cropRatio));
+    }, [cropRatio, displaySize.height, displaySize.width, isCropMode]);
+
+    const moveCropBox = (direction) => {
+        const step = Math.max(
+            8,
+            Math.round(Math.min(displaySize.width, displaySize.height) * 0.06)
+        );
+        const offsetMap = {
+            up: { x: 0, y: -step },
+            down: { x: 0, y: step },
+            left: { x: -step, y: 0 },
+            right: { x: step, y: 0 },
+        };
+        const offset = offsetMap[direction] || { x: 0, y: 0 };
+
+        setCropBox((prev) =>
+            clampCropBox(
+                {
+                    ...prev,
+                    x: prev.x + offset.x,
+                    y: prev.y + offset.y,
+                },
+                displaySize
+            )
+        );
+    };
+
+    const resizeCropBox = (scale) => {
+        setCropBox((prev) => {
+            const aspectRatio =
+                getCropAspectRatio(cropRatio) || prev.width / Math.max(prev.height, 1);
+            const centerX = prev.x + prev.width / 2;
+            const centerY = prev.y + prev.height / 2;
+            let nextWidth = clamp(prev.width * scale, MIN_CROP_SIZE, displaySize.width);
+            let nextHeight = nextWidth / aspectRatio;
+
+            if (nextHeight > displaySize.height) {
+                nextHeight = displaySize.height;
+                nextWidth = nextHeight * aspectRatio;
+            }
+
+            nextWidth = clamp(nextWidth, Math.min(MIN_CROP_SIZE, displaySize.width), displaySize.width);
+            nextHeight = clamp(nextHeight, Math.min(MIN_CROP_SIZE, displaySize.height), displaySize.height);
+
+            return clampCropBox(
+                {
+                    x: centerX - nextWidth / 2,
+                    y: centerY - nextHeight / 2,
+                    width: nextWidth,
+                    height: nextHeight,
+                },
+                displaySize
+            );
+        });
+    };
+
+    const resetCropBox = () => {
+        setCropBox(createCenteredCropBox(displaySize, cropRatio));
+    };
+
     const panResponder = useMemo(
         () =>
             PanResponder.create({
@@ -261,12 +470,12 @@ export default function ImageMediaEditor({
                     setPaths((prev) => [
                         ...prev,
                         {
-                            color: drawColor,
+                            color: drawColor || drawColors[0],
                             width: DRAW_WIDTH,
                             points: [
                                 {
-                                    x: Math.max(0, Math.min(locationX, displaySize.width)),
-                                    y: Math.max(0, Math.min(locationY, displaySize.height)),
+                                    x: clamp(locationX, 0, displaySize.width),
+                                    y: clamp(locationY, 0, displaySize.height),
                                 },
                             ],
                         },
@@ -288,8 +497,8 @@ export default function ImageMediaEditor({
                             points: [
                                 ...lastPath.points,
                                 {
-                                    x: Math.max(0, Math.min(locationX, displaySize.width)),
-                                    y: Math.max(0, Math.min(locationY, displaySize.height)),
+                                    x: clamp(locationX, 0, displaySize.width),
+                                    y: clamp(locationY, 0, displaySize.height),
                                 },
                             ],
                         };
@@ -298,7 +507,7 @@ export default function ImageMediaEditor({
                     });
                 },
             }),
-        [displaySize.height, displaySize.width, drawColor, isDrawMode]
+        [displaySize.height, displaySize.width, drawColor, drawColors, isDrawMode]
     );
 
     const buildFinalImageMessage = async () => {
@@ -388,59 +597,49 @@ export default function ImageMediaEditor({
         try {
             if (!currentUri || isProcessing) return;
 
-            if (cropRatio === "original") {
-                setIsCropMode(false);
-                return;
-            }
-
             setIsProcessing(true);
 
-            const sourceWidth = imageSize.width;
-            const sourceHeight = imageSize.height;
-            const targetRatio =
-                cropRatio === "square"
-                    ? 1
-                    : cropRatio === "portrait"
-                        ? 4 / 5
-                        : 16 / 9;
-
-            const sourceRatio = sourceWidth / Math.max(sourceHeight, 1);
-            let cropWidth = sourceWidth;
-            let cropHeight = sourceHeight;
-            let originX = 0;
-            let originY = 0;
-
-            if (sourceRatio > targetRatio) {
-                cropWidth = sourceHeight * targetRatio;
-                originX = (sourceWidth - cropWidth) / 2;
-            } else {
-                cropHeight = sourceWidth / targetRatio;
-                originY = (sourceHeight - cropHeight) / 2;
-            }
-
+            const scaleX = imageSize.width / Math.max(displaySize.width, 1);
+            const scaleY = imageSize.height / Math.max(displaySize.height, 1);
+            const cropX = clamp(Math.round(cropBox.x * scaleX), 0, imageSize.width - 1);
+            const cropY = clamp(Math.round(cropBox.y * scaleY), 0, imageSize.height - 1);
+            const cropWidth = clamp(
+                Math.round(cropBox.width * scaleX),
+                1,
+                imageSize.width - cropX
+            );
+            const cropHeight = clamp(
+                Math.round(cropBox.height * scaleY),
+                1,
+                imageSize.height - cropY
+            );
             const format = getSaveFormat(currentUri);
-            const context = ImageManipulator.manipulate(currentUri);
-
-            context.crop({
-                originX: Math.max(0, Math.round(originX)),
-                originY: Math.max(0, Math.round(originY)),
-                width: Math.max(1, Math.round(cropWidth)),
-                height: Math.max(1, Math.round(cropHeight)),
-            });
-
-            const renderedImage = await context.renderAsync();
-            const result = await renderedImage.saveAsync({
-                compress: isHdEnabled ? 1 : 0.88,
-                format,
-            });
+            const result = await ImageManipulator.manipulateAsync(
+                currentUri,
+                [
+                    {
+                        crop: {
+                            originX: cropX,
+                            originY: cropY,
+                            width: cropWidth,
+                            height: cropHeight,
+                        },
+                    },
+                ],
+                {
+                    compress: isHdEnabled ? 1 : 0.88,
+                    format,
+                }
+            );
 
             setCurrentUri(result.uri);
             setImageSize({
-                width: result.width || Math.round(cropWidth),
-                height: result.height || Math.round(cropHeight),
+                width: result.width || cropWidth,
+                height: result.height || cropHeight,
             });
             setPaths([]);
             setIsCropMode(false);
+            setCropRatio("free");
         } catch (error) {
             console.log("Crop image error:", error);
 
@@ -478,25 +677,46 @@ export default function ImageMediaEditor({
     };
 
     return (
-        <View style={styles.root}>
+        <View style={[styles.root, { backgroundColor: themeColors.background }]}>
             <StatusBar style="light" translucent backgroundColor="transparent" />
 
-            <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-                <ToolButton icon="close" onPress={onCancel} />
+            <View
+                style={[
+                    styles.topBar,
+                    {
+                        paddingTop: insets.top + 8,
+                        backgroundColor: themeColors.barBackground,
+                        borderBottomColor: themeColors.border,
+                    },
+                ]}
+            >
+                <ToolButton icon="close" onPress={onCancel} themeColors={themeColors} />
 
                 <View style={styles.topActions}>
                     <ToolButton
                         icon="download-outline"
                         disabled={isProcessing}
                         onPress={handleSave}
+                        themeColors={themeColors}
                     />
 
                     <ToolButton
                         active={isHdEnabled}
                         disabled={isProcessing}
                         onPress={() => setIsHdEnabled((prev) => !prev)}
+                        themeColors={themeColors}
                     >
-                        <Text style={styles.hdText}>HD</Text>
+                        <Text
+                            style={[
+                                styles.hdText,
+                                {
+                                    color: themeColors.text,
+                                    borderColor: themeColors.text,
+                                },
+                            ]}
+                        >
+                            HD
+                        </Text>
                     </ToolButton>
 
                     <ToolButton
@@ -507,6 +727,7 @@ export default function ImageMediaEditor({
                             setIsCropMode((prev) => !prev);
                             setIsDrawMode(false);
                         }}
+                        themeColors={themeColors}
                     />
 
                     <ToolButton
@@ -517,52 +738,83 @@ export default function ImageMediaEditor({
                             setIsDrawMode((prev) => !prev);
                             setIsCropMode(false);
                         }}
+                        themeColors={themeColors}
                     />
                 </View>
             </View>
 
             {isCropMode && (
-                <View style={[styles.cropPanel, { top: insets.top + 82 }]}>
+                <View
+                    style={[
+                        styles.cropPanel,
+                        {
+                            top: insets.top + 82,
+                            backgroundColor: themeColors.barBackground,
+                            borderColor: themeColors.border,
+                        },
+                    ]}
+                >
                     <CropPill
-                        label={tr("original", "Original")}
-                        active={cropRatio === "original"}
-                        onPress={() => setCropRatio("original")}
+                        label={tr("freeCrop", "Free")}
+                        active={cropRatio === "free"}
+                        onPress={() => setCropRatio("free")}
+                        themeColors={themeColors}
                     />
                     <CropPill
                         label="1:1"
                         active={cropRatio === "square"}
                         onPress={() => setCropRatio("square")}
+                        themeColors={themeColors}
                     />
                     <CropPill
                         label="4:5"
                         active={cropRatio === "portrait"}
                         onPress={() => setCropRatio("portrait")}
+                        themeColors={themeColors}
                     />
                     <CropPill
                         label="16:9"
                         active={cropRatio === "landscape"}
                         onPress={() => setCropRatio("landscape")}
+                        themeColors={themeColors}
                     />
 
                     <TouchableOpacity
-                        style={styles.applyCropButton}
+                        style={[styles.applyCropButton, { backgroundColor: themeColors.primary }]}
                         activeOpacity={0.85}
                         onPress={handleCropApply}
                         disabled={isProcessing}
                     >
-                        <Text style={styles.applyCropText}>{tr("apply", "Apply")}</Text>
+                        <Text style={[styles.applyCropText, { color: themeColors.primaryText }]}>
+                            {tr("apply", "Apply")}
+                        </Text>
                     </TouchableOpacity>
                 </View>
             )}
 
             {isDrawMode && (
-                <View style={[styles.drawPanel, { top: insets.top + 82 }]}>
-                    {DRAW_COLORS.map((color) => (
+                <View
+                    style={[
+                        styles.drawPanel,
+                        {
+                            top: insets.top + 82,
+                            backgroundColor: themeColors.barBackground,
+                            borderColor: themeColors.border,
+                        },
+                    ]}
+                >
+                    {drawColors.map((color) => (
                         <TouchableOpacity
                             key={color}
                             style={[
                                 styles.colorDot,
-                                { backgroundColor: color },
+                                {
+                                    backgroundColor: color,
+                                    borderColor:
+                                        drawColor === color
+                                            ? themeColors.text
+                                            : themeColors.borderLight,
+                                },
                                 drawColor === color && styles.colorDotActive,
                             ]}
                             activeOpacity={0.85}
@@ -571,18 +823,24 @@ export default function ImageMediaEditor({
                     ))}
 
                     <TouchableOpacity
-                        style={styles.undoButton}
+                        style={[
+                            styles.undoButton,
+                            { backgroundColor: themeColors.buttonBackground },
+                            !paths.length && styles.disabled,
+                        ]}
                         activeOpacity={0.85}
                         onPress={handleUndoDraw}
                         disabled={!paths.length}
                     >
-                        <Ionicons name="arrow-undo" size={18} color="#ffffff" />
-                        <Text style={styles.undoText}>{tr("undo", "Undo")}</Text>
+                        <Ionicons name="arrow-undo" size={18} color={themeColors.text} />
+                        <Text style={[styles.undoText, { color: themeColors.text }]}>
+                            {tr("undo", "Undo")}
+                        </Text>
                     </TouchableOpacity>
                 </View>
             )}
 
-            <View style={styles.mediaArea}>
+            <View style={[styles.mediaArea, { backgroundColor: themeColors.background }]}>
                 <View
                     ref={imageCanvasRef}
                     collapsable={false}
@@ -591,6 +849,7 @@ export default function ImageMediaEditor({
                         {
                             width: displaySize.width,
                             height: displaySize.height,
+                            backgroundColor: themeColors.background,
                         },
                     ]}
                 >
@@ -608,45 +867,176 @@ export default function ImageMediaEditor({
                         {...panResponder.panHandlers}
                     />
 
-                    {isCropMode && <View style={styles.cropGuide} pointerEvents="none" />}
+                    {isCropMode && (
+                        <>
+                            <View
+                                style={[
+                                    styles.cropDimLayer,
+                                    { backgroundColor: themeColors.overlay },
+                                ]}
+                                pointerEvents="none"
+                            />
+                            <View
+                                pointerEvents="none"
+                                style={[
+                                    styles.cropGuide,
+                                    {
+                                        left: cropBox.x,
+                                        top: cropBox.y,
+                                        width: cropBox.width,
+                                        height: cropBox.height,
+                                        borderColor: themeColors.text,
+                                        backgroundColor: themeColors.primarySoft,
+                                    },
+                                ]}
+                            >
+                                <View
+                                    style={[
+                                        styles.cropGridVertical,
+                                        { backgroundColor: themeColors.borderLight },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropGridVertical,
+                                        {
+                                            left: "66.66%",
+                                            backgroundColor: themeColors.borderLight,
+                                        },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropGridHorizontal,
+                                        { backgroundColor: themeColors.borderLight },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropGridHorizontal,
+                                        {
+                                            top: "66.66%",
+                                            backgroundColor: themeColors.borderLight,
+                                        },
+                                    ]}
+                                />
+                            </View>
+
+                            <View
+                                style={[
+                                    styles.cropControlsPanel,
+                                    {
+                                        backgroundColor: themeColors.barBackground,
+                                        borderColor: themeColors.border,
+                                    },
+                                ]}
+                            >
+                                <Text
+                                    style={[
+                                        styles.cropControlsTitle,
+                                        { color: themeColors.text },
+                                    ]}
+                                >
+                                    {tr("adjustCropArea", "Adjust crop area")}
+                                </Text>
+
+                                <View style={styles.cropControlsRow}>
+                                    <CropControlButton
+                                        icon="arrow-up"
+                                        disabled={isProcessing}
+                                        themeColors={themeColors}
+                                        onPress={() => moveCropBox("up")}
+                                    />
+                                    <CropControlButton
+                                        icon="arrow-down"
+                                        disabled={isProcessing}
+                                        themeColors={themeColors}
+                                        onPress={() => moveCropBox("down")}
+                                    />
+                                    <CropControlButton
+                                        icon="arrow-back"
+                                        disabled={isProcessing}
+                                        themeColors={themeColors}
+                                        onPress={() => moveCropBox("left")}
+                                    />
+                                    <CropControlButton
+                                        icon="arrow-forward"
+                                        disabled={isProcessing}
+                                        themeColors={themeColors}
+                                        onPress={() => moveCropBox("right")}
+                                    />
+                                    <CropControlButton
+                                        label="−"
+                                        disabled={isProcessing}
+                                        themeColors={themeColors}
+                                        onPress={() => resizeCropBox(0.88)}
+                                    />
+                                    <CropControlButton
+                                        label="+"
+                                        disabled={isProcessing}
+                                        themeColors={themeColors}
+                                        onPress={() => resizeCropBox(1.12)}
+                                    />
+                                    <CropControlButton
+                                        icon="refresh"
+                                        disabled={isProcessing}
+                                        themeColors={themeColors}
+                                        onPress={resetCropBox}
+                                    />
+                                </View>
+                            </View>
+                        </>
+                    )}
                 </View>
             </View>
 
             <View
                 style={[
                     styles.bottomArea,
-                    { paddingBottom: Math.max(insets.bottom, 12) + 10 },
+                    {
+                        paddingBottom: Math.max(insets.bottom, 12) + 10,
+                        backgroundColor: themeColors.barBackground,
+                        borderTopColor: themeColors.border,
+                    },
                 ]}
             >
-                <View style={styles.captionInputRow}>
-                    <Ionicons
-                        name="image-outline"
-                        size={24}
-                        color="rgba(255, 255, 255, 0.86)"
-                    />
-                    <Text style={styles.captionText} numberOfLines={1}>
+                <View
+                    style={[
+                        styles.captionInputRow,
+                        {
+                            backgroundColor: themeColors.inputBackground,
+                            borderColor: themeColors.borderLight,
+                        },
+                    ]}
+                >
+                    <Ionicons name="image-outline" size={24} color={themeColors.muted} />
+                    <Text
+                        style={[styles.captionText, { color: themeColors.text }]}
+                        numberOfLines={1}
+                    >
                         {caption || mediaItem?.fileName || tr("addCaption", "Add a caption...")}
                     </Text>
                 </View>
 
                 <View style={styles.sendRow}>
-                    <View style={styles.recipientPill}>
-                        <Text style={styles.recipientText}>{tr("you", "You")}</Text>
+                    <View
+                        style={[
+                            styles.recipientPill,
+                            { backgroundColor: themeColors.buttonBackground },
+                        ]}
+                    >
+                        <Text style={[styles.recipientText, { color: themeColors.text }]}>
+                            {tr("you", "You")}
+                        </Text>
                     </View>
 
                     <TouchableOpacity
-                        style={[
-                            styles.sendCircle,
-                            {
-                                backgroundColor:
-                                    colors?.primary || colors?.green || "#22C55E",
-                            },
-                        ]}
+                        style={[styles.sendCircle, { backgroundColor: themeColors.primary }]}
                         activeOpacity={0.9}
                         disabled={isProcessing}
                         onPress={handleSend}
                     >
-                        <Ionicons name="send" size={25} color="#06111F" />
+                        <Ionicons name="send" size={25} color={themeColors.primaryText} />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -657,7 +1047,6 @@ export default function ImageMediaEditor({
 const styles = StyleSheet.create({
     root: {
         flex: 1,
-        backgroundColor: "#000000",
     },
 
     topBar: {
@@ -668,7 +1057,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "space-between",
         gap: 12,
-        backgroundColor: "rgba(0, 0, 0, 0.96)",
+        borderBottomWidth: 1,
         zIndex: 30,
     },
 
@@ -684,28 +1073,19 @@ const styles = StyleSheet.create({
         width: 46,
         height: 46,
         borderRadius: 23,
-        backgroundColor: "rgba(255, 255, 255, 0.13)",
         borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.10)",
         alignItems: "center",
         justifyContent: "center",
     },
 
-    toolButtonActive: {
-        backgroundColor: "rgba(34, 197, 94, 0.35)",
-        borderColor: "rgba(34, 197, 94, 0.82)",
-    },
-
-    toolButtonDisabled: {
+    disabled: {
         opacity: 0.45,
     },
 
     hdText: {
-        color: "#ffffff",
         fontSize: 12,
         fontWeight: "900",
         borderWidth: 1,
-        borderColor: "#ffffff",
         borderRadius: 4,
         paddingHorizontal: 4,
         paddingVertical: 1,
@@ -720,9 +1100,7 @@ const styles = StyleSheet.create({
         borderRadius: 23,
         paddingHorizontal: 8,
         paddingVertical: 6,
-        backgroundColor: "rgba(0, 0, 0, 0.74)",
         borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.12)",
         flexDirection: "row",
         alignItems: "center",
         gap: 7,
@@ -732,23 +1110,14 @@ const styles = StyleSheet.create({
         minHeight: 34,
         borderRadius: 17,
         paddingHorizontal: 10,
+        borderWidth: 1,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "rgba(255, 255, 255, 0.12)",
-    },
-
-    cropPillActive: {
-        backgroundColor: "#ffffff",
     },
 
     cropPillText: {
-        color: "#ffffff",
         fontSize: 12,
         fontWeight: "900",
-    },
-
-    cropPillTextActive: {
-        color: "#020B18",
     },
 
     applyCropButton: {
@@ -758,11 +1127,9 @@ const styles = StyleSheet.create({
         paddingHorizontal: 13,
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "#22C55E",
     },
 
     applyCropText: {
-        color: "#04111F",
         fontSize: 12,
         fontWeight: "900",
     },
@@ -776,9 +1143,7 @@ const styles = StyleSheet.create({
         borderRadius: 23,
         paddingHorizontal: 10,
         paddingVertical: 6,
-        backgroundColor: "rgba(0, 0, 0, 0.74)",
         borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.12)",
         flexDirection: "row",
         alignItems: "center",
         gap: 10,
@@ -789,11 +1154,9 @@ const styles = StyleSheet.create({
         height: 30,
         borderRadius: 15,
         borderWidth: 2,
-        borderColor: "rgba(255, 255, 255, 0.22)",
     },
 
     colorDotActive: {
-        borderColor: "#ffffff",
         transform: [{ scale: 1.12 }],
     },
 
@@ -802,7 +1165,6 @@ const styles = StyleSheet.create({
         minHeight: 34,
         borderRadius: 17,
         paddingHorizontal: 12,
-        backgroundColor: "rgba(255, 255, 255, 0.14)",
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
@@ -810,7 +1172,6 @@ const styles = StyleSheet.create({
     },
 
     undoText: {
-        color: "#ffffff",
         fontSize: 12,
         fontWeight: "900",
     },
@@ -818,13 +1179,11 @@ const styles = StyleSheet.create({
     mediaArea: {
         flex: 1,
         width: "100%",
-        backgroundColor: "#000000",
         alignItems: "center",
         justifyContent: "center",
     },
 
     imageCanvas: {
-        backgroundColor: "#000000",
         overflow: "hidden",
     },
 
@@ -850,19 +1209,77 @@ const styles = StyleSheet.create({
         transformOrigin: "left center",
     },
 
-    cropGuide: {
+    cropDimLayer: {
         ...StyleSheet.absoluteFillObject,
+    },
+
+    cropGuide: {
+        position: "absolute",
         borderWidth: 2,
-        borderColor: "rgba(255, 255, 255, 0.92)",
-        backgroundColor: "rgba(255, 255, 255, 0.04)",
+    },
+
+    cropGridVertical: {
+        position: "absolute",
+        top: 0,
+        bottom: 0,
+        left: "33.33%",
+        width: 1,
+    },
+
+    cropGridHorizontal: {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        top: "33.33%",
+        height: 1,
+    },
+
+    cropControlsPanel: {
+        position: "absolute",
+        left: 12,
+        right: 12,
+        bottom: 12,
+        borderRadius: 20,
+        borderWidth: 1,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        gap: 8,
+    },
+
+    cropControlsTitle: {
+        fontSize: 12,
+        fontWeight: "900",
+        textAlign: "center",
+    },
+
+    cropControlsRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        flexWrap: "wrap",
+        gap: 8,
+    },
+
+    cropControlButton: {
+        minWidth: 38,
+        height: 38,
+        borderRadius: 19,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 10,
+    },
+
+    cropControlButtonText: {
+        fontSize: 22,
+        lineHeight: 24,
+        fontWeight: "900",
     },
 
     bottomArea: {
         paddingHorizontal: 14,
         paddingTop: 12,
-        backgroundColor: "rgba(0, 0, 0, 0.96)",
         borderTopWidth: 1,
-        borderTopColor: "rgba(255, 255, 255, 0.08)",
         gap: 12,
     },
 
@@ -870,8 +1287,6 @@ const styles = StyleSheet.create({
         minHeight: 54,
         borderRadius: 27,
         borderWidth: 1,
-        borderColor: "rgba(255, 255, 255, 0.22)",
-        backgroundColor: "rgba(255, 255, 255, 0.05)",
         paddingHorizontal: 16,
         flexDirection: "row",
         alignItems: "center",
@@ -881,7 +1296,6 @@ const styles = StyleSheet.create({
     captionText: {
         flex: 1,
         minWidth: 0,
-        color: "#ffffff",
         fontSize: 16,
         fontWeight: "700",
     },
@@ -896,13 +1310,11 @@ const styles = StyleSheet.create({
         minHeight: 42,
         borderRadius: 15,
         paddingHorizontal: 18,
-        backgroundColor: "rgba(255, 255, 255, 0.14)",
         alignItems: "center",
         justifyContent: "center",
     },
 
     recipientText: {
-        color: "#ffffff",
         fontSize: 15,
         fontWeight: "800",
     },

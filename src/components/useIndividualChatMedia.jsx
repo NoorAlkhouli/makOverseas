@@ -5,7 +5,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as MediaLibrary from "expo-media-library";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { StatusBar } from "expo-status-bar";
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
     Alert,
     ActivityIndicator,
@@ -53,6 +53,14 @@ const formatVideoTime = (seconds = 0) => {
     const remainingSeconds = totalSeconds % 60;
 
     return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+};
+
+const formatRecordingTime = (seconds = 0) => {
+    const totalSeconds = Math.max(0, Math.floor(seconds || 0));
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainingSeconds = totalSeconds % 60;
+
+    return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
 };
 
 const getImagePickerMediaTypes = (kind = "all") => {
@@ -303,11 +311,28 @@ export function ChatCameraCaptureModal({
     const [flash, setFlash] = useState("off");
     const [isReady, setIsReady] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
+    const [recordingSeconds, setRecordingSeconds] = useState(0);
     const [isBusy, setIsBusy] = useState(false);
 
     const themeColors = getMediaThemeColors(colors);
     const hasCameraPermission = !!cameraPermission?.granted;
     const hasMicrophonePermission = !!microphonePermission?.granted;
+    const recordingTimeText = formatRecordingTime(recordingSeconds);
+
+    useEffect(() => {
+        if (!isRecording) {
+            setRecordingSeconds(0);
+            return undefined;
+        }
+
+        setRecordingSeconds(0);
+
+        const intervalId = setInterval(() => {
+            setRecordingSeconds((prev) => Math.min(prev + 1, 60));
+        }, 1000);
+
+        return () => clearInterval(intervalId);
+    }, [isRecording]);
 
     const ensurePermissions = async (nextMode = mode) => {
         let cameraGranted = hasCameraPermission;
@@ -359,6 +384,7 @@ export function ChatCameraCaptureModal({
             }
 
             try {
+                setRecordingSeconds(0);
                 setIsRecording(true);
                 const video = await cameraRef.current.recordAsync({
                     maxDuration: 60,
@@ -383,6 +409,7 @@ export function ChatCameraCaptureModal({
                 );
             } finally {
                 setIsRecording(false);
+                setRecordingSeconds(0);
             }
 
             return;
@@ -419,6 +446,7 @@ export function ChatCameraCaptureModal({
         if (isRecording) {
             cameraRef.current?.stopRecording();
             setIsRecording(false);
+            setRecordingSeconds(0);
             return;
         }
 
@@ -499,6 +527,7 @@ export function ChatCameraCaptureModal({
                     <View style={[styles.recordingPill, { top: insets.top + 18 }]}>
                         <View style={styles.recordingDot} />
                         <Text style={styles.recordingText}>{tr("recording", "Recording")}</Text>
+                        <Text style={styles.recordingTimerText}>{recordingTimeText}</Text>
                     </View>
                 )}
 
@@ -569,9 +598,11 @@ export function ChatCameraCaptureModal({
                     </View>
 
                     <Text style={styles.cameraHintText}>
-                        {mode === "video"
-                            ? tr("tapToRecord", "Tap to record video")
-                            : tr("tapToPhoto", "Tap to take photo")}
+                        {isRecording
+                            ? `${tr("tapToStopRecording", "Tap to stop recording")} • ${recordingTimeText}`
+                            : mode === "video"
+                                ? tr("tapToRecord", "Tap to record video")
+                                : tr("tapToPhoto", "Tap to take photo")}
                     </Text>
                 </View>
             </View>
@@ -1158,6 +1189,14 @@ const styles = StyleSheet.create({
         color: "#FFFFFF",
         fontSize: 12,
         fontWeight: "900",
+    },
+
+    recordingTimerText: {
+        color: "#FFFFFF",
+        fontSize: 13,
+        fontWeight: "900",
+        letterSpacing: 0.4,
+        fontVariant: ["tabular-nums"],
     },
 
     cameraBottomArea: {

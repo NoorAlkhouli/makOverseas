@@ -1,5 +1,8 @@
 import { StyleSheet } from "react-native";
 
+const RTL_TEXT_REGEX = /[\u0591-\u07FF\uFB1D-\uFDFD\uFE70-\uFEFC]/;
+const LTR_TEXT_REGEX = /[A-Za-z0-9]/;
+
 export const globalStyles = StyleSheet.create({
     rtlText: {
         textAlign: "right",
@@ -64,3 +67,23 @@ export const getInputLanguageStyle = (isArabic) =>
 
 export const getLanguageButtonPositionStyle = (isArabic) =>
     isArabic ? globalStyles.alignArabic : globalStyles.alignEnglish;
+
+export const getTextInputDirectionFromValue = (value = "", fallbackIsArabic = false) => {
+    const cleanValue = String(value || "").trim();
+
+    if (!cleanValue) {
+        return fallbackIsArabic ? globalStyles.rtlText : globalStyles.ltrText;
+    }
+
+    for (const char of cleanValue) {
+        if (RTL_TEXT_REGEX.test(char)) {
+            return globalStyles.rtlText;
+        }
+
+        if (LTR_TEXT_REGEX.test(char)) {
+            return globalStyles.ltrText;
+        }
+    }
+
+    return fallbackIsArabic ? globalStyles.rtlText : globalStyles.ltrText;
+};
