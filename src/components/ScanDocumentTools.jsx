@@ -1,400 +1,1129 @@
-// import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-// import DocumentScanner, {
-//     ResponseType,
-//     ScanDocumentResponseStatus,
-// } from "react-native-document-scanner-plugin";
-// import React, { useState } from "react";
-// import {
-//     Alert,
-//     Image,
-//     Modal,
-//     StyleSheet,
-//     Text,
-//     TouchableOpacity,
-//     View,
-// } from "react-native";
-// import { StatusBar } from "expo-status-bar";
-// import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import DocumentScanner, {
+    ResponseType,
+    ScanDocumentResponseStatus,
+} from "react-native-document-scanner-plugin";
+import * as FileSystem from "expo-file-system";
+import * as Print from "expo-print";
+import React, { useMemo, useState } from "react";
+import {
+    Alert,
+    FlatList,
+    Image,
+    Modal,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { StatusBar } from "expo-status-bar";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-// const normalizeScannedUri = (uri) => {
-//     if (!uri) return null;
+const MAX_SCAN_PAGES = 30;
 
-//     if (
-//         uri.startsWith("file://") ||
-//         uri.startsWith("content://") ||
-//         uri.startsWith("data:")
-//     ) {
-//         return uri;
-//     }
+const normalizeScannedUri = (uri) => {
+    if (!uri) return null;
 
-//     return `file://${uri}`;
-// };
+    if (
+        uri.startsWith("file://") ||
+        uri.startsWith("content://") ||
+        uri.startsWith("data:")
+    ) {
+        return uri;
+    }
 
-// const getScannedFileName = () => `scanned-document-${Date.now()}.jpg`;
+    return `file://${uri}`;
+};
 
-// const createScannedDocumentMessage = ({ uri, tr, width, height }) => {
-//     const fileName = getScannedFileName();
+const getScannedPdfFileName = () => `scanned-document-${Date.now()}.pdf`;
 
-//     return {
-//         id: `${Date.now()}-scanned-document`,
-//         side: "me",
-//         type: "document",
-//         uri,
-//         fileName,
-//         mimeType: "image/jpeg",
-//         width,
-//         height,
-//         size: undefined,
-//         time: tr("now", "Now"),
-//     };
-// };
+const getScannedPageFileName = (pageNumber = 1) =>
+    `scanned-document-page-${pageNumber}-${Date.now()}.jpg`;
 
-// export function useScanDocument({
-//     tr,
-//     addMessages,
-//     cancelVoiceRecordingIfActive,
-// }) {
-//     const [selectedScannedDocument, setSelectedScannedDocument] = useState(null);
-//     const [isScanningDocument, setIsScanningDocument] = useState(false);
+const getSafeActiveIndex = (activeIndex, pagesLength) => {
+    if (!pagesLength) return 0;
+    return Math.min(Math.max(activeIndex, 0), pagesLength - 1);
+};
 
-//     const scanDocumentWithCamera = async () => {
-//         if (isScanningDocument) return;
+const createScannedDocumentPage = ({ uri, tr, pageNumber, width, height }) => {
+    return {
+        id: `${Date.now()}-${pageNumber}-scanned-page`,
+        uri,
+        fileName: getScannedPageFileName(pageNumber),
+        mimeType: "image/jpeg",
+        width,
+        height,
+        size: undefined,
+        pageNumber,
+        time: tr("now", "Now"),
+    };
+};
 
-//         try {
-//             setSelectedScannedDocument(null);
-//             setIsScanningDocument(true);
+const createPreviewBundle = (pages = [], tr) => {
+    return {
+        id: `${Date.now()}-scanned-preview-bundle`,
+        side: "me",
+        type: "document",
+        uri: pages[0]?.uri,
+        fileName: getScannedPdfFileName(),
+        mimeType: "application/pdf",
+        pages,
+        pageCount: pages.length,
+        time: tr("now", "Now"),
+    };
+};
 
-//             if (typeof cancelVoiceRecordingIfActive === "function") {
-//                 await cancelVoiceRecordingIfActive();
-//             }
+const getPagesFromDocument = (documentItem) => {
+    if (!documentItem) return [];
+    if (Array.isArray(documentItem)) return documentItem;
+    if (Array.isArray(documentItem.pages)) return documentItem.pages;
+    if (Array.isArray(documentItem.attachments)) return documentItem.attachments;
+    return [documentItem];
+};
 
-//             const response = await DocumentScanner.scanDocument({
-//                 croppedImageQuality: 100,
-//                 maxNumDocuments: 1,
-//                 responseType: ResponseType.ImageFilePath,
-//             });
+const readImageAsBase64 = async (uri) => {
+    if (!uri) return null;
 
-//             if (
-//                 response?.status === ScanDocumentResponseStatus.Cancel ||
-//                 !response?.scannedImages?.length
-//             ) {
-//                 return;
-//             }
+    if (uri.startsWith("data:image")) {
+        return uri;
+    }
 
-//             const scannedUri = normalizeScannedUri(response.scannedImages[0]);
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+    });
 
-//             if (!scannedUri) {
-//                 Alert.alert(
-//                     tr("errorTitle", "Something went wrong"),
-//                     tr("scanDocumentError", "Could not scan the document. Please try again.")
-//                 );
-//                 return;
-//             }
+    return `data:image/jpeg;base64,${base64}`;
+};
 
-//             const scannedMessage = createScannedDocumentMessage({
-//                 uri: scannedUri,
-//                 tr,
-//             });
+const escapeHtml = (value = "") => {
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+};
 
-//             setSelectedScannedDocument(scannedMessage);
-//         } catch (error) {
-//             console.log("Document scanner error:", error);
+const buildPdfHtml = async (pages = []) => {
+    const htmlPages = [];
 
-//             Alert.alert(
-//                 tr("errorTitle", "Something went wrong"),
-//                 tr(
-//                     "scanDocumentNativeError",
-//                     "Document scanner is not available in Expo Go. Use a development build after installing react-native-document-scanner-plugin."
-//                 )
-//             );
-//         } finally {
-//             setIsScanningDocument(false);
-//         }
-//     };
+    for (let index = 0; index < pages.length; index += 1) {
+        const page = pages[index];
+        const imageSource = await readImageAsBase64(page.uri);
 
-//     const handleCancelScannedDocument = () => {
-//         setSelectedScannedDocument(null);
-//     };
+        if (!imageSource) continue;
 
-//     const handleConfirmSendScannedDocument = () => {
-//         if (!selectedScannedDocument) return;
+        htmlPages.push(`
+            <section class="page">
+                <img src="${imageSource}" alt="Scanned page ${index + 1}" />
+            </section>
+        `);
+    }
 
-//         addMessages([
-//             {
-//                 ...selectedScannedDocument,
-//                 id: selectedScannedDocument.id || `${Date.now()}-scanned-document`,
-//                 time: tr("now", "Now"),
-//             },
-//         ]);
+    return `
+        <!DOCTYPE html>
+        <html>
+            <head>
+                <meta charset="utf-8" />
+                <style>
+                    @page {
+                        size: A4;
+                        margin: 0;
+                    }
 
-//         setSelectedScannedDocument(null);
-//     };
+                    * {
+                        box-sizing: border-box;
+                    }
 
-//     return {
-//         selectedScannedDocument,
-//         isScanningDocument,
-//         scanDocumentWithCamera,
-//         handleCancelScannedDocument,
-//         handleConfirmSendScannedDocument,
-//     };
-// }
+                    html,
+                    body {
+                        margin: 0;
+                        padding: 0;
+                        width: 100%;
+                        min-height: 100%;
+                        background: #ffffff;
+                        font-family: Arial, sans-serif;
+                    }
 
-// export function ScannedDocumentConfirmModal({
-//     visible,
-//     documentItem,
-//     colors,
-//     tr,
-//     onCancel,
-//     onRetake,
-//     onSend,
-// }) {
-//     const insets = useSafeAreaInsets();
+                    .page {
+                        width: 100%;
+                        height: 100vh;
+                        page-break-after: always;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        background: #ffffff;
+                        overflow: hidden;
+                    }
 
-//     if (!visible || !documentItem) {
-//         return null;
-//     }
+                    .page:last-child {
+                        page-break-after: auto;
+                    }
 
-//     return (
-//         <Modal
-//             visible={visible}
-//             transparent
-//             animationType="fade"
-//             onRequestClose={onCancel}
-//             statusBarTranslucent
-//             navigationBarTranslucent
-//             presentationStyle="overFullScreen"
-//         >
-//             <View style={styles.modalRoot}>
-//                 <StatusBar style="light" translucent backgroundColor="transparent" />
+                    img {
+                        width: 100%;
+                        height: 100%;
+                        object-fit: contain;
+                        display: block;
+                    }
+                </style>
+            </head>
 
-//                 <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-//                     <TouchableOpacity
-//                         style={styles.roundButton}
-//                         activeOpacity={0.85}
-//                         onPress={onCancel}
-//                     >
-//                         <Ionicons name="close" size={27} color="#ffffff" />
-//                     </TouchableOpacity>
+            <body>
+                ${htmlPages.join("")}
+            </body>
+        </html>
+    `;
+};
 
-//                     <View style={styles.headerTitleWrapper}>
-//                         <Text style={styles.headerTitle}>
-//                             {tr("scannedDocument", "Scanned Document")}
-//                         </Text>
-//                         <Text style={styles.headerSubtitle} numberOfLines={1}>
-//                             {documentItem.fileName}
-//                         </Text>
-//                     </View>
+const createPdfFromScannedPages = async (pages = []) => {
+    if (!pages.length) return null;
 
-//                     <TouchableOpacity
-//                         style={styles.retakeButton}
-//                         activeOpacity={0.85}
-//                         onPress={onRetake}
-//                     >
-//                         <Ionicons name="camera-outline" size={18} color="#ffffff" />
-//                         <Text style={styles.retakeText}>
-//                             {tr("retake", "Retake")}
-//                         </Text>
-//                     </TouchableOpacity>
-//                 </View>
+    const html = await buildPdfHtml(pages);
 
-//                 <View style={styles.previewArea}>
-//                     <View style={styles.paperFrame}>
-//                         <Image
-//                             source={{ uri: documentItem.uri }}
-//                             style={styles.scannedImage}
-//                             resizeMode="contain"
-//                         />
-//                     </View>
-//                 </View>
+    const pdfResult = await Print.printToFileAsync({
+        html,
+        base64: false,
+    });
 
-//                 <View
-//                     style={[
-//                         styles.bottomBar,
-//                         { paddingBottom: Math.max(insets.bottom, 12) + 10 },
-//                     ]}
-//                 >
-//                     <View style={styles.filePill}>
-//                         <MaterialCommunityIcons
-//                             name="file-image"
-//                             size={25}
-//                             color="rgba(255, 255, 255, 0.9)"
-//                         />
+    if (!pdfResult?.uri) return null;
 
-//                         <View style={styles.fileTextWrapper}>
-//                             <Text style={styles.fileName} numberOfLines={1}>
-//                                 {documentItem.fileName}
-//                             </Text>
-//                             <Text style={styles.fileMeta}>
-//                                 {tr("scanReadyToSend", "Ready to send as document")}
-//                             </Text>
-//                         </View>
-//                     </View>
+    const pdfFileName = getScannedPdfFileName();
+    const targetUri = `${FileSystem.cacheDirectory}${pdfFileName}`;
 
-//                     <TouchableOpacity
-//                         style={[
-//                             styles.sendButton,
-//                             { backgroundColor: colors?.primary || "#22C55E" },
-//                         ]}
-//                         activeOpacity={0.9}
-//                         onPress={onSend}
-//                     >
-//                         <Ionicons name="send" size={24} color="#06111F" />
-//                         <Text style={styles.sendText}>
-//                             {tr("send", "Send")}
-//                         </Text>
-//                     </TouchableOpacity>
-//                 </View>
-//             </View>
-//         </Modal>
-//     );
-// }
+    try {
+        await FileSystem.copyAsync({
+            from: pdfResult.uri,
+            to: targetUri,
+        });
 
-// const styles = StyleSheet.create({
-//     modalRoot: {
-//         flex: 1,
-//         backgroundColor: "#000000",
-//     },
+        return {
+            uri: targetUri,
+            fileName: pdfFileName,
+            mimeType: "application/pdf",
+        };
+    } catch (error) {
+        console.log("PDF copy error:", error);
 
-//     header: {
-//         minHeight: 90,
-//         paddingHorizontal: 14,
-//         paddingBottom: 12,
-//         flexDirection: "row",
-//         alignItems: "center",
-//         gap: 12,
-//         backgroundColor: "rgba(0, 0, 0, 0.96)",
-//         zIndex: 10,
-//     },
+        return {
+            uri: pdfResult.uri,
+            fileName: pdfFileName,
+            mimeType: "application/pdf",
+        };
+    }
+};
 
-//     roundButton: {
-//         width: 46,
-//         height: 46,
-//         borderRadius: 23,
-//         backgroundColor: "rgba(255, 255, 255, 0.13)",
-//         borderWidth: 1,
-//         borderColor: "rgba(255, 255, 255, 0.10)",
-//         alignItems: "center",
-//         justifyContent: "center",
-//         flexShrink: 0,
-//     },
+const createScannedPdfMessage = ({ pdfFile, pages, tr }) => {
+    return {
+        id: `${Date.now()}-scanned-pdf-document`,
+        side: "me",
+        type: "document",
 
-//     headerTitleWrapper: {
-//         flex: 1,
-//         minWidth: 0,
-//         alignItems: "center",
-//     },
+        // هذا هو الملف الحقيقي الذي سينفتح كـ PDF متعدد الصفحات
+        uri: pdfFile.uri,
+        fileName: pdfFile.fileName,
+        mimeType: "application/pdf",
 
-//     headerTitle: {
-//         color: "#ffffff",
-//         fontSize: 16,
-//         fontWeight: "900",
-//     },
+        // نخلي الصفحات للمعاينة داخل التطبيق فقط، مش كملفات منفصلة
+        pages,
+        pageCount: pages.length,
+        previewUri: pages[0]?.uri,
 
-//     headerSubtitle: {
-//         marginTop: 2,
-//         color: "rgba(255, 255, 255, 0.62)",
-//         fontSize: 11,
-//         fontWeight: "700",
-//     },
+        size: undefined,
+        time: tr("now", "Now"),
+    };
+};
 
-//     retakeButton: {
-//         minWidth: 94,
-//         height: 46,
-//         borderRadius: 23,
-//         paddingHorizontal: 13,
-//         backgroundColor: "rgba(255, 255, 255, 0.13)",
-//         borderWidth: 1,
-//         borderColor: "rgba(255, 255, 255, 0.10)",
-//         flexDirection: "row",
-//         alignItems: "center",
-//         justifyContent: "center",
-//         gap: 6,
-//         flexShrink: 0,
-//     },
+export function useScanDocument({
+    tr,
+    addMessages,
+    cancelVoiceRecordingIfActive,
+}) {
+    const [selectedScannedDocument, setSelectedScannedDocument] = useState(null);
+    const [activeScannedPageIndex, setActiveScannedPageIndex] = useState(0);
+    const [isScanningDocument, setIsScanningDocument] = useState(false);
+    const [isCreatingScannedPdf, setIsCreatingScannedPdf] = useState(false);
 
-//     retakeText: {
-//         color: "#ffffff",
-//         fontSize: 13,
-//         fontWeight: "900",
-//     },
+    const selectedScannedDocuments = selectedScannedDocument?.pages || [];
 
-//     previewArea: {
-//         flex: 1,
-//         backgroundColor: "#0B0F14",
-//         alignItems: "center",
-//         justifyContent: "center",
-//         paddingHorizontal: 14,
-//         paddingVertical: 14,
-//     },
+    const runDocumentScanner = async ({ maxNumDocuments = MAX_SCAN_PAGES } = {}) => {
+        const response = await DocumentScanner.scanDocument({
+            croppedImageQuality: 100,
+            maxNumDocuments,
+            responseType: ResponseType.ImageFilePath,
+        });
 
-//     paperFrame: {
-//         width: "100%",
-//         height: "100%",
-//         borderRadius: 12,
-//         backgroundColor: "#111827",
-//         borderWidth: 1,
-//         borderColor: "rgba(255, 255, 255, 0.10)",
-//         overflow: "hidden",
-//         alignItems: "center",
-//         justifyContent: "center",
-//     },
+        if (
+            response?.status === ScanDocumentResponseStatus.Cancel ||
+            !response?.scannedImages?.length
+        ) {
+            return [];
+        }
 
-//     scannedImage: {
-//         width: "100%",
-//         height: "100%",
-//     },
+        return response.scannedImages
+            .map((uri) => normalizeScannedUri(uri))
+            .filter(Boolean);
+    };
 
-//     bottomBar: {
-//         paddingHorizontal: 14,
-//         paddingTop: 12,
-//         backgroundColor: "rgba(0, 0, 0, 0.96)",
-//         borderTopWidth: 1,
-//         borderTopColor: "rgba(255, 255, 255, 0.08)",
-//         gap: 12,
-//     },
+    const scanDocumentWithCamera = async () => {
+        if (isScanningDocument || isCreatingScannedPdf) return;
 
-//     filePill: {
-//         minHeight: 58,
-//         borderRadius: 18,
-//         paddingHorizontal: 14,
-//         backgroundColor: "rgba(255, 255, 255, 0.08)",
-//         borderWidth: 1,
-//         borderColor: "rgba(255, 255, 255, 0.13)",
-//         flexDirection: "row",
-//         alignItems: "center",
-//         gap: 10,
-//     },
+        try {
+            setSelectedScannedDocument(null);
+            setActiveScannedPageIndex(0);
+            setIsScanningDocument(true);
 
-//     fileTextWrapper: {
-//         flex: 1,
-//         minWidth: 0,
-//     },
+            if (typeof cancelVoiceRecordingIfActive === "function") {
+                await cancelVoiceRecordingIfActive();
+            }
 
-//     fileName: {
-//         color: "#ffffff",
-//         fontSize: 14,
-//         fontWeight: "900",
-//     },
+            const scannedUris = await runDocumentScanner({
+                maxNumDocuments: MAX_SCAN_PAGES,
+            });
 
-//     fileMeta: {
-//         marginTop: 3,
-//         color: "rgba(255, 255, 255, 0.62)",
-//         fontSize: 12,
-//         fontWeight: "700",
-//     },
+            if (!scannedUris.length) return;
 
-//     sendButton: {
-//         height: 52,
-//         borderRadius: 18,
-//         flexDirection: "row",
-//         alignItems: "center",
-//         justifyContent: "center",
-//         gap: 8,
-//     },
+            const scannedPages = scannedUris.map((uri, index) =>
+                createScannedDocumentPage({
+                    uri,
+                    tr,
+                    pageNumber: index + 1,
+                })
+            );
 
-//     sendText: {
-//         color: "#06111F",
-//         fontSize: 15,
-//         fontWeight: "900",
-//     },
-// });
+            setSelectedScannedDocument(createPreviewBundle(scannedPages, tr));
+            setActiveScannedPageIndex(0);
+        } catch (error) {
+            console.log("Document scanner error:", error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                tr(
+                    "scanDocumentNativeError",
+                    "Document scanner is not available in Expo Go. Use a development build after installing react-native-document-scanner-plugin."
+                )
+            );
+        } finally {
+            setIsScanningDocument(false);
+        }
+    };
+
+    const handleAddScannedPages = async () => {
+        if (isScanningDocument || isCreatingScannedPdf) return;
+
+        try {
+            setIsScanningDocument(true);
+
+            if (typeof cancelVoiceRecordingIfActive === "function") {
+                await cancelVoiceRecordingIfActive();
+            }
+
+            const scannedUris = await runDocumentScanner({
+                maxNumDocuments: MAX_SCAN_PAGES,
+            });
+
+            if (!scannedUris.length) return;
+
+            setSelectedScannedDocument((currentDocument) => {
+                const currentPages = currentDocument?.pages || [];
+
+                const newPages = scannedUris.map((uri, index) =>
+                    createScannedDocumentPage({
+                        uri,
+                        tr,
+                        pageNumber: currentPages.length + index + 1,
+                    })
+                );
+
+                const mergedPages = [...currentPages, ...newPages];
+
+                setActiveScannedPageIndex(currentPages.length);
+
+                return createPreviewBundle(mergedPages, tr);
+            });
+        } catch (error) {
+            console.log("Document scanner add pages error:", error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                tr(
+                    "scanDocumentError",
+                    "Could not scan the document. Please try again."
+                )
+            );
+        } finally {
+            setIsScanningDocument(false);
+        }
+    };
+
+    const handleRetakeScannedPage = async (pageIndex = activeScannedPageIndex) => {
+        if (
+            isScanningDocument ||
+            isCreatingScannedPdf ||
+            !selectedScannedDocuments.length
+        ) {
+            return;
+        }
+
+        try {
+            setIsScanningDocument(true);
+
+            if (typeof cancelVoiceRecordingIfActive === "function") {
+                await cancelVoiceRecordingIfActive();
+            }
+
+            const scannedUris = await runDocumentScanner({
+                maxNumDocuments: 1,
+            });
+
+            const firstScannedUri = scannedUris[0];
+
+            if (!firstScannedUri) return;
+
+            setSelectedScannedDocument((currentDocument) => {
+                const currentPages = currentDocument?.pages || [];
+                const safeIndex = getSafeActiveIndex(
+                    pageIndex,
+                    currentPages.length
+                );
+
+                if (!currentPages.length) return currentDocument;
+
+                const updatedPages = currentPages.map((page, index) => {
+                    if (index !== safeIndex) return page;
+
+                    return {
+                        ...page,
+                        uri: firstScannedUri,
+                        time: tr("now", "Now"),
+                    };
+                });
+
+                setActiveScannedPageIndex(safeIndex);
+
+                return createPreviewBundle(updatedPages, tr);
+            });
+        } catch (error) {
+            console.log("Document scanner retake page error:", error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                tr(
+                    "scanDocumentError",
+                    "Could not scan the document. Please try again."
+                )
+            );
+        } finally {
+            setIsScanningDocument(false);
+        }
+    };
+
+    const handleDeleteScannedPage = (pageIndex = activeScannedPageIndex) => {
+        if (isScanningDocument || isCreatingScannedPdf) return;
+
+        setSelectedScannedDocument((currentDocument) => {
+            const currentPages = currentDocument?.pages || [];
+            const safeIndex = getSafeActiveIndex(pageIndex, currentPages.length);
+
+            const nextPages = currentPages
+                .filter((_, index) => index !== safeIndex)
+                .map((page, index) => ({
+                    ...page,
+                    pageNumber: index + 1,
+                }));
+
+            if (!nextPages.length) {
+                setActiveScannedPageIndex(0);
+                return null;
+            }
+
+            setActiveScannedPageIndex(
+                getSafeActiveIndex(safeIndex, nextPages.length)
+            );
+
+            return createPreviewBundle(nextPages, tr);
+        });
+    };
+
+    const handleCancelScannedDocument = () => {
+        if (isCreatingScannedPdf) return;
+
+        setSelectedScannedDocument(null);
+        setActiveScannedPageIndex(0);
+    };
+
+    const handleConfirmSendScannedDocument = async () => {
+        const pagesToSend = selectedScannedDocument?.pages || [];
+
+        if (!pagesToSend.length || isCreatingScannedPdf) return;
+
+        try {
+            setIsCreatingScannedPdf(true);
+
+            const pdfFile = await createPdfFromScannedPages(pagesToSend);
+
+            if (!pdfFile?.uri) {
+                Alert.alert(
+                    tr("errorTitle", "Something went wrong"),
+                    tr(
+                        "createScannedPdfError",
+                        "Could not create the scanned PDF file. Please try again."
+                    )
+                );
+                return;
+            }
+
+            const scannedPdfMessage = createScannedPdfMessage({
+                pdfFile,
+                pages: pagesToSend,
+                tr,
+            });
+
+            // هون صار الإرسال ملف واحد PDF، مش صورة صورة
+            addMessages([scannedPdfMessage]);
+
+            setSelectedScannedDocument(null);
+            setActiveScannedPageIndex(0);
+        } catch (error) {
+            console.log("Create scanned PDF error:", error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                tr(
+                    "createScannedPdfError",
+                    "Could not create the scanned PDF file. Please try again."
+                )
+            );
+        } finally {
+            setIsCreatingScannedPdf(false);
+        }
+    };
+
+    return {
+        selectedScannedDocument,
+        selectedScannedDocuments,
+        activeScannedPageIndex,
+        isScanningDocument,
+        isCreatingScannedPdf,
+
+        scanDocumentWithCamera,
+        handleAddScannedPages,
+        handleRetakeScannedPage,
+        handleDeleteScannedPage,
+        handleCancelScannedDocument,
+        handleConfirmSendScannedDocument,
+
+        setActiveScannedPageIndex,
+    };
+}
+
+export function ScannedDocumentConfirmModal({
+    visible,
+    documentItem,
+    documents,
+    activeIndex = 0,
+    colors,
+    tr,
+    isLoading = false,
+    onCancel,
+    onAddPage,
+    onDeletePage,
+    onRetake,
+    onChangePage,
+    onSend,
+}) {
+    const insets = useSafeAreaInsets();
+
+    const pages = useMemo(() => {
+        if (Array.isArray(documents) && documents.length) return documents;
+        return getPagesFromDocument(documentItem);
+    }, [documentItem, documents]);
+
+    const safeActiveIndex = getSafeActiveIndex(activeIndex, pages.length);
+    const activePage = pages[safeActiveIndex];
+
+    const theme = useMemo(
+        () => ({
+            background: colors?.background || "#020b18",
+            card: colors?.cardStrong || colors?.card || "rgba(5, 18, 38, 0.97)",
+            cardSoft: colors?.cardSoft || "rgba(5, 18, 38, 0.68)",
+            textPrimary: colors?.textPrimary || "#ffffff",
+            textSecondary: colors?.textSecondary || "#d8deea",
+            textMuted: colors?.textMuted || "#a9b1c2",
+            primary: colors?.primary || "#51a234",
+            primarySoft: colors?.primarySoft || "rgba(81, 162, 52, 0.12)",
+            blue: colors?.blue || "#39BDFF",
+            border: colors?.border || "rgba(205, 222, 255, 0.35)",
+            borderSoft: colors?.borderSoft || "rgba(205, 222, 255, 0.24)",
+            buttonSoft: colors?.buttonSoft || "rgba(255, 255, 255, 0.08)",
+            darkText: colors?.darkText || "#03101f",
+            danger: colors?.danger || "#E3342F",
+            success: colors?.success || "#2FAE24",
+        }),
+        [colors]
+    );
+
+    if (!visible || !activePage) {
+        return null;
+    }
+
+    const handleRetakeCurrentPage = () => {
+        if (isLoading) return;
+
+        if (typeof onRetake === "function") {
+            onRetake(safeActiveIndex);
+        }
+    };
+
+    const handleDeleteCurrentPage = () => {
+        if (isLoading || typeof onDeletePage !== "function") return;
+
+        Alert.alert(
+            tr("deleteScannedPageTitle", "Delete this page?"),
+            tr("deleteScannedPageMessage", "Only this scanned page will be removed."),
+            [
+                {
+                    text: tr("cancel", "Cancel"),
+                    style: "cancel",
+                },
+                {
+                    text: tr("delete", "Delete"),
+                    style: "destructive",
+                    onPress: () => onDeletePage(safeActiveIndex),
+                },
+            ]
+        );
+    };
+
+    const renderThumbnail = ({ item, index }) => {
+        const isSelected = index === safeActiveIndex;
+
+        return (
+            <TouchableOpacity
+                style={[
+                    styles.thumbnailButton,
+                    {
+                        backgroundColor: theme.buttonSoft,
+                        borderColor: theme.borderSoft,
+                    },
+                    isSelected && {
+                        borderColor: theme.primary,
+                        backgroundColor: theme.primarySoft,
+                    },
+                ]}
+                activeOpacity={0.85}
+                disabled={isLoading}
+                onPress={() => {
+                    if (typeof onChangePage === "function") {
+                        onChangePage(index);
+                    }
+                }}
+            >
+                <Image
+                    source={{ uri: item.uri }}
+                    style={styles.thumbnailImage}
+                    resizeMode="cover"
+                />
+
+                <View style={styles.thumbnailBadge}>
+                    <Text style={styles.thumbnailBadgeText}>{index + 1}</Text>
+                </View>
+            </TouchableOpacity>
+        );
+    };
+
+    return (
+        <Modal
+            visible={visible}
+            transparent
+            animationType="fade"
+            onRequestClose={onCancel}
+            statusBarTranslucent
+            navigationBarTranslucent
+            presentationStyle="overFullScreen"
+        >
+            <View style={[styles.modalRoot, { backgroundColor: theme.background }]}>
+                <StatusBar style="light" translucent backgroundColor="transparent" />
+
+                <View
+                    style={[
+                        styles.header,
+                        {
+                            paddingTop: insets.top + 8,
+                            backgroundColor: theme.card,
+                            borderBottomColor: theme.borderSoft,
+                        },
+                    ]}
+                >
+                    <TouchableOpacity
+                        style={[
+                            styles.roundButton,
+                            {
+                                backgroundColor: theme.buttonSoft,
+                                borderColor: theme.borderSoft,
+                                opacity: isLoading ? 0.5 : 1,
+                            },
+                        ]}
+                        activeOpacity={0.85}
+                        disabled={isLoading}
+                        onPress={onCancel}
+                    >
+                        <Ionicons
+                            name="close"
+                            size={27}
+                            color={theme.textPrimary}
+                        />
+                    </TouchableOpacity>
+
+                    <View style={styles.headerTitleWrapper}>
+                        <Text
+                            style={[
+                                styles.headerTitle,
+                                { color: theme.textPrimary },
+                            ]}
+                        >
+                            {tr("scannedDocument", "Scanned Document")}
+                        </Text>
+
+                        <Text
+                            style={[
+                                styles.headerSubtitle,
+                                { color: theme.textMuted },
+                            ]}
+                            numberOfLines={1}
+                        >
+                            {tr("scanPagesCount", "Page")} {safeActiveIndex + 1} /{" "}
+                            {pages.length}
+                        </Text>
+                    </View>
+
+                    <TouchableOpacity
+                        style={[
+                            styles.headerActionButton,
+                            {
+                                backgroundColor: theme.buttonSoft,
+                                borderColor: theme.borderSoft,
+                                opacity: isLoading ? 0.5 : 1,
+                            },
+                        ]}
+                        activeOpacity={0.85}
+                        disabled={isLoading}
+                        onPress={onAddPage}
+                    >
+                        <Ionicons
+                            name="add"
+                            size={20}
+                            color={theme.textPrimary}
+                        />
+                        <Text
+                            style={[
+                                styles.headerActionText,
+                                { color: theme.textPrimary },
+                            ]}
+                        >
+                            {tr("addPage", "Add")}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+
+                <View
+                    style={[
+                        styles.previewArea,
+                        { backgroundColor: theme.background },
+                    ]}
+                >
+                    <View
+                        style={[
+                            styles.paperFrame,
+                            {
+                                backgroundColor: theme.cardSoft,
+                                borderColor: theme.borderSoft,
+                            },
+                        ]}
+                    >
+                        <Image
+                            source={{ uri: activePage.uri }}
+                            style={styles.scannedImage}
+                            resizeMode="contain"
+                        />
+                    </View>
+                </View>
+
+                <View
+                    style={[
+                        styles.pageActionsRow,
+                        {
+                            backgroundColor: theme.card,
+                            borderTopColor: theme.borderSoft,
+                        },
+                    ]}
+                >
+                    <TouchableOpacity
+                        style={[
+                            styles.pageActionButton,
+                            {
+                                backgroundColor: theme.buttonSoft,
+                                borderColor: theme.borderSoft,
+                                opacity: isLoading ? 0.5 : 1,
+                            },
+                        ]}
+                        activeOpacity={0.85}
+                        disabled={isLoading}
+                        onPress={handleRetakeCurrentPage}
+                    >
+                        <Ionicons
+                            name="camera-outline"
+                            size={19}
+                            color={theme.textPrimary}
+                        />
+                        <Text
+                            style={[
+                                styles.pageActionText,
+                                { color: theme.textPrimary },
+                            ]}
+                        >
+                            {tr("retakePage", "Retake page")}
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[
+                            styles.pageActionButton,
+                            {
+                                backgroundColor: "rgba(227, 52, 47, 0.16)",
+                                borderColor: "rgba(227, 52, 47, 0.35)",
+                                opacity: isLoading ? 0.5 : 1,
+                            },
+                        ]}
+                        activeOpacity={0.85}
+                        disabled={isLoading}
+                        onPress={handleDeleteCurrentPage}
+                    >
+                        <Ionicons
+                            name="trash-outline"
+                            size={19}
+                            color={theme.textPrimary}
+                        />
+                        <Text
+                            style={[
+                                styles.pageActionText,
+                                { color: theme.textPrimary },
+                            ]}
+                        >
+                            {tr("deletePage", "Delete page")}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+
+                {pages.length > 1 ? (
+                    <View
+                        style={[
+                            styles.thumbnailsWrapper,
+                            {
+                                backgroundColor: theme.card,
+                                borderTopColor: theme.borderSoft,
+                            },
+                        ]}
+                    >
+                        <FlatList
+                            horizontal
+                            data={pages}
+                            renderItem={renderThumbnail}
+                            keyExtractor={(item, index) =>
+                                item.id || `${item.uri}-${index}`
+                            }
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.thumbnailsContent}
+                        />
+                    </View>
+                ) : null}
+
+                <View
+                    style={[
+                        styles.bottomBar,
+                        {
+                            paddingBottom: Math.max(insets.bottom, 12) + 10,
+                            backgroundColor: theme.card,
+                            borderTopColor: theme.borderSoft,
+                        },
+                    ]}
+                >
+                    <View
+                        style={[
+                            styles.filePill,
+                            {
+                                backgroundColor: theme.buttonSoft,
+                                borderColor: theme.borderSoft,
+                            },
+                        ]}
+                    >
+                        <MaterialCommunityIcons
+                            name="file-pdf-box"
+                            size={28}
+                            color={theme.textPrimary}
+                        />
+
+                        <View style={styles.fileTextWrapper}>
+                            <Text
+                                style={[
+                                    styles.fileName,
+                                    { color: theme.textPrimary },
+                                ]}
+                                numberOfLines={1}
+                            >
+                                {escapeHtml(
+                                    tr("scannedPdfDocument", "Scanned PDF Document")
+                                )}
+                            </Text>
+
+                            <Text
+                                style={[
+                                    styles.fileMeta,
+                                    { color: theme.textMuted },
+                                ]}
+                            >
+                                {pages.length === 1
+                                    ? tr(
+                                        "oneScanReadyToSend",
+                                        "1 page will be sent as one PDF file"
+                                    )
+                                    : `${pages.length} ${tr(
+                                        "scanPagesReadyToSend",
+                                        "pages will be sent as one PDF file"
+                                    )}`}
+                            </Text>
+                        </View>
+                    </View>
+
+                    <TouchableOpacity
+                        style={[
+                            styles.sendButton,
+                            {
+                                backgroundColor: theme.primary,
+                                opacity: isLoading ? 0.72 : 1,
+                            },
+                        ]}
+                        activeOpacity={0.9}
+                        disabled={isLoading}
+                        onPress={onSend}
+                    >
+                        <Ionicons
+                            name={isLoading ? "hourglass-outline" : "send"}
+                            size={24}
+                            color={theme.darkText}
+                        />
+                        <Text
+                            style={[
+                                styles.sendText,
+                                { color: theme.darkText },
+                            ]}
+                        >
+                            {isLoading
+                                ? tr("creatingPdf", "Creating PDF...")
+                                : tr("sendAsPdf", "Send as one PDF")}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+        </Modal>
+    );
+}
+
+const styles = StyleSheet.create({
+    modalRoot: {
+        flex: 1,
+    },
+
+    header: {
+        minHeight: 90,
+        paddingHorizontal: 14,
+        paddingBottom: 12,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        borderBottomWidth: 1,
+        zIndex: 10,
+    },
+
+    roundButton: {
+        width: 46,
+        height: 46,
+        borderRadius: 23,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+    },
+
+    headerTitleWrapper: {
+        flex: 1,
+        minWidth: 0,
+        alignItems: "center",
+    },
+
+    headerTitle: {
+        fontSize: 16,
+        fontWeight: "900",
+    },
+
+    headerSubtitle: {
+        marginTop: 2,
+        fontSize: 11,
+        fontWeight: "700",
+    },
+
+    headerActionButton: {
+        minWidth: 82,
+        height: 46,
+        borderRadius: 23,
+        paddingHorizontal: 12,
+        borderWidth: 1,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 5,
+        flexShrink: 0,
+    },
+
+    headerActionText: {
+        fontSize: 13,
+        fontWeight: "900",
+    },
+
+    previewArea: {
+        flex: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 14,
+        paddingVertical: 14,
+    },
+
+    paperFrame: {
+        width: "100%",
+        height: "100%",
+        borderRadius: 12,
+        borderWidth: 1,
+        overflow: "hidden",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+
+    scannedImage: {
+        width: "100%",
+        height: "100%",
+    },
+
+    pageActionsRow: {
+        paddingHorizontal: 14,
+        paddingTop: 10,
+        paddingBottom: 10,
+        borderTopWidth: 1,
+        flexDirection: "row",
+        gap: 10,
+    },
+
+    pageActionButton: {
+        flex: 1,
+        minHeight: 44,
+        borderRadius: 15,
+        borderWidth: 1,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 7,
+    },
+
+    pageActionText: {
+        fontSize: 12,
+        fontWeight: "900",
+    },
+
+    thumbnailsWrapper: {
+        borderTopWidth: 1,
+    },
+
+    thumbnailsContent: {
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+    },
+
+    thumbnailButton: {
+        width: 62,
+        height: 78,
+        borderRadius: 12,
+        borderWidth: 2,
+        overflow: "hidden",
+        marginRight: 10,
+    },
+
+    thumbnailImage: {
+        width: "100%",
+        height: "100%",
+    },
+
+    thumbnailBadge: {
+        position: "absolute",
+        left: 5,
+        bottom: 5,
+        minWidth: 22,
+        height: 22,
+        borderRadius: 11,
+        paddingHorizontal: 6,
+        backgroundColor: "rgba(0, 0, 0, 0.72)",
+        alignItems: "center",
+        justifyContent: "center",
+    },
+
+    thumbnailBadgeText: {
+        color: "#ffffff",
+        fontSize: 11,
+        fontWeight: "900",
+    },
+
+    bottomBar: {
+        paddingHorizontal: 14,
+        paddingTop: 12,
+        borderTopWidth: 1,
+        gap: 12,
+    },
+
+    filePill: {
+        minHeight: 58,
+        borderRadius: 18,
+        paddingHorizontal: 14,
+        borderWidth: 1,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+    },
+
+    fileTextWrapper: {
+        flex: 1,
+        minWidth: 0,
+    },
+
+    fileName: {
+        fontSize: 14,
+        fontWeight: "900",
+    },
+
+    fileMeta: {
+        marginTop: 3,
+        fontSize: 12,
+        fontWeight: "700",
+    },
+
+    sendButton: {
+        height: 52,
+        borderRadius: 18,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+    },
+
+    sendText: {
+        fontSize: 15,
+        fontWeight: "900",
+    },
+});

@@ -233,5 +233,79 @@
         "validUntil": "Valid Until",
         "includes": "Includes",
         "viewFullQuote": "View Full Quote"
+    },
+    "channels": {
+        "navTitle": "Channels",
+        "title": "Channels",
+        "subtitle": "Follow the latest shipping and clearance updates",
+        "searchPlaceholder": "Search channels...",
+        "followingTitle": "Following",
+        "notFollowingTitle": "Not Following",
+        "followingButton": "Following",
+        "followButton": "Follow",
+        "emptyTitle": "No channels found",
+        "emptyText": "Try searching with another channel name.",
+        "items": {
+            "shippingUpdates": {
+                "title": "Shipping Updates",
+                "description": "Real-time updates on shipments, ports, and logistics.",
+                "followers": "2.4K followers"
+            },
+            "customsNews": {
+                "title": "Customs News",
+                "description": "Latest customs regulations and clearance information.",
+                "followers": "1.8K followers"
+            },
+            "rateAlerts": {
+                "title": "Rate Alerts",
+                "description": "Get the latest freight rates and currency updates.",
+                "followers": "1.3K followers"
+            },
+            "makAnnouncements": {
+                "title": "MAK Announcements",
+                "description": "Official company news and important announcements.",
+                "followers": "890 followers"
+            },
+            "portUpdates": {
+                "title": "Port Updates",
+                "description": "Port congestion, terminal updates, and advisories.",
+                "followers": "870 followers"
+            },
+            "airFreight": {
+                "title": "Air Freight Updates",
+                "description": "Air cargo news, capacity and flight updates.",
+                "followers": "760 followers"
+            }
+        }
+    },
+    "channelChat": {
+        "today": "Today",
+        "readOnly": "Only channel admins can send messages",
+        "menuFollow": "Follow channel",
+        "menuUnfollow": "Unfollow channel",
+        "messages": {
+            "shippingUpdates": {
+                "first": "Due to severe weather conditions in the Red Sea, several shipments may experience delays.\n\nWe apologize for the inconvenience.",
+                "second": "Port congestion at Jebel Ali Port may cause longer processing times.\n\nPlease plan your shipments accordingly.",
+                "third": "Weekend operations schedule has changed. Check the updated timing for gate in/out and documentation."
+            },
+            "customsNews": {
+                "first": "New customs documentation requirements may apply for selected shipments. Please make sure all invoices and packing lists are updated.",
+                "second": "Clearance processing times may vary depending on document readiness and inspection requirements."
+            },
+            "rateAlerts": {
+                "first": "Freight rates may change this week due to capacity pressure and route availability.",
+                "second": "Currency updates are being monitored. Please confirm rates before approving urgent shipments."
+            },
+            "makAnnouncements": {
+                "first": "MAK Overseas will continue improving client communication through channels, notifications, and direct support."
+            },
+            "portUpdates": {
+                "first": "Some terminals may experience temporary congestion. Please follow the latest updates before planning delivery."
+            },
+            "airFreight": {
+                "first": "Air freight capacity is limited on selected routes. Early booking is recommended for urgent cargo."
+            }
+        }
     }
 }

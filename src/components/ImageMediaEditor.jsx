@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const DRAW_WIDTH = 7;
 const MIN_CROP_SIZE = 72;
+const CROP_TOUCH_SIZE = 34;
 
 const getImageUri = (mediaItem, image) => {
     if (image?.uri) return image.uri;
@@ -152,6 +153,212 @@ const clampCropBox = (box, displaySize) => {
     };
 };
 
+const getCropGestureType = (touchX, touchY, box) => {
+    const left = box.x;
+    const right = box.x + box.width;
+    const top = box.y;
+    const bottom = box.y + box.height;
+    const tolerance = CROP_TOUCH_SIZE;
+
+    const isNearLeft = Math.abs(touchX - left) <= tolerance;
+    const isNearRight = Math.abs(touchX - right) <= tolerance;
+    const isNearTop = Math.abs(touchY - top) <= tolerance;
+    const isNearBottom = Math.abs(touchY - bottom) <= tolerance;
+    const isInside =
+        touchX >= left && touchX <= right && touchY >= top && touchY <= bottom;
+
+    if (!isInside && !isNearLeft && !isNearRight && !isNearTop && !isNearBottom) {
+        return null;
+    }
+
+    if (isNearLeft && isNearTop) return "topLeft";
+    if (isNearRight && isNearTop) return "topRight";
+    if (isNearLeft && isNearBottom) return "bottomLeft";
+    if (isNearRight && isNearBottom) return "bottomRight";
+    if (isNearLeft) return "left";
+    if (isNearRight) return "right";
+    if (isNearTop) return "top";
+    if (isNearBottom) return "bottom";
+    if (isInside) return "move";
+
+    return null;
+};
+
+const updateFreeCropBox = (startBox, gestureType, dx, dy, displaySize) => {
+    const safeWidth = Math.max(1, displaySize.width);
+    const safeHeight = Math.max(1, displaySize.height);
+    const minWidth = Math.min(MIN_CROP_SIZE, safeWidth);
+    const minHeight = Math.min(MIN_CROP_SIZE, safeHeight);
+
+    if (gestureType === "move") {
+        return clampCropBox(
+            {
+                ...startBox,
+                x: startBox.x + dx,
+                y: startBox.y + dy,
+            },
+            displaySize
+        );
+    }
+
+    let left = startBox.x;
+    let right = startBox.x + startBox.width;
+    let top = startBox.y;
+    let bottom = startBox.y + startBox.height;
+
+    if (gestureType.includes("Left") || gestureType === "left") {
+        left = clamp(startBox.x + dx, 0, right - minWidth);
+    }
+
+    if (gestureType.includes("Right") || gestureType === "right") {
+        right = clamp(startBox.x + startBox.width + dx, left + minWidth, safeWidth);
+    }
+
+    if (gestureType.includes("top") || gestureType === "top") {
+        top = clamp(startBox.y + dy, 0, bottom - minHeight);
+    }
+
+    if (gestureType.includes("bottom") || gestureType === "bottom") {
+        bottom = clamp(startBox.y + startBox.height + dy, top + minHeight, safeHeight);
+    }
+
+    return clampCropBox(
+        {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        },
+        displaySize
+    );
+};
+
+const updateLockedCropBox = (startBox, gestureType, dx, dy, displaySize, aspectRatio) => {
+    if (gestureType === "move" || !aspectRatio) {
+        return updateFreeCropBox(startBox, gestureType, dx, dy, displaySize);
+    }
+
+    const safeWidth = Math.max(1, displaySize.width);
+    const safeHeight = Math.max(1, displaySize.height);
+    const minWidth = Math.min(MIN_CROP_SIZE, safeWidth);
+    const minHeight = Math.min(MIN_CROP_SIZE, safeHeight);
+    const startRight = startBox.x + startBox.width;
+    const startBottom = startBox.y + startBox.height;
+    const centerX = startBox.x + startBox.width / 2;
+    const centerY = startBox.y + startBox.height / 2;
+
+    let desiredWidth = startBox.width;
+    let desiredHeight = startBox.height;
+
+    if (gestureType.includes("Left") || gestureType === "left") {
+        desiredWidth = startBox.width - dx;
+    } else if (gestureType.includes("Right") || gestureType === "right") {
+        desiredWidth = startBox.width + dx;
+    }
+
+    if (gestureType.includes("top") || gestureType === "top") {
+        desiredHeight = startBox.height - dy;
+    } else if (gestureType.includes("bottom") || gestureType === "bottom") {
+        desiredHeight = startBox.height + dy;
+    }
+
+    const widthFromHeight = desiredHeight * aspectRatio;
+    const heightFromWidth = desiredWidth / aspectRatio;
+
+    if (Math.abs(widthFromHeight - startBox.width) > Math.abs(desiredWidth - startBox.width)) {
+        desiredWidth = widthFromHeight;
+    } else {
+        desiredHeight = heightFromWidth;
+    }
+
+    let nextWidth = clamp(desiredWidth, minWidth, safeWidth);
+    let nextHeight = nextWidth / aspectRatio;
+
+    if (nextHeight > safeHeight) {
+        nextHeight = safeHeight;
+        nextWidth = nextHeight * aspectRatio;
+    }
+
+    nextWidth = clamp(nextWidth, minWidth, safeWidth);
+    nextHeight = clamp(nextHeight, minHeight, safeHeight);
+
+    let x = centerX - nextWidth / 2;
+    let y = centerY - nextHeight / 2;
+
+    if (gestureType.includes("Left") || gestureType === "left") {
+        x = startRight - nextWidth;
+    } else if (gestureType.includes("Right") || gestureType === "right") {
+        x = startBox.x;
+    }
+
+    if (gestureType.includes("top") || gestureType === "top") {
+        y = startBottom - nextHeight;
+    } else if (gestureType.includes("bottom") || gestureType === "bottom") {
+        y = startBox.y;
+    }
+
+    return clampCropBox({ x, y, width: nextWidth, height: nextHeight }, displaySize);
+};
+
+function CropDimOverlay({ cropBox, displaySize, overlayColor }) {
+    const bottomTop = cropBox.y + cropBox.height;
+    const rightLeft = cropBox.x + cropBox.width;
+
+    return (
+        <View pointerEvents="none" style={styles.cropDimContainer}>
+            <View
+                style={[
+                    styles.cropDimPiece,
+                    {
+                        left: 0,
+                        top: 0,
+                        width: displaySize.width,
+                        height: cropBox.y,
+                        backgroundColor: overlayColor,
+                    },
+                ]}
+            />
+            <View
+                style={[
+                    styles.cropDimPiece,
+                    {
+                        left: 0,
+                        top: bottomTop,
+                        width: displaySize.width,
+                        height: Math.max(0, displaySize.height - bottomTop),
+                        backgroundColor: overlayColor,
+                    },
+                ]}
+            />
+            <View
+                style={[
+                    styles.cropDimPiece,
+                    {
+                        left: 0,
+                        top: cropBox.y,
+                        width: cropBox.x,
+                        height: cropBox.height,
+                        backgroundColor: overlayColor,
+                    },
+                ]}
+            />
+            <View
+                style={[
+                    styles.cropDimPiece,
+                    {
+                        left: rightLeft,
+                        top: cropBox.y,
+                        width: Math.max(0, displaySize.width - rightLeft),
+                        height: cropBox.height,
+                        backgroundColor: overlayColor,
+                    },
+                ]}
+            />
+        </View>
+    );
+}
+
+
 function ToolButton({ icon, active, disabled, onPress, children, themeColors }) {
     return (
         <TouchableOpacity
@@ -195,32 +402,6 @@ function CropPill({ label, active, onPress, themeColors }) {
             >
                 {label}
             </Text>
-        </TouchableOpacity>
-    );
-}
-
-function CropControlButton({ icon, label, onPress, disabled, themeColors }) {
-    return (
-        <TouchableOpacity
-            style={[
-                styles.cropControlButton,
-                {
-                    backgroundColor: themeColors.buttonBackground,
-                    borderColor: themeColors.borderLight,
-                },
-                disabled && styles.disabled,
-            ]}
-            activeOpacity={0.85}
-            disabled={disabled}
-            onPress={onPress}
-        >
-            {icon ? (
-                <Ionicons name={icon} size={20} color={themeColors.text} />
-            ) : (
-                <Text style={[styles.cropControlButtonText, { color: themeColors.text }]}>
-                    {label}
-                </Text>
-            )}
         </TouchableOpacity>
     );
 }
@@ -317,6 +498,8 @@ export default function ImageMediaEditor({
 
     const originalUri = getImageUri(mediaItem, image);
     const imageCanvasRef = useRef(null);
+    const cropGestureTypeRef = useRef(null);
+    const cropStartBoxRef = useRef(null);
 
     const [currentUri, setCurrentUri] = useState(originalUri);
     const [imageSize, setImageSize] = useState({
@@ -400,63 +583,67 @@ export default function ImageMediaEditor({
         setCropBox(createCenteredCropBox(displaySize, cropRatio));
     }, [cropRatio, displaySize.height, displaySize.width, isCropMode]);
 
-    const moveCropBox = (direction) => {
-        const step = Math.max(
-            8,
-            Math.round(Math.min(displaySize.width, displaySize.height) * 0.06)
-        );
-        const offsetMap = {
-            up: { x: 0, y: -step },
-            down: { x: 0, y: step },
-            left: { x: -step, y: 0 },
-            right: { x: step, y: 0 },
-        };
-        const offset = offsetMap[direction] || { x: 0, y: 0 };
-
-        setCropBox((prev) =>
-            clampCropBox(
-                {
-                    ...prev,
-                    x: prev.x + offset.x,
-                    y: prev.y + offset.y,
-                },
-                displaySize
-            )
-        );
-    };
-
-    const resizeCropBox = (scale) => {
-        setCropBox((prev) => {
-            const aspectRatio =
-                getCropAspectRatio(cropRatio) || prev.width / Math.max(prev.height, 1);
-            const centerX = prev.x + prev.width / 2;
-            const centerY = prev.y + prev.height / 2;
-            let nextWidth = clamp(prev.width * scale, MIN_CROP_SIZE, displaySize.width);
-            let nextHeight = nextWidth / aspectRatio;
-
-            if (nextHeight > displaySize.height) {
-                nextHeight = displaySize.height;
-                nextWidth = nextHeight * aspectRatio;
-            }
-
-            nextWidth = clamp(nextWidth, Math.min(MIN_CROP_SIZE, displaySize.width), displaySize.width);
-            nextHeight = clamp(nextHeight, Math.min(MIN_CROP_SIZE, displaySize.height), displaySize.height);
-
-            return clampCropBox(
-                {
-                    x: centerX - nextWidth / 2,
-                    y: centerY - nextHeight / 2,
-                    width: nextWidth,
-                    height: nextHeight,
-                },
-                displaySize
-            );
-        });
-    };
-
     const resetCropBox = () => {
         setCropBox(createCenteredCropBox(displaySize, cropRatio));
     };
+
+    const cropPanResponder = useMemo(
+        () =>
+            PanResponder.create({
+                onStartShouldSetPanResponder: (event) => {
+                    if (!isCropMode || isProcessing) return false;
+
+                    const { locationX, locationY } = event.nativeEvent;
+                    return Boolean(getCropGestureType(locationX, locationY, cropBox));
+                },
+                onMoveShouldSetPanResponder: (event) => {
+                    if (!isCropMode || isProcessing) return false;
+
+                    const { locationX, locationY } = event.nativeEvent;
+                    return Boolean(getCropGestureType(locationX, locationY, cropBox));
+                },
+                onPanResponderGrant: (event) => {
+                    const { locationX, locationY } = event.nativeEvent;
+                    cropGestureTypeRef.current = getCropGestureType(locationX, locationY, cropBox);
+                    cropStartBoxRef.current = cropBox;
+                },
+                onPanResponderMove: (_, gestureState) => {
+                    const gestureType = cropGestureTypeRef.current;
+                    const startBox = cropStartBoxRef.current;
+
+                    if (!gestureType || !startBox) return;
+
+                    const aspectRatio = getCropAspectRatio(cropRatio);
+                    const nextBox = aspectRatio
+                        ? updateLockedCropBox(
+                            startBox,
+                            gestureType,
+                            gestureState.dx,
+                            gestureState.dy,
+                            displaySize,
+                            aspectRatio
+                        )
+                        : updateFreeCropBox(
+                            startBox,
+                            gestureType,
+                            gestureState.dx,
+                            gestureState.dy,
+                            displaySize
+                        );
+
+                    setCropBox(nextBox);
+                },
+                onPanResponderRelease: () => {
+                    cropGestureTypeRef.current = null;
+                    cropStartBoxRef.current = null;
+                },
+                onPanResponderTerminate: () => {
+                    cropGestureTypeRef.current = null;
+                    cropStartBoxRef.current = null;
+                },
+            }),
+        [cropBox, cropRatio, displaySize, isCropMode, isProcessing]
+    );
 
     const panResponder = useMemo(
         () =>
@@ -780,6 +967,24 @@ export default function ImageMediaEditor({
                     />
 
                     <TouchableOpacity
+                        style={[
+                            styles.resetCropButton,
+                            {
+                                backgroundColor: themeColors.buttonBackground,
+                                borderColor: themeColors.borderLight,
+                            },
+                        ]}
+                        activeOpacity={0.85}
+                        onPress={resetCropBox}
+                        disabled={isProcessing}
+                    >
+                        <Ionicons name="refresh" size={16} color={themeColors.text} />
+                        <Text style={[styles.resetCropText, { color: themeColors.text }]}>
+                            {tr("reset", "Reset")}
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
                         style={[styles.applyCropButton, { backgroundColor: themeColors.primary }]}
                         activeOpacity={0.85}
                         onPress={handleCropApply}
@@ -869,13 +1074,18 @@ export default function ImageMediaEditor({
 
                     {isCropMode && (
                         <>
-                            <View
-                                style={[
-                                    styles.cropDimLayer,
-                                    { backgroundColor: themeColors.overlay },
-                                ]}
-                                pointerEvents="none"
+                            <CropDimOverlay
+                                cropBox={cropBox}
+                                displaySize={displaySize}
+                                overlayColor={themeColors.overlay}
                             />
+
+                            <View
+                                style={styles.cropTouchLayer}
+                                pointerEvents="auto"
+                                {...cropPanResponder.panHandlers}
+                            />
+
                             <View
                                 pointerEvents="none"
                                 style={[
@@ -886,7 +1096,6 @@ export default function ImageMediaEditor({
                                         width: cropBox.width,
                                         height: cropBox.height,
                                         borderColor: themeColors.text,
-                                        backgroundColor: themeColors.primarySoft,
                                     },
                                 ]}
                             >
@@ -920,70 +1129,63 @@ export default function ImageMediaEditor({
                                         },
                                     ]}
                                 />
-                            </View>
 
-                            <View
-                                style={[
-                                    styles.cropControlsPanel,
-                                    {
-                                        backgroundColor: themeColors.barBackground,
-                                        borderColor: themeColors.border,
-                                    },
-                                ]}
-                            >
-                                <Text
+                                <View
                                     style={[
-                                        styles.cropControlsTitle,
-                                        { color: themeColors.text },
+                                        styles.cropCornerHandle,
+                                        styles.cropCornerTopLeft,
+                                        { borderColor: themeColors.text },
                                     ]}
-                                >
-                                    {tr("adjustCropArea", "Adjust crop area")}
-                                </Text>
-
-                                <View style={styles.cropControlsRow}>
-                                    <CropControlButton
-                                        icon="arrow-up"
-                                        disabled={isProcessing}
-                                        themeColors={themeColors}
-                                        onPress={() => moveCropBox("up")}
-                                    />
-                                    <CropControlButton
-                                        icon="arrow-down"
-                                        disabled={isProcessing}
-                                        themeColors={themeColors}
-                                        onPress={() => moveCropBox("down")}
-                                    />
-                                    <CropControlButton
-                                        icon="arrow-back"
-                                        disabled={isProcessing}
-                                        themeColors={themeColors}
-                                        onPress={() => moveCropBox("left")}
-                                    />
-                                    <CropControlButton
-                                        icon="arrow-forward"
-                                        disabled={isProcessing}
-                                        themeColors={themeColors}
-                                        onPress={() => moveCropBox("right")}
-                                    />
-                                    <CropControlButton
-                                        label="−"
-                                        disabled={isProcessing}
-                                        themeColors={themeColors}
-                                        onPress={() => resizeCropBox(0.88)}
-                                    />
-                                    <CropControlButton
-                                        label="+"
-                                        disabled={isProcessing}
-                                        themeColors={themeColors}
-                                        onPress={() => resizeCropBox(1.12)}
-                                    />
-                                    <CropControlButton
-                                        icon="refresh"
-                                        disabled={isProcessing}
-                                        themeColors={themeColors}
-                                        onPress={resetCropBox}
-                                    />
-                                </View>
+                                />
+                                <View
+                                    style={[
+                                        styles.cropCornerHandle,
+                                        styles.cropCornerTopRight,
+                                        { borderColor: themeColors.text },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropCornerHandle,
+                                        styles.cropCornerBottomLeft,
+                                        { borderColor: themeColors.text },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropCornerHandle,
+                                        styles.cropCornerBottomRight,
+                                        { borderColor: themeColors.text },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropSideHandle,
+                                        styles.cropSideTop,
+                                        { backgroundColor: themeColors.text },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropSideHandle,
+                                        styles.cropSideBottom,
+                                        { backgroundColor: themeColors.text },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropSideHandleVertical,
+                                        styles.cropSideLeft,
+                                        { backgroundColor: themeColors.text },
+                                    ]}
+                                />
+                                <View
+                                    style={[
+                                        styles.cropSideHandleVertical,
+                                        styles.cropSideRight,
+                                        { backgroundColor: themeColors.text },
+                                    ]}
+                                />
                             </View>
                         </>
                     )}
@@ -1103,6 +1305,7 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         flexDirection: "row",
         alignItems: "center",
+        flexWrap: "wrap",
         gap: 7,
     },
 
@@ -1120,8 +1323,24 @@ const styles = StyleSheet.create({
         fontWeight: "900",
     },
 
-    applyCropButton: {
+    resetCropButton: {
         marginLeft: "auto",
+        minHeight: 34,
+        borderRadius: 17,
+        paddingHorizontal: 11,
+        borderWidth: 1,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 5,
+    },
+
+    resetCropText: {
+        fontSize: 12,
+        fontWeight: "900",
+    },
+
+    applyCropButton: {
         minHeight: 34,
         borderRadius: 17,
         paddingHorizontal: 13,
@@ -1209,13 +1428,23 @@ const styles = StyleSheet.create({
         transformOrigin: "left center",
     },
 
-    cropDimLayer: {
+    cropDimContainer: {
         ...StyleSheet.absoluteFillObject,
+    },
+
+    cropDimPiece: {
+        position: "absolute",
+    },
+
+    cropTouchLayer: {
+        ...StyleSheet.absoluteFillObject,
+        zIndex: 4,
     },
 
     cropGuide: {
         position: "absolute",
         borderWidth: 2,
+        zIndex: 5,
     },
 
     cropGridVertical: {
@@ -1234,46 +1463,73 @@ const styles = StyleSheet.create({
         height: 1,
     },
 
-    cropControlsPanel: {
+    cropCornerHandle: {
         position: "absolute",
-        left: 12,
-        right: 12,
-        bottom: 12,
-        borderRadius: 20,
-        borderWidth: 1,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        gap: 8,
+        width: 24,
+        height: 24,
+        borderWidth: 3,
     },
 
-    cropControlsTitle: {
-        fontSize: 12,
-        fontWeight: "900",
-        textAlign: "center",
+    cropCornerTopLeft: {
+        left: -3,
+        top: -3,
+        borderRightWidth: 0,
+        borderBottomWidth: 0,
     },
 
-    cropControlsRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        flexWrap: "wrap",
-        gap: 8,
+    cropCornerTopRight: {
+        right: -3,
+        top: -3,
+        borderLeftWidth: 0,
+        borderBottomWidth: 0,
     },
 
-    cropControlButton: {
-        minWidth: 38,
-        height: 38,
-        borderRadius: 19,
-        borderWidth: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        paddingHorizontal: 10,
+    cropCornerBottomLeft: {
+        left: -3,
+        bottom: -3,
+        borderRightWidth: 0,
+        borderTopWidth: 0,
     },
 
-    cropControlButtonText: {
-        fontSize: 22,
-        lineHeight: 24,
-        fontWeight: "900",
+    cropCornerBottomRight: {
+        right: -3,
+        bottom: -3,
+        borderLeftWidth: 0,
+        borderTopWidth: 0,
+    },
+
+    cropSideHandle: {
+        position: "absolute",
+        width: 42,
+        height: 4,
+        borderRadius: 2,
+        left: "50%",
+        marginLeft: -21,
+    },
+
+    cropSideTop: {
+        top: -3,
+    },
+
+    cropSideBottom: {
+        bottom: -3,
+    },
+
+    cropSideHandleVertical: {
+        position: "absolute",
+        width: 4,
+        height: 42,
+        borderRadius: 2,
+        top: "50%",
+        marginTop: -21,
+    },
+
+    cropSideLeft: {
+        left: -3,
+    },
+
+    cropSideRight: {
+        right: -3,
     },
 
     bottomArea: {

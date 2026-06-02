@@ -55,11 +55,16 @@ const getStoredLanguage = async () => {
     return language || 'en';
 };
 
+/**
+ * هون منحوّل أخطاء السيرفر لرسائل مفهومة للمستخدم
+ * مهم: ما منرمي رسالة تقنية للمستخدم
+ */
 const buildUserMessage = ({ status, code, serverMessage, isNetworkError }) => {
     if (isNetworkError) {
         return 'تأكدي من اتصال الإنترنت وحاولي مرة ثانية.';
     }
 
+    // Auth / Activation errors
     if (code === 'INVALID_CODE') {
         return 'كود التفعيل غير صحيح.';
     }
@@ -80,6 +85,20 @@ const buildUserMessage = ({ status, code, serverMessage, isNetworkError }) => {
         return 'هذا الحساب مرتبط بجهاز آخر. يرجى طلب تفعيل جديد.';
     }
 
+    // Channel errors
+    if (code === 'ALREADY_FOLLOWING') {
+        return 'أنتِ تتابعين هذه القناة مسبقاً.';
+    }
+
+    if (code === 'NOT_FOLLOWING') {
+        return 'أنتِ لا تتابعين هذه القناة حالياً.';
+    }
+
+    if (code === 'CHANNEL_ADMIN_FOLLOW') {
+        return 'أدمن القناة لا يمكنه متابعة قناته.';
+    }
+
+    // General HTTP errors
     if (status === 401) {
         return 'انتهت الجلسة. يرجى تسجيل الدخول مرة ثانية.';
     }
@@ -103,6 +122,14 @@ const buildUserMessage = ({ status, code, serverMessage, isNetworkError }) => {
     return serverMessage || 'حدث خطأ غير متوقع. يرجى المحاولة مرة ثانية.';
 };
 
+/**
+ * توحيد شكل الخطأ
+ * بدل ما كل شاشة تفتش داخل error.response.data
+ * كل شاشة بتقرأ:
+ * error.code
+ * error.userMessage
+ * error.status
+ */
 const normalizeApiError = error => {
     if (!error.response) {
         return new ApiError({
@@ -153,16 +180,27 @@ api.interceptors.request.use(
         config.headers.Accept = 'application/json';
         config.headers['Accept-Language'] = language;
 
+        /**
+         * إذا الطلب FormData يعني upload image/file
+         * غير هيك JSON عادي
+         */
         if (!(config.data instanceof FormData)) {
             config.headers['Content-Type'] = 'application/json';
         } else {
             config.headers['Content-Type'] = 'multipart/form-data';
         }
 
+        /**
+         * التوكن مطلوب للطلبات المحمية
+         */
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
 
+        /**
+         * مهم جداً بمشروع MAK
+         * السيرفر يحتاج يعرف الجهاز الحالي
+         */
         if (deviceId) {
             config.headers['X-Device-ID'] = deviceId;
         }
@@ -177,6 +215,11 @@ api.interceptors.response.use(
     error => Promise.reject(normalizeApiError(error)),
 );
 
+/**
+ * هذه function ترجع response.data مباشرة
+ * يعني الخدمات لا لازم تعمل response.data.data
+ * بل تقرأ من response.data حسب شكل Response API
+ */
 const request = async config => {
     try {
         const response = await api.request(config);
@@ -267,3 +310,6 @@ export const apiClient = {
 };
 
 export { API_BASE_URL, STORAGE_KEYS, ApiError };
+
+// ضفت default export حتى تقدري تستورديه بسهولة بأي service
+export default apiClient;

@@ -7,6 +7,7 @@ import AccessCode from '../screens/auth/AccessCode';
 
 import MainTabsNavigator from './MainTabsNavigator';
 import IndividualChat from '../screens/main/IndividualChat';
+import ChannelChat from "../components/ChannelChat";
 
 const Stack = createNativeStackNavigator();
 
@@ -23,7 +24,15 @@ export default function AuthNavigator() {
             <Stack.Screen name="AccessCode" component={AccessCode} />
 
             <Stack.Screen name="MainTabsNavigator" component={MainTabsNavigator} />
-            <Stack.Screen name="IndividualChat" component={IndividualChat} />
+            <Stack.Screen
+                name="IndividualChat"
+                component={IndividualChat}
+            />
+
+            <Stack.Screen
+                name="ChannelChat"
+                component={ChannelChat}
+            />
         </Stack.Navigator>
     );
 }

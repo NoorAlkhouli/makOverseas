@@ -21,6 +21,49 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ImageMediaEditor from "./ImageMediaEditor";
 
+const VIDEO_DEBUG_ENABLED = true;
+
+const videoDebugLog = (label, payload = {}) => {
+    if (!VIDEO_DEBUG_ENABLED) return;
+
+    try {
+        console.log(`[VIDEO_DEBUG] ${label}`, payload);
+    } catch (error) {
+        console.log(`[VIDEO_DEBUG] ${label}`, error);
+    }
+};
+
+const getUriInfo = (uri = "") => {
+    const cleanUri = String(uri || "");
+
+    if (!cleanUri) {
+        return {
+            hasUri: false,
+            scheme: null,
+            extension: null,
+            preview: null,
+        };
+    }
+
+    const schemeMatch = cleanUri.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+    const cleanPath = cleanUri.split("?")[0];
+    const dotIndex = cleanPath.lastIndexOf(".");
+    const extension =
+        dotIndex !== -1 && dotIndex < cleanPath.length - 1
+            ? cleanPath.slice(dotIndex + 1).toLowerCase()
+            : null;
+
+    return {
+        hasUri: true,
+        scheme: schemeMatch?.[1] || null,
+        extension,
+        preview:
+            cleanUri.length > 140
+                ? `${cleanUri.slice(0, 90)}...${cleanUri.slice(-35)}`
+                : cleanUri,
+    };
+};
+
 const getAssetMediaType = (asset) => {
     const assetType = String(asset?.type || "").toLowerCase();
     const mimeType = String(asset?.mimeType || "").toLowerCase();
@@ -41,10 +84,25 @@ const getMediaUri = (mediaItem) => {
 };
 
 const getVideoSource = (mediaItem, video) => {
-    if (video) return video;
-    if (mediaItem?.video?.uri) return { uri: mediaItem.video.uri };
-    if (mediaItem?.uri) return { uri: mediaItem.uri };
-    return null;
+    const resolvedSource = video
+        ? video
+        : mediaItem?.video?.uri
+            ? { uri: mediaItem.video.uri }
+            : mediaItem?.uri
+                ? { uri: mediaItem.uri }
+                : null;
+
+    videoDebugLog("getVideoSource", {
+        mediaItemType: mediaItem?.type,
+        hasExternalVideoProp: !!video,
+        externalVideoUriInfo: getUriInfo(video?.uri),
+        mediaItemUriInfo: getUriInfo(mediaItem?.uri),
+        mediaItemVideoUriInfo: getUriInfo(mediaItem?.video?.uri),
+        resolvedSourceUriInfo: getUriInfo(resolvedSource?.uri),
+        mediaItemKeys: mediaItem ? Object.keys(mediaItem) : [],
+    });
+
+    return resolvedSource;
 };
 
 const formatVideoTime = (seconds = 0) => {
@@ -90,6 +148,28 @@ const getVideoQuality = () => {
     );
 };
 
+const getCompatibleVideoExportPreset = () =>
+    ImagePicker.VideoExportPreset?.H264_1280x720 ||
+    ImagePicker.VideoExportPreset?.MediumQuality ||
+    ImagePicker.VideoExportPreset?.HighestQuality ||
+    undefined;
+
+const getCameraVideoRecordingOptions = () => {
+    const options = {
+        maxDuration: 60,
+        quality: "720p",
+        mute: false,
+    };
+
+    if (Platform.OS === "ios") {
+        options.codec = "avc1";
+        options.videoBitrate = 6_000_000;
+    }
+
+    return options;
+};
+
+
 const createMediaMessageFromAsset = ({ asset, tr, source }) => {
     const mediaType = getAssetMediaType(asset);
     const isVideo = mediaType === "video";
@@ -101,6 +181,19 @@ const createMediaMessageFromAsset = ({ asset, tr, source }) => {
             ? `camera-photo-${Date.now()}.jpg`
             : `image-${Date.now()}.jpg`;
     const fileName = asset.fileName || fallbackName;
+
+    videoDebugLog("createMediaMessageFromAsset", {
+        source,
+        detectedMediaType: mediaType,
+        isVideo,
+        fileName,
+        mimeType: asset.mimeType,
+        width: asset.width,
+        height: asset.height,
+        duration: asset.duration,
+        uriInfo: getUriInfo(asset.uri),
+        rawAssetKeys: Object.keys(asset || {}),
+    });
 
     return {
         id: `${Date.now()}-${isVideo ? "video" : source === "camera" ? "camera" : "image"}`,
@@ -156,6 +249,24 @@ export function useIndividualChatMedia({
                 mediaTypes: getImagePickerMediaTypes("all"),
                 quality: 0.85,
                 videoQuality: getVideoQuality(),
+                videoExportPreset: getCompatibleVideoExportPreset(),
+            });
+
+            videoDebugLog("libraryPickerResult", {
+                canceled: result.canceled,
+                assetCount: result.assets?.length || 0,
+                firstAsset: result.assets?.[0]
+                    ? {
+                        type: result.assets[0].type,
+                        mimeType: result.assets[0].mimeType,
+                        fileName: result.assets[0].fileName,
+                        width: result.assets[0].width,
+                        height: result.assets[0].height,
+                        duration: result.assets[0].duration,
+                        uriInfo: getUriInfo(result.assets[0].uri),
+                        keys: Object.keys(result.assets[0] || {}),
+                    }
+                    : null,
             });
 
             if (result.canceled || !result.assets?.length) {
@@ -167,6 +278,16 @@ export function useIndividualChatMedia({
                 asset,
                 tr,
                 source: "library",
+            });
+
+            videoDebugLog("selectedMediaPreparedFromLibrary", {
+                type: nextMediaMessage.type,
+                fileName: nextMediaMessage.fileName,
+                mimeType: nextMediaMessage.mimeType,
+                uriInfo: getUriInfo(nextMediaMessage.uri),
+                videoUriInfo: getUriInfo(nextMediaMessage.video?.uri),
+                hasImage: !!nextMediaMessage.image,
+                hasVideo: !!nextMediaMessage.video,
             });
 
             setSelectedMediaToSend(nextMediaMessage);
@@ -198,6 +319,19 @@ export function useIndividualChatMedia({
     };
 
     const handleCameraCaptured = (asset) => {
+        videoDebugLog("handleCameraCapturedRawAsset", {
+            hasAsset: !!asset,
+            type: asset?.type,
+            mimeType: asset?.mimeType,
+            fileName: asset?.fileName,
+            width: asset?.width,
+            height: asset?.height,
+            duration: asset?.duration,
+            codec: asset?.codec,
+            uriInfo: getUriInfo(asset?.uri),
+            keys: asset ? Object.keys(asset) : [],
+        });
+
         if (!asset?.uri) return;
 
         const nextMediaMessage = createMediaMessageFromAsset({
@@ -206,12 +340,34 @@ export function useIndividualChatMedia({
             source: "camera",
         });
 
+        videoDebugLog("selectedMediaPreparedFromCamera", {
+            type: nextMediaMessage.type,
+            fileName: nextMediaMessage.fileName,
+            mimeType: nextMediaMessage.mimeType,
+            uriInfo: getUriInfo(nextMediaMessage.uri),
+            videoUriInfo: getUriInfo(nextMediaMessage.video?.uri),
+            hasImage: !!nextMediaMessage.image,
+            hasVideo: !!nextMediaMessage.video,
+        });
+
         setSelectedMediaToSend(nextMediaMessage);
         setCameraCaptureVisible(false);
     };
 
     const handleConfirmSendMedia = (finalMedia) => {
         const mediaToSend = finalMedia || selectedMediaToSend;
+
+        videoDebugLog("handleConfirmSendMedia", {
+            hasFinalMedia: !!finalMedia,
+            hasSelectedMedia: !!selectedMediaToSend,
+            type: mediaToSend?.type,
+            fileName: mediaToSend?.fileName,
+            mimeType: mediaToSend?.mimeType,
+            uriInfo: getUriInfo(mediaToSend?.uri),
+            imageUriInfo: getUriInfo(mediaToSend?.image?.uri),
+            videoUriInfo: getUriInfo(mediaToSend?.video?.uri),
+            keys: mediaToSend ? Object.keys(mediaToSend) : [],
+        });
 
         if (!mediaToSend) return;
 
@@ -386,10 +542,18 @@ export function ChatCameraCaptureModal({
             try {
                 setRecordingSeconds(0);
                 setIsRecording(true);
-                const video = await cameraRef.current.recordAsync({
-                    maxDuration: 60,
-                    quality: "1080p",
-                    mute: false,
+                const video = await cameraRef.current.recordAsync(
+                    getCameraVideoRecordingOptions()
+                );
+
+                videoDebugLog("cameraRecordAsyncResult", {
+                    hasVideo: !!video,
+                    uriInfo: getUriInfo(video?.uri),
+                    width: video?.width,
+                    height: video?.height,
+                    duration: video?.duration,
+                    codec: video?.codec,
+                    keys: video ? Object.keys(video) : [],
                 });
 
                 if (video?.uri) {
@@ -398,6 +562,7 @@ export function ChatCameraCaptureModal({
                         type: "video",
                         mimeType: "video/mp4",
                         fileName: `camera-video-${Date.now()}.mp4`,
+                        codec: video.codec,
                     });
                 }
             } catch (error) {
@@ -673,7 +838,36 @@ function VideoLayer({ source, previewMode, colors }) {
     const duration = Number(player.duration || 0);
     const progress = duration > 0 ? Math.min((currentTime || 0) / duration, 1) : 0;
 
+    useEffect(() => {
+        videoDebugLog("VideoLayerMountedOrSourceChanged", {
+            sourceUriInfo: getUriInfo(source?.uri),
+            previewMode,
+            playerDuration: player.duration,
+            playerCurrentTime: player.currentTime,
+            playerPlaying: player.playing,
+        });
+    }, [source?.uri, previewMode]);
+
+    useEffect(() => {
+        if (duration > 0 || currentTime > 0 || isPlaying) {
+            videoDebugLog("VideoLayerPlayerState", {
+                sourceUriInfo: getUriInfo(source?.uri),
+                isPlaying,
+                currentTime,
+                duration,
+                progress,
+            });
+        }
+    }, [isPlaying, duration]);
+
     const togglePlayback = () => {
+        videoDebugLog("VideoLayerTogglePlayback", {
+            sourceUriInfo: getUriInfo(source?.uri),
+            isPlaying,
+            currentTime: player.currentTime,
+            duration: player.duration,
+        });
+
         if (isPlaying) {
             player.pause();
             return;
@@ -793,6 +987,18 @@ function MediaViewer({ mediaItem, image, video, previewMode = false, colors }) {
     const isVideo = mediaItem?.type === "video";
     const videoSource = getVideoSource(mediaItem, video);
 
+    videoDebugLog("MediaViewerRender", {
+        mediaItemType: mediaItem?.type,
+        isVideo,
+        previewMode,
+        hasImageProp: !!image,
+        hasVideoProp: !!video,
+        mediaItemUriInfo: getUriInfo(mediaItem?.uri),
+        mediaItemVideoUriInfo: getUriInfo(mediaItem?.video?.uri),
+        resolvedVideoSourceUriInfo: getUriInfo(videoSource?.uri),
+        mediaItemKeys: mediaItem ? Object.keys(mediaItem) : [],
+    });
+
     if (isVideo && videoSource) {
         return (
             <VideoLayer
@@ -828,6 +1034,22 @@ export function MediaPreviewModal({
     const insets = useSafeAreaInsets();
     const isVideo = mediaItem?.type === "video";
     const themeColors = getMediaThemeColors(colors, isDark);
+
+    useEffect(() => {
+        if (!visible) return;
+
+        videoDebugLog("MediaPreviewModalVisible", {
+            isVideo,
+            mediaItemType: mediaItem?.type,
+            caption,
+            time,
+            mediaItemUriInfo: getUriInfo(mediaItem?.uri),
+            mediaItemVideoUriInfo: getUriInfo(mediaItem?.video?.uri),
+            videoPropUriInfo: getUriInfo(video?.uri),
+            imagePropUriInfo: getUriInfo(image?.uri),
+            mediaItemKeys: mediaItem ? Object.keys(mediaItem) : [],
+        });
+    }, [visible, mediaItem?.id, mediaItem?.uri, mediaItem?.video?.uri, video?.uri]);
 
     return (
         <Modal
@@ -947,6 +1169,20 @@ export function MediaConfirmModal({
 }) {
     const insets = useSafeAreaInsets();
     const themeColors = getMediaThemeColors(colors, isDark);
+
+    useEffect(() => {
+        if (!visible) return;
+
+        videoDebugLog("MediaConfirmModalVisible", {
+            mediaItemType: mediaItem?.type,
+            caption,
+            mediaItemUriInfo: getUriInfo(mediaItem?.uri),
+            mediaItemVideoUriInfo: getUriInfo(mediaItem?.video?.uri),
+            videoPropUriInfo: getUriInfo(video?.uri),
+            imagePropUriInfo: getUriInfo(image?.uri),
+            mediaItemKeys: mediaItem ? Object.keys(mediaItem) : [],
+        });
+    }, [visible, mediaItem?.id, mediaItem?.uri, mediaItem?.video?.uri, video?.uri]);
 
     if (mediaItem?.type === "image") {
         return (

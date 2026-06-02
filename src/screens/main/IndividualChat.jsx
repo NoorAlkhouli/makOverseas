@@ -1,13 +1,10 @@
+import { appImages } from "@/src/constants/images";
 import {
     getRowDirectionStyle,
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import * as DocumentPicker from "expo-document-picker";
-import * as FileSystem from "expo-file-system/legacy";
-import * as IntentLauncher from "expo-intent-launcher";
-import * as Sharing from "expo-sharing";
 import {
     AudioModule,
     RecordingPresets,
@@ -15,6 +12,10 @@ import {
     useAudioRecorder,
     useAudioRecorderState,
 } from "expo-audio";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import * as IntentLauncher from "expo-intent-launcher";
+import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -33,9 +34,8 @@ import {
     View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { appImages } from "@/src/constants/images";
-import IndividualChatHeader from "../../components/IndividualChatHeader";
 import IndividualChatComposer from "../../components/IndividualChatComposer";
+import IndividualChatHeader from "../../components/IndividualChatHeader";
 import IndividualChatMessagesList from "../../components/IndividualChatMessagesList";
 // import {
 //     ScannedDocumentConfirmModal,
@@ -583,9 +583,17 @@ export default function IndividualChatScreen({ navigation, route }) {
 
     // const {
     //     selectedScannedDocument,
+    //     selectedScannedDocuments,
+    //     activeScannedPageIndex,
+    //     isScanningDocument,
+    //     isCreatingScannedPdf,
     //     scanDocumentWithCamera,
-    //     handleConfirmSendScannedDocument,
+    //     handleAddScannedPages,
+    //     handleRetakeScannedPage,
+    //     handleDeleteScannedPage,
     //     handleCancelScannedDocument,
+    //     handleConfirmSendScannedDocument,
+    //     setActiveScannedPageIndex,
     // } = useScanDocument({
     //     tr,
     //     addMessages,
@@ -989,14 +997,18 @@ export default function IndividualChatScreen({ navigation, route }) {
                 {/* <ScannedDocumentConfirmModal
                     visible={!!selectedScannedDocument}
                     documentItem={selectedScannedDocument}
+                    documents={selectedScannedDocuments}
+                    activeIndex={activeScannedPageIndex}
                     colors={colors}
                     tr={tr}
-                    isArabic={isArabic}
+                    isLoading={isScanningDocument || isCreatingScannedPdf}
                     onCancel={handleCancelScannedDocument}
+                    onAddPage={handleAddScannedPages}
+                    onDeletePage={handleDeleteScannedPage}
+                    onRetake={handleRetakeScannedPage}
+                    onChangePage={setActiveScannedPageIndex}
                     onSend={handleConfirmSendScannedDocument}
-                    onRetake={scanDocumentWithCamera}
                 /> */}
-
                 <DocumentPreviewModal
                     visible={!!previewDocument}
                     documentItem={previewDocument}
