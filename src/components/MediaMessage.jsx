@@ -27,6 +27,68 @@ function VideoThumbnail({ uri, style }) {
     );
 }
 
+const getMessageSendState = (message) => {
+    const status = String(
+        message?.sendStatus ||
+        message?.status ||
+        message?.delivery_status ||
+        message?.deliveryStatus ||
+        ""
+    ).toLowerCase();
+
+    if (
+        message?.isFailed === true ||
+        message?.failed === true ||
+        status === "failed" ||
+        status === "error"
+    ) {
+        return "failed";
+    }
+
+    if (
+        message?.isSending === true ||
+        message?.sending === true ||
+        status === "sending" ||
+        status === "pending"
+    ) {
+        return "sending";
+    }
+
+    return "sent";
+};
+
+function MessageStatusIcon({ item, colors }) {
+    const sendState = getMessageSendState(item);
+
+    if (sendState === "failed") {
+        return (
+            <Ionicons
+                name="alert-circle"
+                size={15}
+                color={colors.danger}
+            />
+        );
+    }
+
+    if (sendState === "sending") {
+        return (
+            <Ionicons
+                name="time-outline"
+                size={15}
+                color={colors.muted}
+            />
+        );
+    }
+
+    return (
+        <Ionicons
+            name="checkmark-done"
+            size={15}
+            color={colors.blue}
+        />
+    );
+}
+
 export default function MediaMessage({
     item,
     colors,
@@ -38,8 +100,19 @@ export default function MediaMessage({
 }) {
     const isMine = item.side === "me";
     const isVideo = item.type === "video";
-    const videoUri = item.uri || item.video?.uri || item.videoUrl || null;
+    const videoUri =
+        item.uri ||
+        item.video?.uri ||
+        item.videoUrl ||
+        item.video_url ||
+        item.url ||
+        null;
+
     const imageSource = item.image || (item.uri ? { uri: item.uri } : null);
+
+    const handleOpenMedia = () => {
+        onOpen?.(item);
+    };
 
     return (
         <View
@@ -50,7 +123,7 @@ export default function MediaMessage({
         >
             <TouchableOpacity
                 activeOpacity={0.9}
-                onPress={onOpen}
+                onPress={handleOpenMedia}
                 style={[
                     styles.mediaBubble,
                     isCompactScreen && styles.mediaBubbleCompact,
@@ -118,10 +191,9 @@ export default function MediaMessage({
                     </Text>
 
                     {isMine && (
-                        <Ionicons
-                            name="checkmark-done"
-                            size={15}
-                            color={colors.blue}
+                        <MessageStatusIcon
+                            item={item}
+                            colors={colors}
                         />
                     )}
                 </View>

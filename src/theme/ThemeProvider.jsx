@@ -58,7 +58,19 @@ export function ThemeProvider({ children }) {
 
         const subscription = Appearance.addChangeListener(({ colorScheme }) => {
             const nextSystemTheme = colorScheme === "dark" ? "dark" : "light";
+
             setSystemTheme(nextSystemTheme);
+
+            /*
+             * مهم:
+             * إذا المستخدم غيّر ثيم الموبايل نفسه، منخلي التطبيق يلحق النظام فوراً.
+             * لذلك منمسح الاختيار اليدوي القديم، بس زر الثيم بيضل موجود وبيقدر المستخدم يستخدمه بعدين.
+             */
+            setManualTheme(null);
+
+            AsyncStorage.removeItem(THEME_STORAGE_KEY).catch((error) => {
+                console.log("Failed to clear manual theme after system change:", error);
+            });
         });
 
         return () => {
@@ -111,13 +123,8 @@ export function ThemeProvider({ children }) {
         () => ({
             colors,
 
-            // ثيم الموبايل الحقيقي
             systemTheme,
-
-            // الثيم اليدوي إذا المستخدم اختاره، وإذا null يعني التطبيق ماشي مع الموبايل
             manualTheme,
-
-            // الثيم الفعال حالياً داخل التطبيق
             activeTheme,
 
             isDark: activeTheme === "dark",

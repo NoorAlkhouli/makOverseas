@@ -3,7 +3,7 @@ import DocumentScanner, {
     ResponseType,
     ScanDocumentResponseStatus,
 } from "react-native-document-scanner-plugin";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Print from "expo-print";
 import React, { useMemo, useState } from "react";
 import {
@@ -81,15 +81,23 @@ const getPagesFromDocument = (documentItem) => {
     return [documentItem];
 };
 
+const getBase64Encoding = () => {
+    return FileSystem.EncodingType?.Base64 || "base64";
+};
+
 const readImageAsBase64 = async (uri) => {
     if (!uri) return null;
 
-    if (uri.startsWith("data:image")) {
-        return uri;
+    const normalizedUri = normalizeScannedUri(uri);
+
+    if (!normalizedUri) return null;
+
+    if (normalizedUri.startsWith("data:image")) {
+        return normalizedUri;
     }
 
-    const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
+    const base64 = await FileSystem.readAsStringAsync(normalizedUri, {
+        encoding: getBase64Encoding(),
     });
 
     return `data:image/jpeg;base64,${base64}`;
@@ -176,6 +184,21 @@ const buildPdfHtml = async (pages = []) => {
     `;
 };
 
+const getFileSize = async (uri) => {
+    if (!uri) return 0;
+
+    try {
+        const fileInfo = await FileSystem.getInfoAsync(uri, {
+            size: true,
+        });
+
+        return Number(fileInfo?.size || 0);
+    } catch (error) {
+        console.log("Get scanned PDF size error:", error);
+        return 0;
+    }
+};
+
 const createPdfFromScannedPages = async (pages = []) => {
     if (!pages.length) return null;
 
@@ -201,6 +224,7 @@ const createPdfFromScannedPages = async (pages = []) => {
             uri: targetUri,
             fileName: pdfFileName,
             mimeType: "application/pdf",
+            size: await getFileSize(targetUri),
         };
     } catch (error) {
         console.log("PDF copy error:", error);
@@ -209,6 +233,7 @@ const createPdfFromScannedPages = async (pages = []) => {
             uri: pdfResult.uri,
             fileName: pdfFileName,
             mimeType: "application/pdf",
+            size: await getFileSize(pdfResult.uri),
         };
     }
 };
@@ -229,7 +254,8 @@ const createScannedPdfMessage = ({ pdfFile, pages, tr }) => {
         pageCount: pages.length,
         previewUri: pages[0]?.uri,
 
-        size: undefined,
+        size: pdfFile.size || 0,
+        fileSize: pdfFile.size || 0,
         time: tr("now", "Now"),
     };
 };
@@ -238,6 +264,7 @@ export function useScanDocument({
     tr,
     addMessages,
     cancelVoiceRecordingIfActive,
+    onSendScannedDocument,
 }) {
     const [selectedScannedDocument, setSelectedScannedDocument] = useState(null);
     const [activeScannedPageIndex, setActiveScannedPageIndex] = useState(0);
@@ -479,8 +506,14 @@ export function useScanDocument({
                 tr,
             });
 
-            // هون صار الإرسال ملف واحد PDF، مش صورة صورة
-            addMessages([scannedPdfMessage]);
+            // هون صار الإرسال ملف واحد PDF، مش صورة صورة.
+            // إذا الشاشة مررت onSendScannedDocument، منرفعه على الباك مثل أي ملف عادي.
+            // وإذا ما مررتها، منخلي fallback قديم يضيفه محلياً بدون ما نكسر أي استخدام ثاني.
+            if (typeof onSendScannedDocument === "function") {
+                await onSendScannedDocument(scannedPdfMessage);
+            } else if (typeof addMessages === "function") {
+                addMessages([scannedPdfMessage]);
+            }
 
             setSelectedScannedDocument(null);
             setActiveScannedPageIndex(0);

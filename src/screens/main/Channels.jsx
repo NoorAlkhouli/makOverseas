@@ -29,6 +29,7 @@ import channelService from "@/src/services/api/channelService";
 import {
     getRowDirectionStyle,
     getTextDirectionStyle,
+    getTextInputDirectionFromValue,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import channelEvents from "@/src/services/api/channelEvents";
@@ -629,7 +630,10 @@ export default function Channels({ navigation }) {
                         onChangeText={setSearchText}
                         placeholder={t("channels.searchPlaceholder")}
                         placeholderTextColor={colors.textMuted}
-                        style={[styles.searchInput, getTextDirectionStyle(isArabic)]}
+                        style={[
+                            styles.searchInput,
+                            getTextInputDirectionFromValue(searchText, isArabic),
+                        ]}
                         autoCorrect={false}
                         autoCapitalize="none"
                     />

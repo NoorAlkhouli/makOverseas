@@ -1,4 +1,3 @@
-import { appImages } from "@/src/constants/images";
 import {
     getRowDirectionStyle,
     getTextDirectionStyle,
@@ -12,6 +11,7 @@ import {
     useAudioRecorder,
     useAudioRecorderState,
 } from "expo-audio";
+import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as IntentLauncher from "expo-intent-launcher";
@@ -22,6 +22,7 @@ import { useTranslation } from "react-i18next";
 import {
     Alert,
     Image,
+    InteractionManager,
     Keyboard,
     KeyboardAvoidingView,
     Modal,
@@ -37,6 +38,12 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import IndividualChatComposer from "../../components/IndividualChatComposer";
 import IndividualChatHeader from "../../components/IndividualChatHeader";
 import IndividualChatMessagesList from "../../components/IndividualChatMessagesList";
+import { API_BASE_URL } from "../../constants/config/apiConfig";
+import chatService from "../../services/api/chatService";
+import {
+    leaveConversationChannel,
+    subscribeToConversationChannel,
+} from "../../services/realtime/conversationRealtimeService";
 // import {
 //     ScannedDocumentConfirmModal,
 //     useScanDocument,
@@ -48,81 +55,6 @@ import {
     useIndividualChatMedia,
 } from "../../components/useIndividualChatMedia";
 
-const chatSampleImage = appImages.homeShipSea;
-
-const INITIAL_MESSAGES = [
-    {
-        id: "1",
-        side: "me",
-        type: "text",
-        text: "Hello Ahmed, I need a quote for shipping a 20ft container from Shanghai, China to Dubai, UAE.",
-        time: "10:02 AM",
-    },
-    {
-        id: "2",
-        side: "employee",
-        type: "text",
-        text: "Hello! Thank you for reaching out. I'd be happy to assist you with that.",
-        time: "10:03 AM",
-    },
-    {
-        id: "3",
-        side: "employee",
-        type: "image",
-        image: chatSampleImage,
-        caption: "Container vessel example",
-        time: "10:03 AM",
-    },
-    {
-        id: "4",
-        side: "employee",
-        type: "text",
-        text: "Could you please share the type of cargo, weight, and if it's FCL or LCL?",
-        time: "10:03 AM",
-    },
-    {
-        id: "5",
-        side: "me",
-        type: "image",
-        image: chatSampleImage,
-        caption: "This is the shipment reference photo.",
-        time: "10:04 AM",
-    },
-    {
-        id: "6",
-        side: "me",
-        type: "text",
-        text: "It's FCL, general cargo. Approx. 12 CBM and 8,000 kg.",
-        time: "10:04 AM",
-    },
-    {
-        id: "7",
-        side: "employee",
-        type: "text",
-        text: "Thanks! Here's a quick estimate for your shipment from Shanghai to Dubai.",
-        time: "10:05 AM",
-    },
-    {
-        id: "8",
-        side: "employee",
-        type: "quote",
-        time: "10:05 AM",
-    },
-    {
-        id: "9",
-        side: "employee",
-        type: "text",
-        text: "Let me know if you need any changes or additional services.",
-        time: "10:06 AM",
-    },
-    {
-        id: "10",
-        side: "me",
-        type: "text",
-        text: "Looks good 👍 Please proceed. Also share the booking process.",
-        time: "10:07 AM",
-    },
-];
 
 const formatFileSize = (bytes) => {
     if (!bytes && bytes !== 0) return "";
@@ -231,39 +163,1242 @@ const isImageDocument = (documentItem) => {
     );
 };
 
+const decodeFileName = (fileName = "attached-file") => {
+    try {
+        return decodeURIComponent(String(fileName || "attached-file"));
+    } catch {
+        return String(fileName || "attached-file");
+    }
+};
+
 const sanitizeFileName = (fileName = "attached-file") => {
-    const safeName = String(fileName || "attached-file")
+    const safeName = decodeFileName(fileName)
         .replace(/[^\w.\-() ]+/g, "_")
         .replace(/\s+/g, "_");
 
     return safeName || `attached-file-${Date.now()}`;
 };
 
+const isRemoteDocumentUri = (uri = "") => {
+    const cleanUri = String(uri || "").trim().toLowerCase();
+
+    return cleanUri.startsWith("http://") || cleanUri.startsWith("https://");
+};
+
 const ensureLocalDocumentUri = async (documentItem) => {
     if (!documentItem?.uri) return null;
+
+    const sourceUri = String(documentItem.uri || "").trim();
+
+    if (!sourceUri) return null;
 
     const safeName = sanitizeFileName(documentItem.fileName || `attached-file-${Date.now()}`);
     const targetUri = `${FileSystem.cacheDirectory}${safeName}`;
 
-    if (documentItem.uri === targetUri) {
+    if (sourceUri === targetUri || sourceUri === decodeURI(targetUri)) {
         return targetUri;
     }
 
     try {
         const targetInfo = await FileSystem.getInfoAsync(targetUri);
 
-        if (!targetInfo.exists) {
-            await FileSystem.copyAsync({
-                from: documentItem.uri,
-                to: targetUri,
-            });
+        if (targetInfo.exists) {
+            return targetUri;
         }
+
+        if (isRemoteDocumentUri(sourceUri)) {
+            const downloadResult = await FileSystem.downloadAsync(sourceUri, targetUri);
+
+            return downloadResult?.uri || targetUri;
+        }
+
+        await FileSystem.copyAsync({
+            from: sourceUri,
+            to: targetUri,
+        });
 
         return targetUri;
     } catch (error) {
         console.log("Prepare document file error:", error);
-        return documentItem.uri;
+        return isRemoteDocumentUri(sourceUri) ? null : sourceUri;
     }
+};
+
+
+const getConversationIdFromRoute = (route, employee) => {
+    return (
+        route?.params?.conversationId ||
+        route?.params?.conversation_id ||
+        route?.params?.conversation?.id ||
+        route?.params?.chat?.id ||
+        employee?.conversation_id ||
+        employee?.conversationId ||
+        employee?.conversation?.id ||
+        null
+    );
+};
+
+
+
+const getTargetUserIdFromRoute = (route, employee, conversation) => {
+    return (
+        route?.params?.targetUserId ||
+        route?.params?.target_user_id ||
+        route?.params?.userId ||
+        route?.params?.user_id ||
+        route?.params?.customerId ||
+        route?.params?.customer_id ||
+        route?.params?.employeeId ||
+        route?.params?.employee_id ||
+        employee?.target_user_id ||
+        employee?.targetUserId ||
+        employee?.user_id ||
+        employee?.userId ||
+        employee?.id ||
+        conversation?.target_user_id ||
+        conversation?.targetUserId ||
+        conversation?.other_participant?.id ||
+        conversation?.other_participant?.user_id ||
+        conversation?.participant?.id ||
+        conversation?.participant?.user_id ||
+        conversation?.employee?.id ||
+        conversation?.employee?.user_id ||
+        conversation?.customer?.id ||
+        conversation?.customer?.user_id ||
+        conversation?.user?.id ||
+        conversation?.user_id ||
+        null
+    );
+};
+
+const isGroupConversationFromRoute = (route, employee, conversation) => {
+    return !!(
+        route?.params?.isGroup === true ||
+        route?.params?.is_group === true ||
+        route?.params?.conversation?.is_group === true ||
+        route?.params?.conversation?.isGroup === true ||
+        route?.params?.chat?.is_group === true ||
+        route?.params?.chat?.isGroup === true ||
+        employee?.is_group === true ||
+        employee?.isGroup === true ||
+        employee?.conversation?.is_group === true ||
+        employee?.conversation?.isGroup === true ||
+        conversation?.is_group === true ||
+        conversation?.isGroup === true ||
+        conversation?.type === 2 ||
+        String(conversation?.type || "").toLowerCase() === "group"
+    );
+};
+
+const getInitialBlockedState = (route, employee) => {
+    return !!(
+        route?.params?.isBlocked ||
+        route?.params?.is_blocked ||
+        route?.params?.conversation?.is_blocked ||
+        route?.params?.conversation?.blocked_by_me ||
+        employee?.is_blocked ||
+        employee?.blocked_by_me
+    );
+};
+
+const getMessagePreviewText = (message, tr) => {
+    if (!message) return "";
+
+    if (message.text) return message.text;
+    if (message.body) return message.body;
+    if (message.caption) return message.caption;
+    if (message.fileName) return message.fileName;
+
+    if (message.type === "image") return tr("imageMessage", "Image");
+    if (message.type === "video") return tr("videoMessage", "Video");
+    if (message.type === "document") return tr("document", "Document");
+    if (message.type === "audio") return tr("voiceMessage", "Voice message");
+    if (message.type === "quote") return tr("quoteSummary", "Quote Summary");
+
+    return tr("message", "Message");
+};
+
+const buildReplyMessage = (message, tr) => {
+    if (!message) return null;
+
+    return {
+        id: message.id,
+        type: message.type,
+        side: message.side,
+        text: getMessagePreviewText(message, tr),
+    };
+};
+
+const isMessageDeletable = (message) => {
+    if (!message) return false;
+
+    const messageId = message.id || message.message_id || message.uuid || message.raw?.id;
+
+    return !!messageId && !message.is_deleted;
+};
+
+const getMessageDeleteId = (message) => {
+    return message?.id || message?.message_id || message?.uuid || message?.raw?.id || null;
+};
+
+const getValidApiMessageId = (message) => {
+    const messageId =
+        message?.raw?.id ||
+        message?.message_id ||
+        message?.id ||
+        null;
+
+    const numericMessageId = Number(messageId);
+
+    if (!Number.isInteger(numericMessageId) || numericMessageId <= 0) {
+        return null;
+    }
+
+    return numericMessageId;
+};
+
+const SHOW_CONVERSATION_MESSAGES_PER_PAGE = 30;
+
+const getShowConversationPayload = (response) => {
+    return response?.data || response || {};
+};
+
+const getShowConversationObject = (response) => {
+    const payload = getShowConversationPayload(response);
+
+    return (
+        payload?.conversation ||
+        payload?.data?.conversation ||
+        payload?.item ||
+        payload ||
+        null
+    );
+};
+
+
+const getNormalizedChatValue = (value) => {
+    if (value === undefined || value === null || value === "") {
+        return null;
+    }
+
+    if (typeof value === "object") {
+        return null;
+    }
+
+    return String(value);
+};
+
+const getConversationIdFromShowConversationObject = (conversationObject) => {
+    return (
+        getNormalizedChatValue(conversationObject?.id) ||
+        getNormalizedChatValue(conversationObject?.conversation_id) ||
+        getNormalizedChatValue(conversationObject?.conversationId) ||
+        null
+    );
+};
+
+const getIsGroupFromConversationObject = (conversationObject, fallbackIsGroup = false) => {
+    if (conversationObject?.is_group === true || conversationObject?.isGroup === true) {
+        return true;
+    }
+
+    if (conversationObject?.is_group === false || conversationObject?.isGroup === false) {
+        return false;
+    }
+
+    if (conversationObject?.type === 2) {
+        return true;
+    }
+
+    if (conversationObject?.type === 1) {
+        return false;
+    }
+
+    return fallbackIsGroup;
+};
+
+const getTargetUserIdFromShowConversationObject = (conversationObject, fallbackTargetUserId = null) => {
+    if (!conversationObject || conversationObject?.is_group === true || conversationObject?.isGroup === true) {
+        return null;
+    }
+
+    return (
+        getNormalizedChatValue(conversationObject?.target_user_id) ||
+        getNormalizedChatValue(conversationObject?.targetUserId) ||
+        getNormalizedChatValue(conversationObject?.other_participant?.id) ||
+        getNormalizedChatValue(conversationObject?.other_participant?.user_id) ||
+        getNormalizedChatValue(conversationObject?.other_participant?.user?.id) ||
+        getNormalizedChatValue(conversationObject?.participant?.id) ||
+        getNormalizedChatValue(conversationObject?.participant?.user_id) ||
+        getNormalizedChatValue(conversationObject?.participant?.user?.id) ||
+        getNormalizedChatValue(fallbackTargetUserId) ||
+        null
+    );
+};
+
+
+
+const isPlainObject = (value) => {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+};
+
+const getMessageResponseObject = (response) => {
+    const payload = response?.data || response || {};
+
+    const candidates = [
+        payload?.data?.message,
+        payload?.message,
+        payload?.item,
+        payload?.data?.item,
+        payload?.data,
+    ];
+
+    return candidates.find(isPlainObject) || null;
+};
+
+const getConversationFromMessageResponse = (response) => {
+    const payload = response?.data || response || {};
+    const message = getMessageResponseObject(response);
+
+    const candidates = [
+        payload?.conversation,
+        payload?.data?.conversation,
+        message?.conversation,
+        message?.data?.conversation,
+    ];
+
+    return candidates.find(isPlainObject) || null;
+};
+
+const getConversationIdFromMessageResponse = (response) => {
+    const conversation = getConversationFromMessageResponse(response);
+    const message = getMessageResponseObject(response);
+
+    return (
+        conversation?.id ||
+        conversation?.conversation_id ||
+        message?.conversation_id ||
+        message?.conversationId ||
+        null
+    );
+};
+
+const getShowConversationMessagesWrapper = (response) => {
+    const payload = getShowConversationPayload(response);
+
+    return (
+        payload?.messages ||
+        payload?.data?.messages ||
+        payload?.conversation?.messages ||
+        payload?.data?.conversation?.messages ||
+        []
+    );
+};
+
+const getShowConversationMessages = (response) => {
+    const messagesWrapper = getShowConversationMessagesWrapper(response);
+
+    if (Array.isArray(messagesWrapper)) return messagesWrapper;
+    if (Array.isArray(messagesWrapper?.items)) return messagesWrapper.items;
+    if (Array.isArray(messagesWrapper?.data)) return messagesWrapper.data;
+    if (Array.isArray(messagesWrapper?.data?.items)) return messagesWrapper.data.items;
+
+    return [];
+};
+
+const isApiMessageDeleted = (message) => {
+    if (!message) return false;
+
+    return !!(
+        message?.is_deleted === true ||
+        message?.deleted_at ||
+        message?.deletedAt ||
+        message?.isDeleted === true ||
+        message?.raw?.is_deleted === true ||
+        message?.raw?.deleted_at ||
+        message?.raw?.deletedAt ||
+        message?.raw?.isDeleted === true
+    );
+};
+
+const getVisibleShowConversationMessages = (response) => {
+    return getShowConversationMessages(response).filter(
+        (message) => !isApiMessageDeleted(message)
+    );
+};
+
+const getShowConversationMessagesMeta = (response) => {
+    const messagesWrapper = getShowConversationMessagesWrapper(response);
+
+    return (
+        messagesWrapper?.meta ||
+        messagesWrapper?.pagination ||
+        messagesWrapper?.data?.meta ||
+        messagesWrapper?.data?.pagination ||
+        null
+    );
+};
+
+const getAttachmentRawName = (attachment) => {
+    return String(
+        attachment?.name ||
+        attachment?.file_name ||
+        attachment?.filename ||
+        attachment?.original_name ||
+        attachment?.originalName ||
+        attachment?.fileName ||
+        attachment?.path ||
+        attachment?.url ||
+        attachment?.uri ||
+        ""
+    ).toLowerCase();
+};
+
+const getAttachmentRawMimeType = (attachment) => {
+    return String(
+        attachment?.mime_type ||
+        attachment?.mimeType ||
+        attachment?.type ||
+        attachment?.content_type ||
+        attachment?.contentType ||
+        ""
+    ).toLowerCase();
+};
+
+const isVideoAttachment = (attachment) => {
+    const mimeType = getAttachmentRawMimeType(attachment);
+    const name = getAttachmentRawName(attachment);
+
+    return (
+        mimeType.startsWith("video/") ||
+        [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".3gp"].some((extension) =>
+            name.includes(extension)
+        )
+    );
+};
+
+const isImageAttachment = (attachment) => {
+    const mimeType = getAttachmentRawMimeType(attachment);
+    const name = getAttachmentRawName(attachment);
+
+    return (
+        mimeType.startsWith("image/") ||
+        [".jpg", ".jpeg", ".png", ".webp", ".gif"].some((extension) =>
+            name.includes(extension)
+        )
+    );
+};
+
+const isAudioAttachment = (attachment) => {
+    const mimeType = getAttachmentRawMimeType(attachment);
+    const name = getAttachmentRawName(attachment);
+
+    return (
+        mimeType.startsWith("audio/") ||
+        [".m4a", ".mp3", ".aac", ".wav", ".ogg", ".oga", ".webm", ".amr"].some((extension) =>
+            name.includes(extension)
+        )
+    );
+};
+
+const getApiMessageType = (message) => {
+    const rawType = message?.type ?? message?.message_type ?? 1;
+    const attachment = getFirstApiAttachment(message);
+
+    if (typeof rawType === "number") {
+        if (rawType === 2) return "image";
+        if (rawType === 3) {
+            if (isVideoAttachment(attachment)) return "video";
+            if (isImageAttachment(attachment)) return "image";
+            if (isAudioAttachment(attachment)) return "audio";
+            return "document";
+        }
+        if (rawType === 4) return "video";
+        if (rawType === 5) return "system";
+        if (rawType === 6) return "call";
+        if (rawType === 7) return "quote";
+        if (rawType === 8) return "audio";
+
+        return "text";
+    }
+
+    const normalizedType = String(rawType || "text").toLowerCase();
+
+    if (["2", "image", "photo"].includes(normalizedType)) return "image";
+    if (["4", "video"].includes(normalizedType) || normalizedType.startsWith("video/")) return "video";
+    if (["8", "audio", "voice", "voice_message", "voice-message"].includes(normalizedType) || normalizedType.startsWith("audio/")) return "audio";
+    if (normalizedType.startsWith("image/")) return "image";
+    if (["3", "file", "document", "attachment"].includes(normalizedType)) {
+        if (isVideoAttachment(attachment)) return "video";
+        if (isImageAttachment(attachment)) return "image";
+        if (isAudioAttachment(attachment)) return "audio";
+        return "document";
+    }
+    if (["5", "system"].includes(normalizedType)) return "system";
+    if (["6", "call"].includes(normalizedType)) return "call";
+    if (["7", "quote"].includes(normalizedType)) return "quote";
+
+    return "text";
+};
+
+const getApiMessageBody = (message) => {
+    return String(message?.body || message?.text || message?.caption || "");
+};
+
+const getFirstApiAttachment = (message) => {
+    const attachmentLists = [
+        message?.attachments,
+        message?.data?.attachments,
+        message?.message?.attachments,
+        message?.raw?.attachments,
+    ];
+
+    for (const attachments of attachmentLists) {
+        if (Array.isArray(attachments) && attachments.length > 0) {
+            return attachments[0];
+        }
+    }
+
+    return (
+        message?.attachment ||
+        message?.file ||
+        message?.media ||
+        message?.audio ||
+        message?.voice ||
+        message?.data?.attachment ||
+        message?.data?.file ||
+        message?.data?.media ||
+        message?.data?.audio ||
+        message?.raw?.attachment ||
+        message?.raw?.file ||
+        message?.raw?.media ||
+        message?.raw?.audio ||
+        null
+    );
+};
+
+const normalizeRemoteAttachmentUri = (uri = "") => {
+    const cleanUri = String(uri || "").trim();
+
+    if (!cleanUri) {
+        return "";
+    }
+
+    if (
+        cleanUri.startsWith("http://") ||
+        cleanUri.startsWith("https://") ||
+        cleanUri.startsWith("file://") ||
+        cleanUri.startsWith("content://")
+    ) {
+        return encodeURI(cleanUri);
+    }
+
+    if (cleanUri.startsWith("//")) {
+        return encodeURI(`https:${cleanUri}`);
+    }
+
+    const cleanBaseUrl = String(API_BASE_URL || "").replace(/\/$/, "");
+    const cleanPath = cleanUri.startsWith("/") ? cleanUri : `/${cleanUri}`;
+
+    return encodeURI(`${cleanBaseUrl}${cleanPath}`);
+};
+
+const getAttachmentUri = (attachment) => {
+    const rawUri =
+        attachment?.url ||
+        attachment?.file_url ||
+        attachment?.fileUrl ||
+        attachment?.full_url ||
+        attachment?.fullUrl ||
+        attachment?.original_url ||
+        attachment?.originalUrl ||
+        attachment?.download_url ||
+        attachment?.downloadUrl ||
+        attachment?.preview_url ||
+        attachment?.previewUrl ||
+        attachment?.temporary_url ||
+        attachment?.temporaryUrl ||
+        attachment?.signed_url ||
+        attachment?.signedUrl ||
+        attachment?.public_url ||
+        attachment?.publicUrl ||
+        attachment?.audio_url ||
+        attachment?.audioUrl ||
+        attachment?.voice_url ||
+        attachment?.voiceUrl ||
+        attachment?.file_path ||
+        attachment?.filePath ||
+        attachment?.path ||
+        attachment?.uri ||
+        "";
+
+    return normalizeRemoteAttachmentUri(rawUri);
+};
+
+const getAttachmentName = (attachment, fallback = "attached-file") => {
+    return String(
+        attachment?.name ||
+        attachment?.file_name ||
+        attachment?.fileName ||
+        attachment?.filename ||
+        attachment?.original_name ||
+        attachment?.originalName ||
+        fallback
+    );
+};
+
+const getAudioDurationMillisFromMessage = (message, attachment) => {
+    const durationValue =
+        message?.duration_millis ||
+        message?.durationMillis ||
+        message?.audio_duration_millis ||
+        message?.audioDurationMillis ||
+        attachment?.duration_millis ||
+        attachment?.durationMillis ||
+        message?.duration ||
+        attachment?.duration ||
+        0;
+
+    const numericDuration = Number(durationValue || 0);
+
+    if (!Number.isFinite(numericDuration) || numericDuration <= 0) {
+        return 0;
+    }
+
+    return numericDuration > 0 && numericDuration < 1000
+        ? Math.round(numericDuration * 1000)
+        : Math.round(numericDuration);
+};
+
+const formatApiMessageTime = (value, isArabic) => {
+    if (!value) return "";
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return String(value);
+    }
+
+    return date.toLocaleTimeString(isArabic ? "ar" : "en", {
+        hour: "numeric",
+        minute: "2-digit",
+    });
+};
+
+const getApiMessageCreatedValue = (message) => {
+    const dateValue =
+        message?.created_at ||
+        message?.sent_at ||
+        message?.time ||
+        message?.createdAt ||
+        message?.sentAt ||
+        null;
+
+    if (dateValue) {
+        const date = new Date(dateValue);
+
+        if (!Number.isNaN(date.getTime())) {
+            return date.getTime();
+        }
+    }
+
+    const numericId = Number(message?.id || message?.message_id || message?.uuid);
+
+    if (Number.isFinite(numericId)) {
+        return numericId;
+    }
+
+    return 0;
+};
+
+const sortMessagesOldestToNewest = (messages = []) => {
+    return [...messages].sort(
+        (firstMessage, secondMessage) =>
+            getApiMessageCreatedValue(firstMessage) -
+            getApiMessageCreatedValue(secondMessage)
+    );
+};
+
+const findMessageById = (messages = [], messageId) => {
+    if (!messageId) return null;
+
+    const targetId = String(messageId);
+
+    return messages.find((item) => {
+        const itemId = item?.id || item?.message_id || item?.uuid || item?.raw?.id;
+        return itemId !== undefined && itemId !== null && String(itemId) === targetId;
+    }) || null;
+};
+
+const getReplyMessageText = (message, tr, knownMessages = []) => {
+    if (!message) return "";
+
+    const directText =
+        message?.text ||
+        message?.body ||
+        message?.caption ||
+        message?.fileName ||
+        message?.file_name ||
+        message?.filename ||
+        "";
+
+    if (directText) {
+        return String(directText);
+    }
+
+    const nestedMessage =
+        message?.message ||
+        message?.data?.message ||
+        message?.raw ||
+        null;
+
+    if (nestedMessage && nestedMessage !== message) {
+        const nestedText = getReplyMessageText(nestedMessage, tr, knownMessages);
+
+        if (nestedText) {
+            return nestedText;
+        }
+    }
+
+    const replyId =
+        message?.id ||
+        message?.message_id ||
+        message?.uuid ||
+        message?.reply_to_message_id ||
+        message?.replyToMessageId ||
+        null;
+
+    const knownMessage = findMessageById(knownMessages, replyId);
+
+    if (knownMessage && knownMessage !== message) {
+        const knownText = getReplyMessageText(knownMessage, tr, []);
+
+        if (knownText) {
+            return knownText;
+        }
+    }
+
+    const type = getApiMessageType(message);
+    const attachment = getFirstApiAttachment(message);
+
+    if (attachment) {
+        const attachmentName = getAttachmentName(attachment, "");
+
+        if (attachmentName) {
+            return attachmentName;
+        }
+    }
+
+    if (type === "image") return tr("imageMessage", "Image");
+    if (type === "video") return tr("videoMessage", "Video");
+    if (type === "document") return tr("document", "Document");
+    if (type === "audio") return tr("voiceMessage", "Voice message");
+    if (type === "quote") return tr("quoteSummary", "Quote Summary");
+
+    return tr("message", "Message");
+};
+
+const normalizeApiReplyMessage = (message, tr, knownMessages = []) => {
+    if (!message) return null;
+
+    const type = getApiMessageType(message);
+
+    return {
+        id: message?.id || message?.message_id || message?.uuid,
+        type,
+        side: message?.is_mine || message?.side === "me" ? "me" : "employee",
+        text: getReplyMessageText(message, tr, knownMessages),
+    };
+};
+
+const normalizeApiMessage = (message, tr, isArabic, knownMessages = []) => {
+    const type = getApiMessageType(message);
+    const attachment = getFirstApiAttachment(message);
+    const attachmentUri = getAttachmentUri(attachment);
+    const body = getApiMessageBody(message);
+    const isMine = message?.is_mine === true || message?.sender?.is_me === true;
+    const replySource =
+        message?.reply_to_message ||
+        message?.reply_to ||
+        message?.parent_message ||
+        message?.quoted_message ||
+        findMessageById(knownMessages, message?.reply_to_message_id || message?.replyToMessageId) ||
+        null;
+
+    const baseMessage = {
+        id: String(message?.id || message?.uuid || Date.now()),
+        side: isMine ? "me" : "employee",
+        type,
+        time: formatApiMessageTime(message?.created_at || message?.sent_at || message?.time, isArabic),
+        is_mine: isMine,
+        is_deleted: message?.is_deleted === true || !!message?.deleted_at,
+        raw: message,
+        replyToMessage: normalizeApiReplyMessage(replySource, tr, knownMessages),
+        reply_to_message_id: message?.reply_to_message_id || replySource?.id || null,
+    };
+
+    if (type === "image") {
+        return {
+            ...baseMessage,
+            image: attachmentUri ? { uri: attachmentUri } : null,
+            uri: attachmentUri,
+            caption: body,
+        };
+    }
+
+    if (type === "video") {
+        return {
+            ...baseMessage,
+            video: attachmentUri ? { uri: attachmentUri } : null,
+            uri: attachmentUri,
+            caption: body,
+        };
+    }
+
+    if (type === "document") {
+        return {
+            ...baseMessage,
+            uri: attachmentUri,
+            fileName: getAttachmentName(attachment, tr("attachedFile", "Attached file")),
+            mimeType: attachment?.mime_type || attachment?.mimeType || "application/octet-stream",
+            size: attachment?.size || attachment?.file_size || attachment?.size_bytes || 0,
+            caption: body,
+        };
+    }
+
+    if (type === "audio") {
+        return {
+            ...baseMessage,
+            uri: attachmentUri,
+            fileName: getAttachmentName(attachment, tr("voiceMessage", "Voice message")),
+            mimeType: attachment?.mime_type || attachment?.mimeType || "audio/mp4",
+            size: attachment?.size || attachment?.file_size || attachment?.size_bytes || 0,
+            durationMillis: getAudioDurationMillisFromMessage(message, attachment),
+            caption: body,
+        };
+    }
+
+    if (type === "quote") {
+        return {
+            ...baseMessage,
+            quote: message?.quote || message?.quote_data || null,
+            text: body,
+        };
+    }
+
+    return {
+        ...baseMessage,
+        type: "text",
+        text: body,
+    };
+};
+
+const getLocalMessageTypeFromPayloadType = (type) => {
+    const messageType = Number(type);
+
+    if (messageType === 2) return "image";
+    if (messageType === 3) return "document";
+    if (messageType === 4) return "video";
+    if (messageType === 7) return "quote";
+    if (messageType === 8) return "audio";
+
+    return "text";
+};
+
+const createOptimisticMessage = ({
+    type = 1,
+    body = "",
+    attachment,
+    localReplyMessage,
+    tr,
+}) => {
+    const localType = getLocalMessageTypeFromPayloadType(type);
+    const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const cleanBody = String(body || "");
+
+    const baseMessage = {
+        id: tempId,
+        local_id: tempId,
+        tempId,
+        side: "me",
+        type: localType,
+        time: tr("now", "Now"),
+        is_mine: true,
+        isLocal: true,
+        isOptimistic: true,
+        isSending: true,
+        isFailed: false,
+        sendStatus: "sending",
+        status: "sending",
+        delivery_status: "sending",
+        raw: null,
+        replyToMessage: localReplyMessage
+            ? buildReplyMessage(localReplyMessage, tr)
+            : null,
+        reply_to_message_id: getValidApiMessageId(localReplyMessage),
+    };
+
+    if (localType === "image") {
+        return {
+            ...baseMessage,
+            image: attachment?.uri ? { uri: attachment.uri } : null,
+            uri: attachment?.uri || "",
+            caption: cleanBody,
+            size: attachment?.size || attachment?.fileSize || attachment?.file_size || 0,
+        };
+    }
+
+    if (localType === "video") {
+        return {
+            ...baseMessage,
+            video: attachment?.uri ? { uri: attachment.uri } : null,
+            uri: attachment?.uri || "",
+            caption: cleanBody,
+            size: attachment?.size || attachment?.fileSize || attachment?.file_size || 0,
+        };
+    }
+
+    if (localType === "document") {
+        return {
+            ...baseMessage,
+            uri: attachment?.uri || "",
+            fileName:
+                attachment?.name ||
+                attachment?.fileName ||
+                attachment?.filename ||
+                tr("attachedFile", "Attached file"),
+            mimeType: attachment?.type || attachment?.mimeType || "application/octet-stream",
+            size: attachment?.size || attachment?.fileSize || attachment?.file_size || 0,
+            caption: cleanBody,
+        };
+    }
+
+    if (localType === "audio") {
+        return {
+            ...baseMessage,
+            uri: attachment?.uri || "",
+            fileName:
+                attachment?.name ||
+                attachment?.fileName ||
+                attachment?.filename ||
+                tr("voiceMessage", "Voice message"),
+            mimeType: attachment?.type || attachment?.mimeType || "audio/mp4",
+            size: attachment?.size || attachment?.fileSize || attachment?.file_size || 0,
+            durationMillis: attachment?.durationMillis || attachment?.duration_millis || 0,
+            caption: cleanBody,
+        };
+    }
+
+    return {
+        ...baseMessage,
+        type: "text",
+        text: cleanBody,
+    };
+};
+
+const markMessageAsFailed = (message) => ({
+    ...message,
+    isSending: false,
+    isFailed: true,
+    sendStatus: "failed",
+    status: "failed",
+    delivery_status: "failed",
+});
+
+const markMessageAsSent = (message) => ({
+    ...message,
+    isSending: false,
+    isFailed: false,
+    isLocal: false,
+    isOptimistic: false,
+    sendStatus: "sent",
+    status: "sent",
+    delivery_status: "sent",
+});
+
+const getApiMessageTypeFromLocalMessage = (message) => {
+    const localType = String(message?.type || "text").toLowerCase();
+
+    if (localType === "image") return 2;
+    if (localType === "document") return 3;
+    if (localType === "video") return 4;
+    if (localType === "quote") return 7;
+    if (localType === "audio") return 8;
+
+    return 1;
+};
+
+const getRetryAttachmentFromMessage = (message) => {
+    const retryType = getApiMessageTypeFromLocalMessage(message);
+
+    if (retryType === 1) {
+        return null;
+    }
+
+    const uri =
+        message?.uri ||
+        message?.image?.uri ||
+        message?.video?.uri ||
+        null;
+
+    if (!uri) {
+        return null;
+    }
+
+    return {
+        uri,
+        name:
+            message?.fileName ||
+            message?.name ||
+            message?.filename ||
+            `attachment-${Date.now()}`,
+        type:
+            message?.mimeType ||
+            message?.attachmentMimeType ||
+            (retryType === 2
+                ? "image/jpeg"
+                : retryType === 4
+                    ? "video/mp4"
+                    : retryType === 8
+                        ? "audio/mp4"
+                        : "application/octet-stream"),
+        size: message?.size || message?.fileSize || message?.file_size || 0,
+        fileSize: message?.size || message?.fileSize || message?.file_size || 0,
+        durationMillis: message?.durationMillis || message?.duration_millis || 0,
+    };
+};
+
+const shouldKeepMessageAsMine = (message) => {
+    return !!(
+        message?.side === "me" ||
+        message?.is_mine === true ||
+        message?.isLocal === true ||
+        message?.isOptimistic === true ||
+        message?.isSending === true
+    );
+};
+
+const forceMessageAsMine = (message) => ({
+    ...message,
+    side: "me",
+    is_mine: true,
+});
+
+const getComparableMessageId = (message) => {
+    return (
+        message?.raw?.id ||
+        message?.message_id ||
+        message?.id ||
+        message?.uuid ||
+        null
+    );
+};
+
+const getMessageComparableText = (message) => {
+    return String(
+        message?.text ||
+        message?.caption ||
+        message?.body ||
+        message?.raw?.body ||
+        message?.raw?.text ||
+        message?.raw?.caption ||
+        ""
+    ).trim();
+};
+
+const getMessageComparableType = (message) => {
+    return String(
+        message?.type ||
+        getApiMessageType(message?.raw || message) ||
+        "text"
+    );
+};
+
+const getMessageComparableFileName = (message) => {
+    const attachment = getFirstApiAttachment(message?.raw || message);
+
+    return String(
+        message?.fileName ||
+        message?.name ||
+        message?.filename ||
+        attachment?.name ||
+        attachment?.file_name ||
+        attachment?.filename ||
+        attachment?.original_name ||
+        ""
+    ).trim();
+};
+
+const isLikelySameOutgoingMessage = (localMessage, incomingMessage) => {
+    if (!shouldKeepMessageAsMine(localMessage)) {
+        return false;
+    }
+
+    const localType = getMessageComparableType(localMessage);
+    const incomingType = getMessageComparableType(incomingMessage);
+
+    if (localType !== incomingType) {
+        return false;
+    }
+
+    const localText = getMessageComparableText(localMessage);
+    const incomingText = getMessageComparableText(incomingMessage);
+
+    if (localType === "text" || localType === "quote") {
+        return (
+            (localMessage?.isSending || localMessage?.isOptimistic || localMessage?.isLocal) &&
+            !!localText &&
+            !!incomingText &&
+            localText === incomingText
+        );
+    }
+
+    const localFileName = getMessageComparableFileName(localMessage);
+    const incomingFileName = getMessageComparableFileName(incomingMessage);
+
+    if (localFileName && incomingFileName && localFileName === incomingFileName) {
+        return true;
+    }
+
+    // For media/file messages, only allow a loose same-type match while the local
+    // message is still optimistic/sending. This prevents a sender's own realtime
+    // event from appearing as if the receiver sent it, while avoiding old-message
+    // false matches after the upload flow is already settled.
+    return (
+        ["image", "video", "document", "audio"].includes(localType) &&
+        (localMessage?.isSending || localMessage?.isOptimistic || localMessage?.isLocal)
+    );
+};
+
+
+const getOutgoingMessageSignature = ({ type = 1, body = "", attachment } = {}) => {
+    const localType = getLocalMessageTypeFromPayloadType(type);
+    const cleanBody = String(body || "").trim();
+    const fileName = String(
+        attachment?.name ||
+        attachment?.fileName ||
+        attachment?.filename ||
+        ""
+    ).trim();
+
+    return `${localType}|${cleanBody}|${fileName}`;
+};
+
+const getApiMessageSignature = (message) => {
+    const localType = getApiMessageType(message);
+    const cleanBody = getApiMessageBody(message).trim();
+    const attachment = getFirstApiAttachment(message);
+    const fileName = getAttachmentName(attachment, "").trim();
+
+    return `${localType}|${cleanBody}|${fileName}`;
+};
+
+const getMessageSenderId = (message) => {
+    const source = message?.raw || message || {};
+
+    return (
+        source?.sender?.id ||
+        source?.sender_id ||
+        source?.senderId ||
+        source?.user_id ||
+        source?.userId ||
+        null
+    );
+};
+
+const rememberOwnSenderIdFromMessage = (ownSenderIdsRef, message) => {
+    const senderId = getMessageSenderId(message);
+
+    if (!senderId) {
+        return;
+    }
+
+    ownSenderIdsRef.current.add(String(senderId));
+};
+
+const rememberOwnSenderIdsFromMessages = (ownSenderIdsRef, messages = []) => {
+    messages.forEach((message) => {
+        if (
+            message?.is_mine === true ||
+            message?.isMine === true ||
+            message?.sender?.is_me === true ||
+            message?.side === "me"
+        ) {
+            rememberOwnSenderIdFromMessage(ownSenderIdsRef, message);
+        }
+    });
+};
+
+const isMessageFromKnownOwnSender = (ownSenderIdsRef, message) => {
+    const senderId = getMessageSenderId(message);
+
+    if (!senderId) {
+        return false;
+    }
+
+    return ownSenderIdsRef.current.has(String(senderId));
+};
+
+const OUTGOING_MESSAGE_SIGNATURE_TTL_MS = 10 * 60 * 1000;
+
+const rememberOutgoingMessageSignature = (pendingSignaturesRef, signature) => {
+    if (!signature) {
+        return;
+    }
+
+    pendingSignaturesRef.current.set(signature, Date.now());
+};
+
+const rememberOutgoingApiMessage = (
+    ownMessageIdsRef,
+    pendingSignaturesRef,
+    ownSenderIdsRef,
+    message
+) => {
+    if (message?.id) {
+        ownMessageIdsRef.current.add(String(message.id));
+    }
+
+    rememberOwnSenderIdFromMessage(ownSenderIdsRef, message);
+
+    const signature = getApiMessageSignature(message);
+    rememberOutgoingMessageSignature(pendingSignaturesRef, signature);
+};
+
+const isRecentOutgoingMessageSignature = (pendingSignaturesRef, signature) => {
+    if (!signature) {
+        return false;
+    }
+
+    const createdAt = pendingSignaturesRef.current.get(signature);
+
+    if (!createdAt) {
+        return false;
+    }
+
+    return Date.now() - createdAt <= OUTGOING_MESSAGE_SIGNATURE_TTL_MS;
+};
+
+const pruneOldOutgoingMessageSignatures = (pendingSignaturesRef) => {
+    const now = Date.now();
+
+    pendingSignaturesRef.current.forEach((createdAt, signature) => {
+        if (now - createdAt > OUTGOING_MESSAGE_SIGNATURE_TTL_MS) {
+            pendingSignaturesRef.current.delete(signature);
+        }
+    });
+};
+
+
+const getConversationBlockedStateFromShowResponse = (response) => {
+    const conversation = getShowConversationObject(response);
+
+    return !!(
+        conversation?.is_blocked ||
+        conversation?.blocked_by_me ||
+        conversation?.block?.is_blocked ||
+        conversation?.meta?.is_blocked
+    );
 };
 
 export default function IndividualChatScreen({ navigation, route }) {
@@ -285,8 +1420,39 @@ export default function IndividualChatScreen({ navigation, route }) {
     } = useAppTheme();
 
     const employee = route?.params?.employee;
-    const employeeName = employee?.name || "Ahmed Hassan";
-    const employeeDepartment = employee?.department || null;
+    const conversation = route?.params?.conversation;
+    const initialConversationId = getConversationIdFromRoute(route, employee);
+    const initialIsGroupConversation = isGroupConversationFromRoute(route, employee, conversation);
+    const initialTargetUserId = getTargetUserIdFromRoute(route, employee, conversation);
+    const [activeConversationId, setActiveConversationId] = useState(initialConversationId);
+    const [resolvedChatConfig, setResolvedChatConfig] = useState(() => ({
+        conversationId: getNormalizedChatValue(initialConversationId),
+        isGroup: initialIsGroupConversation,
+        targetUserId: getNormalizedChatValue(initialTargetUserId),
+    }));
+    const conversationId = resolvedChatConfig.conversationId || activeConversationId;
+    const isGroupConversation = resolvedChatConfig.isGroup === true;
+    const targetUserId = resolvedChatConfig.targetUserId || initialTargetUserId;
+    const employeeName =
+        employee?.name ||
+        conversation?.display_name ||
+        conversation?.title ||
+        conversation?.name ||
+        conversation?.employee?.name ||
+        conversation?.customer?.name ||
+        conversation?.participant?.name ||
+        conversation?.other_participant?.name ||
+        "";
+    const employeeDepartment =
+        employee?.department ||
+        employee?.department_name ||
+        conversation?.department?.name ||
+        conversation?.department?.title ||
+        conversation?.department_name ||
+        conversation?.employee?.department?.name ||
+        conversation?.employee?.department?.title ||
+        conversation?.employee?.department_name ||
+        null;
 
     const employeeInitials = employeeName
         .split(" ")
@@ -298,10 +1464,24 @@ export default function IndividualChatScreen({ navigation, route }) {
     const [menuVisible, setMenuVisible] = useState(false);
     const [attachMenuVisible, setAttachMenuVisible] = useState(false);
     const [messageText, setMessageText] = useState("");
-    const [messages, setMessages] = useState(INITIAL_MESSAGES);
-    const [isBlocked, setIsBlocked] = useState(false);
+    const [messages, setMessages] = useState([]);
+    const messagesRef = useRef([]);
+    const ownRealtimeMessageIdsRef = useRef(new Set());
+    const ownSenderIdsRef = useRef(new Set());
+    const pendingOutgoingSignaturesRef = useRef(new Map());
+    const [isLoadingConversation, setIsLoadingConversation] = useState(false);
+    const [conversationMessagesMeta, setConversationMessagesMeta] = useState(null);
+    const [isBlocked, setIsBlocked] = useState(() => getInitialBlockedState(route, employee));
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
     const [previewDocument, setPreviewDocument] = useState(null);
+    const [replyingToMessage, setReplyingToMessage] = useState(null);
+    const [messageOptionsMessage, setMessageOptionsMessage] = useState(null);
+    const [copyToastVisible, setCopyToastVisible] = useState(false);
+    const copyToastTimerRef = useRef(null);
+    const loadedConversationIdRef = useRef(null);
+    const [isMutatingChat, setIsMutatingChat] = useState(false);
+    const openLibraryAfterCameraCloseRef = useRef(false);
+    const openLibraryTimerRef = useRef(null);
 
     const tr = (key, fallback) =>
         t(`individualChat.${key}`, {
@@ -355,6 +1535,40 @@ export default function IndividualChatScreen({ navigation, route }) {
         });
     };
 
+    const showCopyToast = () => {
+        if (copyToastTimerRef.current) {
+            clearTimeout(copyToastTimerRef.current);
+        }
+
+        setCopyToastVisible(true);
+
+        copyToastTimerRef.current = setTimeout(() => {
+            setCopyToastVisible(false);
+            copyToastTimerRef.current = null;
+        }, 1500);
+    };
+
+    useEffect(() => {
+        return () => {
+            if (copyToastTimerRef.current) {
+                clearTimeout(copyToastTimerRef.current);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (openLibraryTimerRef.current) {
+                clearTimeout(openLibraryTimerRef.current);
+                openLibraryTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
+
     useEffect(() => {
         setTimeout(() => {
             scrollToBottom(false);
@@ -395,6 +1609,391 @@ export default function IndividualChatScreen({ navigation, route }) {
         };
     }, []);
 
+    useEffect(() => {
+        if (!conversationId) {
+            return;
+        }
+
+        chatService.markConversationRead(conversationId).catch((error) => {
+            console.log("Mark conversation read error:", error);
+        });
+    }, [conversationId]);
+
+    useEffect(() => {
+        const markConversationReadOnLeave = () => {
+            const normalizedConversationId = getNormalizedChatValue(conversationId);
+
+            if (!normalizedConversationId) {
+                return;
+            }
+
+            const currentMessages = messagesRef.current || [];
+            const lastMessage = currentMessages[currentMessages.length - 1] || null;
+            const lastMessageId = getValidApiMessageId(lastMessage);
+
+            chatService.markConversationRead(
+                normalizedConversationId,
+                lastMessageId
+            ).catch((error) => {
+                console.log("Mark conversation read on leave error:", error?.raw || error);
+            });
+        };
+
+        const unsubscribe = navigation.addListener(
+            "beforeRemove",
+            markConversationReadOnLeave
+        );
+
+        return unsubscribe;
+    }, [navigation, conversationId]);
+
+    useEffect(() => {
+        const normalizedConversationId = getNormalizedChatValue(conversationId);
+
+        if (!normalizedConversationId) {
+            return;
+        }
+
+        subscribeToConversationChannel({
+            conversationId: normalizedConversationId,
+
+            onMessageSent: (apiMessage) => {
+                console.log(
+                    "[IndividualChat] onMessageSent RECEIVED:",
+                    JSON.stringify(apiMessage, null, 2)
+                );
+
+                console.log("[IndividualChat] onMessageSent CHECK:", {
+                    id: apiMessage?.id,
+                    conversation_id: apiMessage?.conversation_id,
+                    conversationId: apiMessage?.conversationId,
+                    type: apiMessage?.type,
+                    isDeleted: isApiMessageDeleted(apiMessage),
+                    attachmentsCount: Array.isArray(apiMessage?.attachments)
+                        ? apiMessage.attachments.length
+                        : 0,
+                    firstAttachment: Array.isArray(apiMessage?.attachments)
+                        ? apiMessage.attachments[0]
+                        : null,
+                });
+
+
+                if (!apiMessage?.id || isApiMessageDeleted(apiMessage)) {
+                    return;
+                }
+
+                const currentMessages = messagesRef.current || [];
+                const incomingSignature = getApiMessageSignature(apiMessage);
+                const isKnownOwnRealtimeMessage = ownRealtimeMessageIdsRef.current.has(
+                    String(apiMessage.id)
+                );
+                const isPendingOutgoingRealtimeMessage = isRecentOutgoingMessageSignature(
+                    pendingOutgoingSignaturesRef,
+                    incomingSignature
+                );
+                const isFromKnownOwnSender = isMessageFromKnownOwnSender(
+                    ownSenderIdsRef,
+                    apiMessage
+                );
+
+                pruneOldOutgoingMessageSignatures(pendingOutgoingSignaturesRef);
+
+                const normalizedMessage = normalizeApiMessage(
+                    apiMessage,
+                    tr,
+                    isArabic,
+                    currentMessages
+                );
+
+                const hasSameMessageId = currentMessages.some((message) => {
+                    const messageId = getComparableMessageId(message);
+
+                    return (
+                        messageId !== undefined &&
+                        messageId !== null &&
+                        String(messageId) === String(apiMessage.id)
+                    );
+                });
+
+                const hasMatchingLocalOutgoingMessage = currentMessages.some((message) =>
+                    isLikelySameOutgoingMessage(message, normalizedMessage)
+                );
+
+                const ownRealtimeMessageShouldNotAppend =
+                    isKnownOwnRealtimeMessage ||
+                    isPendingOutgoingRealtimeMessage ||
+                    isFromKnownOwnSender ||
+                    hasSameMessageId ||
+                    hasMatchingLocalOutgoingMessage;
+
+                if (ownRealtimeMessageShouldNotAppend) {
+                    ownRealtimeMessageIdsRef.current.add(String(apiMessage.id));
+                    rememberOwnSenderIdFromMessage(ownSenderIdsRef, apiMessage);
+                    rememberOutgoingMessageSignature(
+                        pendingOutgoingSignaturesRef,
+                        incomingSignature
+                    );
+
+                    setMessages((prevMessages) => {
+                        const existingIndex = prevMessages.findIndex((message) => {
+                            const messageId = getComparableMessageId(message);
+
+                            return (
+                                messageId !== undefined &&
+                                messageId !== null &&
+                                String(messageId) === String(apiMessage.id)
+                            );
+                        });
+
+                        if (existingIndex !== -1) {
+                            return prevMessages.map((message, index) =>
+                                index === existingIndex && shouldKeepMessageAsMine(message)
+                                    ? markMessageAsSent(forceMessageAsMine(normalizedMessage))
+                                    : message
+                            );
+                        }
+
+                        const preparedOwnMessage = forceMessageAsMine(normalizedMessage);
+                        const localSendingIndex = prevMessages.findIndex((message) =>
+                            isLikelySameOutgoingMessage(message, preparedOwnMessage)
+                        );
+
+                        if (localSendingIndex === -1) {
+                            return prevMessages;
+                        }
+
+                        return prevMessages.map((message, index) =>
+                            index === localSendingIndex
+                                ? markMessageAsSent(preparedOwnMessage)
+                                : message
+                        );
+                    });
+
+                    console.log(
+                        '[Conversation Realtime] Own MessageSent ignored to prevent duplicate:',
+                        apiMessage.id
+                    );
+
+                    return;
+                }
+
+                const preparedMessage = normalizedMessage;
+
+                setMessages((prevMessages) => {
+                    const existingIndex = prevMessages.findIndex((message) => {
+                        const messageId = getComparableMessageId(message);
+
+                        return (
+                            messageId !== undefined &&
+                            messageId !== null &&
+                            String(messageId) === String(preparedMessage.id)
+                        );
+                    });
+
+                    if (existingIndex !== -1) {
+                        return prevMessages.map((message, index) =>
+                            index === existingIndex
+                                ? markMessageAsSent(preparedMessage)
+                                : message
+                        );
+                    }
+
+                    return [...prevMessages, preparedMessage];
+                });
+
+                setTimeout(() => {
+                    scrollToBottom(true);
+                }, 80);
+            },
+
+            onMessageUpdated: (apiMessage) => {
+                if (!apiMessage?.id) {
+                    return;
+                }
+
+                if (isApiMessageDeleted(apiMessage)) {
+                    setMessages((prevMessages) =>
+                        prevMessages.filter((message) => {
+                            const messageId =
+                                message?.raw?.id ||
+                                message?.message_id ||
+                                message?.id ||
+                                null;
+
+                            return String(messageId) !== String(apiMessage.id);
+                        })
+                    );
+
+                    return;
+                }
+
+                const currentMessages = messagesRef.current || [];
+                const incomingSignature = getApiMessageSignature(apiMessage);
+                const isOwnRealtimeMessage =
+                    ownRealtimeMessageIdsRef.current.has(String(apiMessage.id)) ||
+                    isMessageFromKnownOwnSender(ownSenderIdsRef, apiMessage) ||
+                    isRecentOutgoingMessageSignature(
+                        pendingOutgoingSignaturesRef,
+                        incomingSignature
+                    );
+
+                if (isOwnRealtimeMessage) {
+                    ownRealtimeMessageIdsRef.current.add(String(apiMessage.id));
+                    rememberOwnSenderIdFromMessage(ownSenderIdsRef, apiMessage);
+                }
+
+                const normalizedMessage = normalizeApiMessage(
+                    apiMessage,
+                    tr,
+                    isArabic,
+                    currentMessages
+                );
+                const preparedMessage = isOwnRealtimeMessage
+                    ? forceMessageAsMine(normalizedMessage)
+                    : normalizedMessage;
+
+                pruneOldOutgoingMessageSignatures(pendingOutgoingSignaturesRef);
+
+                setMessages((prevMessages) =>
+                    prevMessages.map((message) => {
+                        const messageId = getComparableMessageId(message);
+
+                        if (String(messageId) !== String(preparedMessage.id)) {
+                            return message;
+                        }
+
+                        return shouldKeepMessageAsMine(message)
+                            ? markMessageAsSent(forceMessageAsMine(preparedMessage))
+                            : preparedMessage;
+                    })
+                );
+            },
+        });
+
+        return () => {
+            leaveConversationChannel(normalizedConversationId);
+        };
+    }, [conversationId, isArabic]);
+
+
+    useEffect(() => {
+        const normalizedConversationId = getNormalizedChatValue(conversationId);
+
+        if (!normalizedConversationId) {
+            return;
+        }
+
+        if (loadedConversationIdRef.current === normalizedConversationId) {
+            return;
+        }
+
+        loadedConversationIdRef.current = normalizedConversationId;
+
+        let isMounted = true;
+
+        const fetchShowConversation = async () => {
+            try {
+                setIsLoadingConversation(true);
+
+                const response = await chatService.showConversation(normalizedConversationId, {
+                    page: 1,
+                    per_page: SHOW_CONVERSATION_MESSAGES_PER_PAGE,
+                });
+
+                if (!isMounted) {
+                    return;
+                }
+
+                const showConversationObject = getShowConversationObject(response);
+                const nextConversationId =
+                    getConversationIdFromShowConversationObject(showConversationObject) ||
+                    normalizedConversationId;
+                const nextIsGroup = getIsGroupFromConversationObject(
+                    showConversationObject,
+                    isGroupConversation
+                );
+                const nextTargetUserId = nextIsGroup
+                    ? null
+                    : getTargetUserIdFromShowConversationObject(
+                        showConversationObject,
+                        targetUserId
+                    );
+
+                setResolvedChatConfig({
+                    conversationId: nextConversationId,
+                    isGroup: nextIsGroup,
+                    targetUserId: nextTargetUserId,
+                });
+
+                if (nextConversationId) {
+                    setActiveConversationId(nextConversationId);
+                }
+
+                const visibleApiMessages = getVisibleShowConversationMessages(response);
+                rememberOwnSenderIdsFromMessages(ownSenderIdsRef, visibleApiMessages);
+
+                const preparedMessages = sortMessagesOldestToNewest(
+                    visibleApiMessages
+                ).map((message) => normalizeApiMessage(message, tr, isArabic, visibleApiMessages));
+
+                setMessages((prev) => {
+                    const localMessages = prev.filter(
+                        (message) =>
+                            message?.isLocal ||
+                            message?.isOptimistic ||
+                            message?.isSending ||
+                            message?.isFailed
+                    );
+
+                    if (localMessages.length === 0) {
+                        return preparedMessages;
+                    }
+
+                    const apiMessageIds = new Set(
+                        preparedMessages.map((message) => String(message.id))
+                    );
+
+                    return [
+                        ...preparedMessages,
+                        ...localMessages.filter(
+                            (message) => !apiMessageIds.has(String(message.id))
+                        ),
+                    ];
+                });
+                setConversationMessagesMeta(getShowConversationMessagesMeta(response));
+                setIsBlocked(getConversationBlockedStateFromShowResponse(response));
+
+                setTimeout(() => {
+                    scrollToBottom(false);
+                }, 120);
+            } catch (error) {
+                loadedConversationIdRef.current = null;
+                console.log("Show conversation error:", error?.raw || error);
+
+                if (isMounted) {
+                    Alert.alert(
+                        tr("errorTitle", "Something went wrong"),
+                        error?.userMessage ||
+                        tr(
+                            "showConversationError",
+                            "Could not load this conversation. Please try again."
+                        )
+                    );
+                }
+            } finally {
+                if (isMounted) {
+                    setIsLoadingConversation(false);
+                }
+            }
+        };
+
+        fetchShowConversation();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [conversationId]);
+
     const handleChangeLanguage = (value) => {
         i18n.changeLanguage(value);
     };
@@ -427,24 +2026,406 @@ export default function IndividualChatScreen({ navigation, route }) {
         }, 120);
     };
 
+    const appendMessageResponseToList = async (
+        response,
+        localReplyMessage = null,
+        optimisticMessageId = null
+    ) => {
+        const nextConversationId = getConversationIdFromMessageResponse(response);
+        const responseMessage = getMessageResponseObject(response);
+
+        if (responseMessage?.id) {
+            rememberOutgoingApiMessage(
+                ownRealtimeMessageIdsRef,
+                pendingOutgoingSignaturesRef,
+                ownSenderIdsRef,
+                responseMessage
+            );
+        }
+
+        const responseMessageWithReply =
+            responseMessage &&
+                localReplyMessage &&
+                !responseMessage.reply_to_message &&
+                !responseMessage.reply_to &&
+                !responseMessage.parent_message &&
+                !responseMessage.quoted_message
+                ? {
+                    ...responseMessage,
+                    reply_to_message:
+                        localReplyMessage.raw ||
+                        localReplyMessage,
+                }
+                : responseMessage;
+
+        if (nextConversationId) {
+            const normalizedConversationId = getNormalizedChatValue(nextConversationId);
+
+            setActiveConversationId(normalizedConversationId);
+            setResolvedChatConfig((currentConfig) => ({
+                ...currentConfig,
+                conversationId: normalizedConversationId,
+            }));
+        }
+
+        if (isApiMessageDeleted(responseMessageWithReply)) {
+            if (optimisticMessageId) {
+                setMessages((prev) =>
+                    prev.filter((message) => String(message.id) !== String(optimisticMessageId))
+                );
+            }
+
+            return;
+        }
+
+        if (responseMessageWithReply?.id || responseMessageWithReply?.uuid) {
+            const preparedMessage = forceMessageAsMine(
+                normalizeApiMessage(
+                    responseMessageWithReply,
+                    tr,
+                    isArabic,
+                    messages
+                )
+            );
+
+            setMessages((prev) => {
+                const existingIds = new Set(
+                    prev
+                        .filter((item) => String(item.id) !== String(optimisticMessageId))
+                        .map((item) => String(item.id))
+                );
+
+                if (existingIds.has(String(preparedMessage.id))) {
+                    return prev.filter(
+                        (item) => String(item.id) !== String(optimisticMessageId)
+                    );
+                }
+
+                return prev.map((item) =>
+                    String(item.id) === String(optimisticMessageId)
+                        ? markMessageAsSent(preparedMessage)
+                        : item
+                );
+            });
+
+            return;
+        }
+
+        if (optimisticMessageId) {
+            setMessages((prev) =>
+                prev.map((item) =>
+                    String(item.id) === String(optimisticMessageId)
+                        ? markMessageAsSent(item)
+                        : item
+                )
+            );
+        }
+    };
+
+    const sendOutgoingChatMessage = async ({
+        type = 1,
+        body = "",
+        attachment,
+        replyToMessageId,
+        localReplyMessage,
+    } = {}) => {
+        const activeConversationIdForSend = getNormalizedChatValue(conversationId);
+        const activeTargetUserIdForSend = getNormalizedChatValue(targetUserId);
+
+        if (!activeConversationIdForSend && !activeTargetUserIdForSend) {
+            Alert.alert(
+                tr("missingConversationTitle", "Conversation not ready"),
+                tr("missingConversationMessage", "Please open a saved conversation before sending messages.")
+            );
+            return false;
+        }
+
+        if (isGroupConversation && !activeConversationIdForSend) {
+            Alert.alert(
+                tr("missingConversationTitle", "Conversation not ready"),
+                tr("missingGroupConversationMessage", "Group conversations need a saved conversation before sending messages.")
+            );
+            return false;
+        }
+
+        const messagePayload = {
+            type,
+            body,
+            attachment,
+            replyToMessageId,
+        };
+        const outgoingSignature = getOutgoingMessageSignature(messagePayload);
+
+        rememberOutgoingMessageSignature(
+            pendingOutgoingSignaturesRef,
+            outgoingSignature
+        );
+
+        const optimisticMessage = createOptimisticMessage({
+            type,
+            body,
+            attachment,
+            localReplyMessage,
+            tr,
+        });
+
+        setMessages((prev) => [...prev, optimisticMessage]);
+
+        setTimeout(() => {
+            scrollToBottom(true);
+        }, 40);
+
+        try {
+            setIsMutatingChat(true);
+
+            const response = activeConversationIdForSend
+                ? await chatService.sendMessage(activeConversationIdForSend, messagePayload)
+                : await chatService.startDirectMessage(
+                    activeTargetUserIdForSend,
+                    messagePayload
+                );
+
+            const responseMessage = getMessageResponseObject(response);
+            rememberOutgoingApiMessage(
+                ownRealtimeMessageIdsRef,
+                pendingOutgoingSignaturesRef,
+                ownSenderIdsRef,
+                responseMessage
+            );
+
+            await appendMessageResponseToList(
+                response,
+                localReplyMessage,
+                optimisticMessage.id
+            );
+
+            setTimeout(() => {
+                scrollToBottom(true);
+            }, 100);
+
+            return true;
+        } catch (error) {
+            console.log("Send message error:", error?.raw || error);
+
+            setMessages((prev) =>
+                prev.map((message) =>
+                    String(message.id) === String(optimisticMessage.id)
+                        ? markMessageAsFailed(message)
+                        : message
+                )
+            );
+
+            return false;
+        } finally {
+            setIsMutatingChat(false);
+        }
+    };
+
     const handleSend = () => {
         const cleanText = messageText.trim();
         if (!cleanText) return;
 
-        const newMessage = {
-            id: Date.now().toString(),
-            side: "me",
-            type: "text",
-            text: cleanText,
-            time: tr("now", "Now"),
-        };
+        const replyToMessageId = getValidApiMessageId(replyingToMessage);
 
-        setMessages((prev) => [...prev, newMessage]);
+        const currentReplyingToMessage = replyingToMessage;
+
         setMessageText("");
+        setReplyingToMessage(null);
 
-        setTimeout(() => {
-            scrollToBottom(true);
-        }, 100);
+        void sendOutgoingChatMessage({
+            type: 1,
+            body: cleanText,
+            replyToMessageId,
+            localReplyMessage: currentReplyingToMessage,
+        });
+    };
+
+    const getFileNameExtension = (fileName = "") => {
+        const cleanName = String(fileName || "").split("?")[0].toLowerCase();
+        const dotIndex = cleanName.lastIndexOf(".");
+
+        if (dotIndex === -1 || dotIndex === cleanName.length - 1) {
+            return "";
+        }
+
+        return cleanName.slice(dotIndex + 1);
+    };
+
+    const inferMimeTypeFromMedia = (mediaItem = {}, fallbackMimeType = "application/octet-stream") => {
+        const explicitMimeType = String(
+            mediaItem.mimeType ||
+            mediaItem.mime_type ||
+            mediaItem.contentType ||
+            mediaItem.content_type ||
+            ""
+        ).trim();
+
+        if (explicitMimeType.includes("/")) {
+            return explicitMimeType;
+        }
+
+        const fileName = String(
+            mediaItem.fileName ||
+            mediaItem.name ||
+            mediaItem.filename ||
+            mediaItem.uri ||
+            mediaItem.video?.uri ||
+            mediaItem.image?.uri ||
+            ""
+        );
+        const extension = getFileNameExtension(fileName);
+
+        if (["jpg", "jpeg"].includes(extension)) return "image/jpeg";
+        if (extension === "png") return "image/png";
+        if (extension === "webp") return "image/webp";
+        if (extension === "gif") return "image/gif";
+        if (extension === "mp4") return "video/mp4";
+        if (["mov", "qt"].includes(extension)) return "video/quicktime";
+        if (extension === "m4v") return "video/x-m4v";
+        if (extension === "webm") return "video/webm";
+        if (extension === "3gp") return "video/3gpp";
+        if (extension === "m4a") return "audio/mp4";
+        if (extension === "mp3") return "audio/mpeg";
+        if (extension === "aac") return "audio/aac";
+        if (extension === "wav") return "audio/wav";
+        if (extension === "ogg" || extension === "oga") return "audio/ogg";
+        if (extension === "amr") return "audio/amr";
+        if (extension === "pdf") return "application/pdf";
+        if (extension === "txt") return "text/plain";
+        if (extension === "csv") return "text/csv";
+        if (extension === "doc") return "application/msword";
+        if (extension === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        if (extension === "xls") return "application/vnd.ms-excel";
+        if (extension === "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        return fallbackMimeType;
+    };
+
+    const inferOutgoingMessageType = (mediaItem = {}) => {
+        const rawType = String(
+            mediaItem.type ||
+            mediaItem.mediaType ||
+            mediaItem.assetType ||
+            mediaItem.kind ||
+            ""
+        ).toLowerCase();
+        const mimeType = inferMimeTypeFromMedia(mediaItem, "").toLowerCase();
+        const fileName = String(
+            mediaItem.fileName ||
+            mediaItem.name ||
+            mediaItem.filename ||
+            mediaItem.uri ||
+            mediaItem.video?.uri ||
+            mediaItem.image?.uri ||
+            ""
+        ).toLowerCase();
+
+        if (
+            rawType === "audio" ||
+            rawType === "voice" ||
+            rawType === "voice_message" ||
+            rawType === "voice-message" ||
+            mimeType.startsWith("audio/") ||
+            [".m4a", ".mp3", ".aac", ".wav", ".ogg", ".oga", ".amr"].some((extension) => fileName.includes(extension))
+        ) {
+            return 8;
+        }
+
+        if (
+            rawType === "image" ||
+            rawType === "photo" ||
+            mimeType.startsWith("image/") ||
+            [".jpg", ".jpeg", ".png", ".webp", ".gif"].some((extension) => fileName.includes(extension))
+        ) {
+            return 2;
+        }
+
+        if (
+            rawType === "video" ||
+            mimeType.startsWith("video/") ||
+            [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".3gp"].some((extension) => fileName.includes(extension))
+        ) {
+            return 4;
+        }
+
+        return 3;
+    };
+
+    const getLocalAttachmentSize = async (uri) => {
+        if (!uri) {
+            return 0;
+        }
+
+        try {
+            const fileInfo = await FileSystem.getInfoAsync(uri, {
+                size: true,
+            });
+
+            return Number(fileInfo?.size || 0);
+        } catch (error) {
+            console.log("Get local attachment size error:", error);
+            return 0;
+        }
+    };
+
+    const handleSendMediaMessage = async (mediaItem) => {
+        if (!mediaItem) return;
+
+        const mediaUri =
+            mediaItem.uri ||
+            mediaItem.image?.uri ||
+            mediaItem.video?.uri ||
+            null;
+
+        if (!mediaUri) {
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                tr("mediaSendError", "Could not send this media. Please try again.")
+            );
+            return;
+        }
+
+        const messageType = inferOutgoingMessageType(mediaItem);
+        const attachmentMimeType = inferMimeTypeFromMedia(
+            mediaItem,
+            messageType === 2
+                ? "image/jpeg"
+                : messageType === 4
+                    ? "video/mp4"
+                    : "application/octet-stream"
+        );
+
+        const replyToMessageId = getValidApiMessageId(replyingToMessage);
+
+        const currentReplyingToMessage = replyingToMessage;
+        const attachmentSize =
+            Number(
+                mediaItem.size ||
+                mediaItem.fileSize ||
+                mediaItem.filesize ||
+                mediaItem.file_size ||
+                0
+            ) || await getLocalAttachmentSize(mediaUri);
+
+        setReplyingToMessage(null);
+
+        return await sendOutgoingChatMessage({
+            type: messageType,
+            body: mediaItem.caption || "",
+            attachment: {
+                uri: mediaUri,
+                name:
+                    mediaItem.fileName ||
+                    mediaItem.name ||
+                    mediaItem.filename ||
+                    `attachment-${Date.now()}`,
+                type: attachmentMimeType,
+                size: attachmentSize,
+                fileSize: attachmentSize,
+            },
+            replyToMessageId,
+            localReplyMessage: currentReplyingToMessage,
+        });
     };
 
     const startVoiceRecording = async () => {
@@ -504,17 +2485,28 @@ export default function IndividualChatScreen({ navigation, route }) {
                 );
                 return;
             }
+            const replyToMessageId = getValidApiMessageId(replyingToMessage);
 
-            const newAudioMessage = {
-                id: `${Date.now()}-audio`,
-                side: "me",
-                type: "audio",
-                uri: voiceUri,
-                durationMillis,
-                time: tr("now", "Now"),
-            };
+            const currentReplyingToMessage = replyingToMessage;
 
-            addMessages([newAudioMessage]);
+            setReplyingToMessage(null);
+
+            const voiceSize = await getLocalAttachmentSize(voiceUri);
+
+            void sendOutgoingChatMessage({
+                type: 8,
+                body: tr("voiceMessage", "Voice message"),
+                attachment: {
+                    uri: voiceUri,
+                    name: `voice-message-${Date.now()}.m4a`,
+                    type: "audio/mp4",
+                    size: voiceSize,
+                    fileSize: voiceSize,
+                    durationMillis,
+                },
+                replyToMessageId,
+                localReplyMessage: currentReplyingToMessage,
+            });
         } catch (error) {
             isRecordingRef.current = false;
             console.log("Voice recording stop error:", error);
@@ -525,6 +2517,7 @@ export default function IndividualChatScreen({ navigation, route }) {
             );
         }
     };
+
 
     const cancelVoiceRecordingIfActive = async () => {
         const isActuallyRecording = isRecordingRef.current || !!recorderState?.isRecording;
@@ -579,7 +2572,48 @@ export default function IndividualChatScreen({ navigation, route }) {
         tr,
         addMessages,
         cancelVoiceRecordingIfActive,
+        onSendMedia: handleSendMediaMessage,
     });
+
+    useEffect(() => {
+        if (cameraCaptureVisible || !openLibraryAfterCameraCloseRef.current) {
+            return undefined;
+        }
+
+        openLibraryAfterCameraCloseRef.current = false;
+
+        console.log("[CameraLibrary] camera modal closed, scheduling library picker...");
+
+        const interactionTask = InteractionManager.runAfterInteractions(() => {
+            openLibraryTimerRef.current = setTimeout(async () => {
+                openLibraryTimerRef.current = null;
+
+                try {
+                    console.log("[CameraLibrary] opening ImagePicker.launchImageLibraryAsync...");
+                    await pickMediaFromLibrary();
+                    console.log("[CameraLibrary] pickMediaFromLibrary finished.");
+                } catch (error) {
+                    console.log("[CameraLibrary] pickMediaFromLibrary failed:", error);
+
+                    Alert.alert(
+                        tr("errorTitle", "Something went wrong"),
+                        tr("mediaPickerError", "Could not select the media. Please try again.")
+                    );
+                }
+            }, Platform.OS === "android" ? 450 : 650);
+        });
+
+        return () => {
+            if (typeof interactionTask?.cancel === "function") {
+                interactionTask.cancel();
+            }
+
+            if (openLibraryTimerRef.current) {
+                clearTimeout(openLibraryTimerRef.current);
+                openLibraryTimerRef.current = null;
+            }
+        };
+    }, [cameraCaptureVisible, pickMediaFromLibrary]);
 
     // const {
     //     selectedScannedDocument,
@@ -598,6 +2632,7 @@ export default function IndividualChatScreen({ navigation, route }) {
     //     tr,
     //     addMessages,
     //     cancelVoiceRecordingIfActive,
+    //     onSendScannedDocument: handleSendMediaMessage,
     // });
 
     const openAttachMenu = async () => {
@@ -646,7 +2681,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                 time: tr("now", "Now"),
             };
 
-            addMessages([newDocumentMessage]);
+            await handleSendMediaMessage(newDocumentMessage);
         } catch (error) {
             console.log("Document picker error:", error);
 
@@ -790,8 +2825,138 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
     };
 
+    const handleMessageReply = (message) => {
+        setReplyingToMessage(message);
+
+        setTimeout(() => {
+            scrollToBottom(true);
+        }, 120);
+    };
+
+    const handleCopyMessage = async (message) => {
+        const textToCopy = getMessagePreviewText(message, tr);
+
+        if (!textToCopy) {
+            Alert.alert(
+                tr("copyUnavailableTitle", "Copy unavailable"),
+                tr("copyUnavailableMessage", "There is no text to copy from this message.")
+            );
+            return;
+        }
+
+        try {
+            await Clipboard.setStringAsync(textToCopy);
+
+            showCopyToast();
+        } catch (error) {
+            console.log("Copy message error:", error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                tr("copyMessageError", "Could not copy this message. Please try again.")
+            );
+        }
+    };
+
+    const handleDeleteMessage = (message) => {
+        if (!isMessageDeletable(message)) {
+            Alert.alert(
+                tr("deleteUnavailableTitle", "Delete unavailable"),
+                tr("deleteUnavailableMessage", "This message cannot be deleted.")
+            );
+            return;
+        }
+
+        const messageDeleteId = getMessageDeleteId(message);
+
+        Alert.alert(
+            tr("confirmDeleteMessageTitle", "Delete message?"),
+            tr("confirmDeleteMessageBody", "This message will be deleted from the conversation."),
+            [
+                { text: tr("cancel", "Cancel"), style: "cancel" },
+                {
+                    text: tr("delete", "Delete"),
+                    style: "destructive",
+                    onPress: async () => {
+                        const previousMessages = messages;
+
+                        setMessages((prev) =>
+                            prev.filter((item) => String(getMessageDeleteId(item)) !== String(messageDeleteId))
+                        );
+
+                        if (!messageDeleteId) {
+                            return;
+                        }
+
+                        try {
+                            await chatService.deleteMessage(messageDeleteId);
+                        } catch (error) {
+                            console.log("Delete message error:", error);
+                            setMessages(previousMessages);
+
+                            Alert.alert(
+                                tr("errorTitle", "Something went wrong"),
+                                error?.userMessage ||
+                                tr("deleteMessageError", "Could not delete this message. Please try again.")
+                            );
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
+    const handleRetryFailedMessage = async (message) => {
+        if (!message?.isFailed) {
+            return;
+        }
+
+        const retryType = getApiMessageTypeFromLocalMessage(message);
+        const retryAttachment = getRetryAttachmentFromMessage(message);
+        const retryBody = message?.text || message?.caption || message?.body || "";
+        const retryReplyToMessageId =
+            message?.reply_to_message_id ||
+            getValidApiMessageId(message?.replyToMessage) ||
+            null;
+        const retryReplyMessage = message?.replyToMessage || null;
+
+        if (retryType !== 1 && !retryAttachment?.uri) {
+            Alert.alert(
+                tr("retryUnavailableTitle", "Retry unavailable"),
+                tr("retryUnavailableMessage", "This file is no longer available on this device.")
+            );
+            return;
+        }
+
+        setMessageOptionsMessage(null);
+
+        setMessages((prevMessages) =>
+            prevMessages.filter((item) => String(item.id) !== String(message.id))
+        );
+
+        await sendOutgoingChatMessage({
+            type: retryType,
+            body: retryBody,
+            attachment: retryAttachment || undefined,
+            replyToMessageId: retryReplyToMessageId,
+            localReplyMessage: retryReplyMessage,
+        });
+    };
+
+    const handleMessageLongPress = (message) => {
+        setMessageOptionsMessage(message);
+    };
+
     const handleToggleBlockContact = () => {
         setMenuVisible(false);
+
+        if (!conversationId) {
+            Alert.alert(
+                tr("missingConversationTitle", "Conversation not ready"),
+                tr("missingConversationMessage", "Please open a saved conversation before using this action.")
+            );
+            return;
+        }
 
         if (isBlocked) {
             Alert.alert(
@@ -804,7 +2969,23 @@ export default function IndividualChatScreen({ navigation, route }) {
                     { text: tr("cancel", "Cancel"), style: "cancel" },
                     {
                         text: tr("unblock", "Unblock Contact"),
-                        onPress: () => setIsBlocked(false),
+                        onPress: async () => {
+                            try {
+                                setIsMutatingChat(true);
+                                await chatService.unblockConversationCustomer(conversationId);
+                                setIsBlocked(false);
+                            } catch (error) {
+                                console.log("Unblock conversation error:", error);
+
+                                Alert.alert(
+                                    tr("errorTitle", "Something went wrong"),
+                                    error?.userMessage ||
+                                    tr("unblockError", "Could not unblock this contact. Please try again.")
+                                );
+                            } finally {
+                                setIsMutatingChat(false);
+                            }
+                        },
                     },
                 ]
             );
@@ -820,24 +3001,64 @@ export default function IndividualChatScreen({ navigation, route }) {
                 {
                     text: tr("block", "Block Contact"),
                     style: "destructive",
-                    onPress: () => setIsBlocked(true),
+                    onPress: async () => {
+                        try {
+                            setIsMutatingChat(true);
+                            await chatService.blockConversationCustomer(conversationId);
+                            setIsBlocked(true);
+                        } catch (error) {
+                            console.log("Block conversation error:", error);
+
+                            Alert.alert(
+                                tr("errorTitle", "Something went wrong"),
+                                error?.userMessage ||
+                                tr("blockError", "Could not block this contact. Please try again.")
+                            );
+                        } finally {
+                            setIsMutatingChat(false);
+                        }
+                    },
                 },
             ]
         );
     };
 
-    const handleDeleteConversation = () => {
+    const handleClearConversation = () => {
         setMenuVisible(false);
 
         Alert.alert(
-            tr("confirmDeleteTitle", "Delete conversation?"),
-            tr("confirmDeleteMessage", "This will remove the conversation from this device."),
+            tr("confirmClearTitle", "Clear chat?"),
+            tr("confirmClearMessage", "This will clear your local view of this conversation without deleting it for everyone."),
             [
                 { text: tr("cancel", "Cancel"), style: "cancel" },
                 {
-                    text: tr("deleteChat", "Delete Conversation"),
+                    text: tr("clearChat", "Clear Chat"),
                     style: "destructive",
-                    onPress: () => setMessages([]),
+                    onPress: async () => {
+                        const previousMessages = messages;
+
+                        setMessages([]);
+
+                        if (!conversationId) {
+                            return;
+                        }
+
+                        try {
+                            setIsMutatingChat(true);
+                            await chatService.clearConversation(conversationId);
+                        } catch (error) {
+                            console.log("Clear conversation error:", error);
+                            setMessages(previousMessages);
+
+                            Alert.alert(
+                                tr("errorTitle", "Something went wrong"),
+                                error?.userMessage ||
+                                tr("clearConversationError", "Could not clear this chat. Please try again.")
+                            );
+                        } finally {
+                            setIsMutatingChat(false);
+                        }
+                    },
                 },
             ]
         );
@@ -895,6 +3116,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                         onOpenImage={setPreviewMedia}
                         onOpenVideo={setPreviewMedia}
                         onOpenDocument={setPreviewDocument}
+                        onMessageLongPress={handleMessageLongPress}
                     />
 
                     <IndividualChatComposer
@@ -913,6 +3135,8 @@ export default function IndividualChatScreen({ navigation, route }) {
                         onTakePhoto={takePhotoWithCamera}
                         onSend={handleSend}
                         onMicPress={handleMicPress}
+                        replyingToMessage={replyingToMessage}
+                        onCancelReply={() => setReplyingToMessage(null)}
                         onFocusInput={() => {
                             setTimeout(() => {
                                 scrollToBottom(true);
@@ -942,7 +3166,58 @@ export default function IndividualChatScreen({ navigation, route }) {
                     onChangeLanguage={handleChangeLanguage}
                     onChangeTheme={handleChangeTheme}
                     onToggleBlock={handleToggleBlockContact}
-                    onDelete={handleDeleteConversation}
+                    onClear={handleClearConversation}
+                    isMutatingChat={isMutatingChat}
+                    isArabic={isArabic}
+                />
+
+                <MessageOptionsModal
+                    visible={!!messageOptionsMessage}
+                    message={messageOptionsMessage}
+                    previewText={getMessagePreviewText(messageOptionsMessage, tr)}
+                    canDelete={isMessageDeletable(messageOptionsMessage)}
+                    canRetry={messageOptionsMessage?.isFailed === true}
+                    colors={colors}
+                    tr={tr}
+                    isArabic={isArabic}
+                    onClose={() => setMessageOptionsMessage(null)}
+                    onRetry={() => {
+                        const selectedMessage = messageOptionsMessage;
+
+                        if (selectedMessage) {
+                            handleRetryFailedMessage(selectedMessage);
+                        }
+                    }}
+                    onReply={() => {
+                        const selectedMessage = messageOptionsMessage;
+                        setMessageOptionsMessage(null);
+
+                        if (selectedMessage) {
+                            handleMessageReply(selectedMessage);
+                        }
+                    }}
+                    onCopy={() => {
+                        const selectedMessage = messageOptionsMessage;
+                        setMessageOptionsMessage(null);
+
+                        if (selectedMessage) {
+                            handleCopyMessage(selectedMessage);
+                        }
+                    }}
+                    onDelete={() => {
+                        const selectedMessage = messageOptionsMessage;
+                        setMessageOptionsMessage(null);
+
+                        if (selectedMessage) {
+                            handleDeleteMessage(selectedMessage);
+                        }
+                    }}
+                />
+
+                <CopyToast
+                    visible={copyToastVisible}
+                    colors={colors}
+                    tr={tr}
                     isArabic={isArabic}
                 />
 
@@ -952,11 +3227,10 @@ export default function IndividualChatScreen({ navigation, route }) {
                     tr={tr}
                     onClose={handleCloseCameraCapture}
                     onCaptured={handleCameraCaptured}
-                    onOpenLibrary={async () => {
+                    onOpenLibrary={() => {
+                        console.log("[CameraLibrary] library button pressed inside camera.");
+                        openLibraryAfterCameraCloseRef.current = true;
                         handleCloseCameraCapture();
-                        setTimeout(() => {
-                            pickMediaFromLibrary();
-                        }, Platform.OS === "android" ? 180 : 80);
                     }}
                 />
 
@@ -1021,6 +3295,187 @@ export default function IndividualChatScreen({ navigation, route }) {
                 />
             </KeyboardAvoidingView>
         </SafeAreaView>
+    );
+}
+
+function MessageOptionsModal({
+    visible,
+    message,
+    previewText,
+    canDelete,
+    canRetry,
+    colors,
+    tr,
+    isArabic,
+    onClose,
+    onRetry,
+    onReply,
+    onCopy,
+    onDelete,
+}) {
+    if (!visible || !message) {
+        return null;
+    }
+
+    return (
+        <Modal
+            visible={visible}
+            transparent
+            animationType="fade"
+            onRequestClose={onClose}
+            statusBarTranslucent
+            navigationBarTranslucent
+            presentationStyle="overFullScreen"
+        >
+            <Pressable
+                style={[
+                    styles.messageOptionsOverlay,
+                    { backgroundColor: colors.modalOverlay },
+                ]}
+                onPress={onClose}
+            >
+                <Pressable
+                    style={[
+                        styles.messageOptionsCard,
+                        {
+                            backgroundColor: colors.modalCard,
+                            borderColor: colors.border,
+                        },
+                    ]}
+                    onPress={(event) => event.stopPropagation()}
+                >
+                    <Text
+                        style={[
+                            styles.messageOptionsTitle,
+                            { color: colors.text },
+                            getTextDirectionStyle(isArabic),
+                        ]}
+                    >
+                        {tr("messageOptionsTitle", "Message options")}
+                    </Text>
+
+                    {!!previewText && (
+                        <Text
+                            style={[
+                                styles.messageOptionsPreview,
+                                { color: colors.muted },
+                                getTextDirectionStyle(isArabic),
+                            ]}
+                            numberOfLines={2}
+                        >
+                            {previewText}
+                        </Text>
+                    )}
+
+                    {canRetry && (
+                        <TouchableOpacity
+                            style={[
+                                styles.messageOptionsButton,
+                                { backgroundColor: colors.buttonSoft },
+                            ]}
+                            activeOpacity={0.86}
+                            onPress={onRetry}
+                        >
+                            <Text style={[styles.messageOptionsButtonText, { color: colors.primary }]}>
+                                {tr("retry", "Retry")}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                        style={[
+                            styles.messageOptionsButton,
+                            { backgroundColor: colors.buttonSoft },
+                        ]}
+                        activeOpacity={0.86}
+                        onPress={onReply}
+                    >
+                        <Text style={[styles.messageOptionsButtonText, { color: colors.text }]}>
+                            {tr("reply", "Reply")}
+                        </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[
+                            styles.messageOptionsButton,
+                            { backgroundColor: colors.buttonSoft },
+                        ]}
+                        activeOpacity={0.86}
+                        onPress={onCopy}
+                    >
+                        <Text style={[styles.messageOptionsButtonText, { color: colors.text }]}>
+                            {tr("copy", "Copy")}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {canDelete && (
+                        <TouchableOpacity
+                            style={[
+                                styles.messageOptionsButton,
+                                { backgroundColor: colors.buttonSoft },
+                            ]}
+                            activeOpacity={0.86}
+                            onPress={onDelete}
+                        >
+                            <Text
+                                style={[
+                                    styles.messageOptionsButtonText,
+                                    { color: colors.danger },
+                                ]}
+                            >
+                                {tr("delete", "Delete")}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                        style={[
+                            styles.messageOptionsButton,
+                            { backgroundColor: colors.buttonSoft },
+                        ]}
+                        activeOpacity={0.86}
+                        onPress={onClose}
+                    >
+                        <Text style={[styles.messageOptionsButtonText, { color: colors.text }]}>
+                            {tr("cancel", "Cancel")}
+                        </Text>
+                    </TouchableOpacity>
+                </Pressable>
+            </Pressable>
+        </Modal>
+    );
+}
+
+function CopyToast({ visible, colors, tr, isArabic }) {
+    if (!visible) {
+        return null;
+    }
+
+    return (
+        <View pointerEvents="none" style={styles.copyToastWrapper}>
+            <View
+                style={[
+                    styles.copyToastBox,
+                    {
+                        backgroundColor: colors.modalCard,
+                        borderColor: colors.border,
+                    },
+                ]}
+            >
+                <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+
+                <Text
+                    style={[
+                        styles.copyToastText,
+                        { color: colors.text },
+                        getTextDirectionStyle(isArabic),
+                    ]}
+                    numberOfLines={1}
+                >
+                    {tr("copiedMessageShort", "Copied")}
+                </Text>
+            </View>
+        </View>
     );
 }
 
@@ -1443,7 +3898,8 @@ function ChatOptionsModal({
     onChangeLanguage,
     onChangeTheme,
     onToggleBlock,
-    onDelete,
+    onClear,
+    isMutatingChat,
     isArabic,
 }) {
     return (
@@ -1540,6 +3996,7 @@ function ChatOptionsModal({
                             { borderColor: isBlocked ? colors.primary : colors.border },
                         ]}
                         onPress={onToggleBlock}
+                        disabled={isMutatingChat}
                     >
                         <Ionicons
                             name={isBlocked ? "checkmark-circle-outline" : "ban-outline"}
@@ -1564,11 +4021,12 @@ function ChatOptionsModal({
                             styles.dangerRow,
                             { borderColor: colors.border },
                         ]}
-                        onPress={onDelete}
+                        onPress={onClear}
+                        disabled={isMutatingChat}
                     >
-                        <Ionicons name="trash-outline" size={22} color={colors.danger} />
+                        <Ionicons name="trash-bin-outline" size={22} color={colors.danger} />
                         <Text style={[styles.dangerText, { color: colors.danger }]}>
-                            {tr("deleteChat", "Delete Conversation")}
+                            {tr("clearChat", "Clear Chat")}
                         </Text>
                     </TouchableOpacity>
                 </Pressable>
@@ -1796,6 +4254,78 @@ const styles = StyleSheet.create({
         borderWidth: 1,
     },
 
+    messageOptionsOverlay: {
+        flex: 1,
+        justifyContent: "center",
+        alignItems: "center",
+        paddingHorizontal: 22,
+    },
+
+    messageOptionsCard: {
+        width: "100%",
+        maxWidth: 330,
+        borderRadius: 28,
+        borderWidth: 1,
+        paddingHorizontal: 18,
+        paddingTop: 20,
+        paddingBottom: 18,
+        overflow: "hidden",
+    },
+
+    messageOptionsTitle: {
+        fontSize: 18,
+        fontWeight: "900",
+        marginBottom: 10,
+    },
+
+    messageOptionsPreview: {
+        fontSize: 15,
+        lineHeight: 22,
+        fontWeight: "600",
+        marginBottom: 16,
+    },
+
+    messageOptionsButton: {
+        minHeight: 50,
+        borderRadius: 25,
+        alignItems: "center",
+        justifyContent: "center",
+        marginTop: 8,
+        paddingHorizontal: 14,
+    },
+
+    messageOptionsButtonText: {
+        fontSize: 17,
+        fontWeight: "900",
+    },
+
+    copyToastWrapper: {
+        position: "absolute",
+        left: 18,
+        right: 18,
+        bottom: Platform.OS === "ios" ? 118 : 96,
+        alignItems: "center",
+        zIndex: 90,
+        elevation: 90,
+    },
+
+    copyToastBox: {
+        minHeight: 42,
+        maxWidth: 220,
+        borderRadius: 21,
+        borderWidth: 1,
+        paddingHorizontal: 14,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 7,
+    },
+
+    copyToastText: {
+        fontSize: 13,
+        fontWeight: "900",
+    },
+
     attachmentOverlayRoot: {
         ...StyleSheet.absoluteFillObject,
         zIndex: 50,
@@ -1939,4 +4469,4 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: "800",
     },
-});
+}); 

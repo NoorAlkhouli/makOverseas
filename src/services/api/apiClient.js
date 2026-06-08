@@ -85,6 +85,15 @@ const buildUserMessage = ({ status, code, serverMessage, isNetworkError }) => {
         return 'هذا الحساب مرتبط بجهاز آخر. يرجى طلب تفعيل جديد.';
     }
 
+    // Chat / message errors
+    if (code === 'MESSAGE_NOT_DELETABLE') {
+        return 'لا يمكن حذف هذا النوع من الرسائل.';
+    }
+
+    if (code === 'CONVERSATION_BLOCK_FORBIDDEN') {
+        return 'لا تملكين صلاحية حظر أو إلغاء حظر هذه المحادثة.';
+    }
+
     // Channel errors
     if (code === 'ALREADY_FOLLOWING') {
         return 'أنتِ تتابعين هذه القناة مسبقاً.';

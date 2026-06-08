@@ -3,6 +3,7 @@ import { useEvent } from "expo";
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import * as MediaLibrary from "expo-media-library";
+import * as FileSystem from "expo-file-system/legacy";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useRef, useState } from "react";
@@ -62,6 +63,177 @@ const getUriInfo = (uri = "") => {
                 ? `${cleanUri.slice(0, 90)}...${cleanUri.slice(-35)}`
                 : cleanUri,
     };
+};
+
+
+const isRemoteVideoUri = (uri = "") => {
+    const cleanUri = String(uri || "").trim().toLowerCase();
+
+    return cleanUri.startsWith("http://") || cleanUri.startsWith("https://");
+};
+
+const getSafeCachedVideoFileName = (uri = "") => {
+    const cleanUri = String(uri || "").split("?")[0];
+    const lastPart = cleanUri.split("/").filter(Boolean).pop() || `video-${Date.now()}.mp4`;
+    const decodedName = (() => {
+        try {
+            return decodeURIComponent(lastPart);
+        } catch {
+            return lastPart;
+        }
+    })();
+
+    const safeName = decodedName
+        .replace(/[^a-zA-Z0-9._-]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+    if (safeName.includes(".")) {
+        return safeName;
+    }
+
+    return `${safeName || `video-${Date.now()}`}.mp4`;
+};
+
+const getPlayableVideoUri = async (uri = "") => {
+    const cleanUri = String(uri || "").trim();
+
+    if (!cleanUri) {
+        return null;
+    }
+
+    if (!isRemoteVideoUri(cleanUri)) {
+        return cleanUri;
+    }
+
+    const cacheDirectory = FileSystem.cacheDirectory;
+
+    if (!cacheDirectory) {
+        return cleanUri;
+    }
+
+    const targetUri = `${cacheDirectory}${getSafeCachedVideoFileName(cleanUri)}`;
+
+    try {
+        const cachedInfo = await FileSystem.getInfoAsync(targetUri);
+
+        if (cachedInfo.exists) {
+            return targetUri;
+        }
+
+        const downloadResult = await FileSystem.downloadAsync(cleanUri, targetUri);
+
+        return downloadResult?.uri || targetUri;
+    } catch (error) {
+        console.log("[VIDEO_DEBUG] Remote video cache failed", {
+            sourceUriInfo: getUriInfo(cleanUri),
+            message: error?.message,
+            error,
+        });
+
+        return cleanUri;
+    }
+};
+
+
+const isRemoteMediaUri = (uri = "") => {
+    const cleanUri = String(uri || "").trim().toLowerCase();
+
+    return cleanUri.startsWith("http://") || cleanUri.startsWith("https://");
+};
+
+const getMediaSaveExtension = (mediaItem = {}, mediaUri = "") => {
+    const possibleName = String(
+        mediaItem.fileName ||
+        mediaItem.name ||
+        mediaItem.filename ||
+        mediaItem.caption ||
+        mediaUri ||
+        ""
+    ).split("?")[0];
+
+    const dotIndex = possibleName.lastIndexOf(".");
+
+    if (dotIndex !== -1 && dotIndex < possibleName.length - 1) {
+        return possibleName.slice(dotIndex + 1).toLowerCase();
+    }
+
+    if (mediaItem?.type === "video") {
+        return "mp4";
+    }
+
+    return "jpg";
+};
+
+const getSafeMediaCacheName = (mediaItem = {}, mediaUri = "") => {
+    const extension = getMediaSaveExtension(mediaItem, mediaUri);
+    const rawName = String(
+        mediaItem.fileName ||
+        mediaItem.name ||
+        mediaItem.filename ||
+        `chat-media-${Date.now()}.${extension}`
+    );
+
+    const cleanName = rawName
+        .split("?")[0]
+        .replace(/[^a-zA-Z0-9._() -]+/g, "_")
+        .replace(/\s+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+    if (cleanName.toLowerCase().endsWith(`.${extension}`)) {
+        return cleanName;
+    }
+
+    return `${cleanName || `chat-media-${Date.now()}`}.${extension}`;
+};
+
+const ensureLocalMediaUriForSaving = async (mediaItem = {}) => {
+    const mediaUri = getMediaUri(mediaItem);
+
+    if (!mediaUri) {
+        return null;
+    }
+
+    if (!isRemoteMediaUri(mediaUri)) {
+        return mediaUri;
+    }
+
+    const cacheDirectory = FileSystem.cacheDirectory;
+
+    if (!cacheDirectory) {
+        return mediaUri;
+    }
+
+    const safeName = getSafeMediaCacheName(mediaItem, mediaUri);
+    const targetUri = `${cacheDirectory}${safeName}`;
+
+    try {
+        const fileInfo = await FileSystem.getInfoAsync(targetUri);
+
+        if (fileInfo.exists) {
+            videoDebugLog("SaveMediaUsingCachedFile", {
+                sourceUriInfo: getUriInfo(mediaUri),
+                targetUriInfo: getUriInfo(targetUri),
+            });
+
+            return targetUri;
+        }
+
+        videoDebugLog("SaveMediaDownloadStart", {
+            sourceUriInfo: getUriInfo(mediaUri),
+            targetUriInfo: getUriInfo(targetUri),
+        });
+
+        const downloadResult = await FileSystem.downloadAsync(mediaUri, targetUri);
+
+        videoDebugLog("SaveMediaDownloadDone", {
+            downloadedUriInfo: getUriInfo(downloadResult?.uri),
+        });
+
+        return downloadResult?.uri || targetUri;
+    } catch (error) {
+        console.log("Save media download error:", error);
+        throw error;
+    }
 };
 
 const getAssetMediaType = (asset) => {
@@ -222,10 +394,12 @@ export function useIndividualChatMedia({
     tr,
     addMessages,
     cancelVoiceRecordingIfActive,
+    onSendMedia,
 }) {
     const [previewMedia, setPreviewMedia] = useState(null);
     const [selectedMediaToSend, setSelectedMediaToSend] = useState(null);
     const [cameraCaptureVisible, setCameraCaptureVisible] = useState(false);
+    const [isSendingMedia, setIsSendingMedia] = useState(false);
 
     const pickMediaFromLibrary = async () => {
         try {
@@ -354,7 +528,7 @@ export function useIndividualChatMedia({
         setCameraCaptureVisible(false);
     };
 
-    const handleConfirmSendMedia = (finalMedia) => {
+    const handleConfirmSendMedia = async (finalMedia) => {
         const mediaToSend = finalMedia || selectedMediaToSend;
 
         videoDebugLog("handleConfirmSendMedia", {
@@ -369,18 +543,39 @@ export function useIndividualChatMedia({
             keys: mediaToSend ? Object.keys(mediaToSend) : [],
         });
 
-        if (!mediaToSend) return;
+        if (!mediaToSend || isSendingMedia) return;
 
-        addMessages([
-            {
-                ...mediaToSend,
-                id:
-                    mediaToSend.id ||
-                    `${Date.now()}-${mediaToSend.type || "media"}`,
-                time: tr("now", "Now"),
-            },
-        ]);
+        const nextMediaMessage = {
+            ...mediaToSend,
+            id:
+                mediaToSend.id ||
+                `${Date.now()}-${mediaToSend.type || "media"}`,
+            time: tr("now", "Now"),
+        };
+
+        setIsSendingMedia(true);
+
+        // Close the confirm modal immediately so the chat shows the outgoing
+        // message in sending state while the upload continues in the background.
         setSelectedMediaToSend(null);
+
+        try {
+            if (typeof onSendMedia === "function") {
+                await onSendMedia(nextMediaMessage);
+            } else {
+                addMessages([nextMediaMessage]);
+            }
+        } catch (error) {
+            console.log("Send media message error:", error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                error?.userMessage ||
+                tr("sendMediaError", "Could not send this media. Please try again.")
+            );
+        } finally {
+            setIsSendingMedia(false);
+        }
     };
 
     const handleCancelSelectedMedia = () => {
@@ -397,7 +592,7 @@ export function useIndividualChatMedia({
                     tr("saveUnavailableTitle", "Save unavailable"),
                     tr(
                         "saveUnavailableMessage",
-                        "This media cannot be saved from the local demo sample."
+                        "This media cannot be saved because the file link is missing."
                     )
                 );
                 return;
@@ -416,7 +611,26 @@ export function useIndividualChatMedia({
                 return;
             }
 
-            await MediaLibrary.saveToLibraryAsync(mediaUri);
+            const localMediaUri = await ensureLocalMediaUriForSaving(mediaItem);
+
+            if (!localMediaUri) {
+                Alert.alert(
+                    tr("saveUnavailableTitle", "Save unavailable"),
+                    tr(
+                        "saveUnavailableMessage",
+                        "This media cannot be saved because the local file could not be prepared."
+                    )
+                );
+                return;
+            }
+
+            videoDebugLog("SaveMediaToLibrary", {
+                isVideo,
+                originalUriInfo: getUriInfo(mediaUri),
+                localUriInfo: getUriInfo(localMediaUri),
+            });
+
+            await MediaLibrary.saveToLibraryAsync(localMediaUri);
 
             Alert.alert(
                 tr("saved", "Saved"),
@@ -446,6 +660,7 @@ export function useIndividualChatMedia({
         handleConfirmSendMedia,
         handleCancelSelectedMedia,
         handleSaveMediaToDevice,
+        isSendingMedia,
     };
 }
 
@@ -618,6 +833,29 @@ export function ChatCameraCaptureModal({
         onClose?.();
     };
 
+    const handleOpenLibraryPress = () => {
+        console.log("[CameraLibrary] side library button onPress", {
+            isRecording,
+            isBusy,
+            isReady,
+        });
+
+        if (isRecording || isBusy) {
+            return;
+        }
+
+        try {
+            onOpenLibrary?.();
+        } catch (error) {
+            console.log("[CameraLibrary] onOpenLibrary callback error:", error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                tr("mediaPickerError", "Could not select the media. Please try again.")
+            );
+        }
+    };
+
     if (!visible) return null;
 
     return (
@@ -724,7 +962,7 @@ export function ChatCameraCaptureModal({
                             style={styles.cameraSideButton}
                             activeOpacity={0.85}
                             disabled={isRecording || isBusy}
-                            onPress={onOpenLibrary}
+                            onPress={handleOpenLibraryPress}
                         >
                             <Ionicons name="images" size={27} color="#FFFFFF" />
                         </TouchableOpacity>
@@ -821,11 +1059,98 @@ function CircleButton({ icon, onPress, children, style, colors }) {
 
 function VideoLayer({ source, previewMode, colors }) {
     const themeColors = getMediaThemeColors(colors);
-    const player = useVideoPlayer(source || null, (playerInstance) => {
+    const sourceUri = source?.uri || "";
+    const [playableSource, setPlayableSource] = useState(null);
+    const [isPreparingVideo, setIsPreparingVideo] = useState(false);
+    const [videoPrepareFailed, setVideoPrepareFailed] = useState(false);
+
+    const player = useVideoPlayer(null, (playerInstance) => {
         playerInstance.loop = false;
         playerInstance.muted = false;
         playerInstance.timeUpdateEventInterval = 0.25;
     });
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const preparePlayableSource = async () => {
+            if (!sourceUri) {
+                setPlayableSource(null);
+                setIsPreparingVideo(false);
+                setVideoPrepareFailed(false);
+                return;
+            }
+
+            setIsPreparingVideo(true);
+            setVideoPrepareFailed(false);
+            setPlayableSource(null);
+
+            videoDebugLog("VideoLayerPrepareSourceStart", {
+                sourceUriInfo: getUriInfo(sourceUri),
+                isRemote: isRemoteVideoUri(sourceUri),
+                previewMode,
+            });
+
+            try {
+                const playableUri = await getPlayableVideoUri(sourceUri);
+
+                if (!isMounted) {
+                    return;
+                }
+
+                const nextSource = playableUri
+                    ? {
+                        ...(source || {}),
+                        uri: playableUri,
+                    }
+                    : source;
+
+                videoDebugLog("VideoLayerPrepareSourceDone", {
+                    originalSourceUriInfo: getUriInfo(sourceUri),
+                    playableSourceUriInfo: getUriInfo(nextSource?.uri),
+                    usedCachedLocalFile: !!nextSource?.uri && nextSource.uri !== sourceUri,
+                });
+
+                setPlayableSource(nextSource || null);
+            } catch (error) {
+                console.log("Prepare playable video error:", error);
+
+                if (isMounted) {
+                    setVideoPrepareFailed(true);
+                    setPlayableSource(source || null);
+                }
+            } finally {
+                if (isMounted) {
+                    setIsPreparingVideo(false);
+                }
+            }
+        };
+
+        preparePlayableSource();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [sourceUri, previewMode]);
+
+    useEffect(() => {
+        if (!playableSource?.uri) {
+            return;
+        }
+
+        videoDebugLog("VideoLayerReplaceSource", {
+            playableSourceUriInfo: getUriInfo(playableSource.uri),
+            originalSourceUriInfo: getUriInfo(source?.uri),
+        });
+
+        try {
+            if (typeof player.replace === "function") {
+                player.replace(playableSource);
+            }
+        } catch (error) {
+            console.log("Video player replace source error:", error);
+        }
+    }, [player, playableSource?.uri]);
 
     const { isPlaying } = useEvent(player, "playingChange", {
         isPlaying: player.playing,
@@ -840,18 +1165,22 @@ function VideoLayer({ source, previewMode, colors }) {
 
     useEffect(() => {
         videoDebugLog("VideoLayerMountedOrSourceChanged", {
-            sourceUriInfo: getUriInfo(source?.uri),
+            sourceUriInfo: getUriInfo(playableSource?.uri),
+            originalSourceUriInfo: getUriInfo(source?.uri),
             previewMode,
+            isPreparingVideo,
+            videoPrepareFailed,
             playerDuration: player.duration,
             playerCurrentTime: player.currentTime,
             playerPlaying: player.playing,
         });
-    }, [source?.uri, previewMode]);
+    }, [source?.uri, playableSource?.uri, previewMode, isPreparingVideo, videoPrepareFailed]);
 
     useEffect(() => {
         if (duration > 0 || currentTime > 0 || isPlaying) {
             videoDebugLog("VideoLayerPlayerState", {
-                sourceUriInfo: getUriInfo(source?.uri),
+                sourceUriInfo: getUriInfo(playableSource?.uri),
+                originalSourceUriInfo: getUriInfo(source?.uri),
                 isPlaying,
                 currentTime,
                 duration,
@@ -862,11 +1191,18 @@ function VideoLayer({ source, previewMode, colors }) {
 
     const togglePlayback = () => {
         videoDebugLog("VideoLayerTogglePlayback", {
-            sourceUriInfo: getUriInfo(source?.uri),
+            sourceUriInfo: getUriInfo(playableSource?.uri),
+            originalSourceUriInfo: getUriInfo(source?.uri),
+            isPreparingVideo,
+            videoPrepareFailed,
             isPlaying,
             currentTime: player.currentTime,
             duration: player.duration,
         });
+
+        if (!playableSource?.uri || isPreparingVideo) {
+            return;
+        }
 
         if (isPlaying) {
             player.pause();
@@ -885,6 +1221,10 @@ function VideoLayer({ source, previewMode, colors }) {
     };
 
     const seekBy = (offsetSeconds) => {
+        if (!playableSource?.uri || isPreparingVideo) {
+            return;
+        }
+
         if (typeof player.seekBy === "function") {
             player.seekBy(offsetSeconds);
             return;
@@ -900,15 +1240,20 @@ function VideoLayer({ source, previewMode, colors }) {
 
     return (
         <View style={styles.videoLayer}>
-            <VideoView
-                player={player}
-                style={styles.fullMedia}
-                nativeControls={false}
-                contentFit="contain"
-                fullscreenOptions={{ enable: false }}
-                allowsPictureInPicture={false}
-                surfaceType="textureView"
-            />
+            {isPreparingVideo && !playableSource?.uri ? (
+                <ActivityIndicator color={themeColors.text} />
+            ) : (
+                <VideoView
+                    key={playableSource?.uri || sourceUri || "video"}
+                    player={player}
+                    style={styles.fullMedia}
+                    nativeControls={false}
+                    contentFit="contain"
+                    fullscreenOptions={{ enable: false }}
+                    allowsPictureInPicture={false}
+                    surfaceType="textureView"
+                />
+            )}
 
             <View style={styles.videoControlsCenter} pointerEvents="box-none">
                 <TouchableOpacity
@@ -932,12 +1277,16 @@ function VideoLayer({ source, previewMode, colors }) {
                     activeOpacity={0.9}
                     onPress={togglePlayback}
                 >
-                    <Ionicons
-                        name={isPlaying ? "pause" : "play"}
-                        size={previewMode ? 34 : 42}
-                        color={themeColors.text}
-                        style={!isPlaying && styles.playIconOffset}
-                    />
+                    {isPreparingVideo && !playableSource?.uri ? (
+                        <ActivityIndicator color={themeColors.text} />
+                    ) : (
+                        <Ionicons
+                            name={isPlaying ? "pause" : "play"}
+                            size={previewMode ? 34 : 42}
+                            color={themeColors.text}
+                            style={!isPlaying && styles.playIconOffset}
+                        />
+                    )}
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1050,6 +1399,10 @@ export function MediaPreviewModal({
             mediaItemKeys: mediaItem ? Object.keys(mediaItem) : [],
         });
     }, [visible, mediaItem?.id, mediaItem?.uri, mediaItem?.video?.uri, video?.uri]);
+
+    if (!visible) {
+        return null;
+    }
 
     return (
         <Modal
@@ -1183,6 +1536,10 @@ export function MediaConfirmModal({
             mediaItemKeys: mediaItem ? Object.keys(mediaItem) : [],
         });
     }, [visible, mediaItem?.id, mediaItem?.uri, mediaItem?.video?.uri, video?.uri]);
+
+    if (!visible) {
+        return null;
+    }
 
     if (mediaItem?.type === "image") {
         return (

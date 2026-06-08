@@ -1,7 +1,7 @@
 import { StyleSheet } from "react-native";
 
-const RTL_TEXT_REGEX = /[\u0591-\u07FF\uFB1D-\uFDFD\uFE70-\uFEFC]/;
-const LTR_TEXT_REGEX = /[A-Za-z0-9]/;
+const RTL_TEXT_REGEX = /[֑-߿יִ-﷽ﹰ-ﻼ]/;
+const LTR_TEXT_REGEX = /[A-Za-z]/;
 
 export const globalStyles = StyleSheet.create({
     rtlText: {
@@ -68,22 +68,58 @@ export const getInputLanguageStyle = (isArabic) =>
 export const getLanguageButtonPositionStyle = (isArabic) =>
     isArabic ? globalStyles.alignArabic : globalStyles.alignEnglish;
 
-export const getTextInputDirectionFromValue = (value = "", fallbackIsArabic = false) => {
+export const isRTLText = (value = "", fallbackIsArabic = false) => {
     const cleanValue = String(value || "").trim();
 
     if (!cleanValue) {
-        return fallbackIsArabic ? globalStyles.rtlText : globalStyles.ltrText;
+        return fallbackIsArabic;
     }
 
     for (const char of cleanValue) {
         if (RTL_TEXT_REGEX.test(char)) {
-            return globalStyles.rtlText;
+            return true;
         }
 
         if (LTR_TEXT_REGEX.test(char)) {
-            return globalStyles.ltrText;
+            return false;
         }
     }
 
-    return fallbackIsArabic ? globalStyles.rtlText : globalStyles.ltrText;
+    return fallbackIsArabic;
+};
+
+export const getTextInputDirectionFromValue = (
+    value = "",
+    fallbackIsArabic = false
+) => {
+    return isRTLText(value, fallbackIsArabic)
+        ? globalStyles.rtlText
+        : globalStyles.ltrText;
+};
+
+export const getAutoTextDirectionStyle = (
+    value = "",
+    fallbackIsArabic = false
+) => {
+    return isRTLText(value, fallbackIsArabic)
+        ? globalStyles.rtlText
+        : globalStyles.ltrText;
+};
+
+export const getAutoWritingDirectionStyle = (
+    value = "",
+    fallbackIsArabic = false
+) => {
+    return isRTLText(value, fallbackIsArabic)
+        ? globalStyles.rtlWriting
+        : globalStyles.ltrWriting;
+};
+
+export const getAutoRowDirectionStyle = (
+    value = "",
+    fallbackIsArabic = false
+) => {
+    return isRTLText(value, fallbackIsArabic)
+        ? globalStyles.rowReverse
+        : globalStyles.row;
 };

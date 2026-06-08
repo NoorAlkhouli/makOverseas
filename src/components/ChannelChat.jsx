@@ -1,6 +1,5 @@
 import { Feather, MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -23,6 +22,7 @@ import { LANGUAGE_STORAGE_KEY } from "@/src/i18n";
 import channelEvents from "@/src/services/api/channelEvents";
 import channelService from "@/src/services/api/channelService";
 import {
+    getAutoTextDirectionStyle,
     getRowDirectionStyle,
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
@@ -37,7 +37,7 @@ export default function ChannelChat({ navigation, route }) {
     const isArabic = i18n.language === "ar";
     const isSmallScreen = width < 380;
 
-    const { colors, isDark } = useAppTheme();
+    const { colors, isDark, toggleTheme } = useAppTheme();
 
     const styles = useMemo(
         () => createStyles(colors, isSmallScreen, isDark),
@@ -321,6 +321,11 @@ export default function ChannelChat({ navigation, route }) {
         await i18n.changeLanguage(nextLanguage);
     };
 
+    const handleToggleTheme = () => {
+        setMenuOpen(false);
+        toggleTheme();
+    };
+
     const renderContent = () => {
         if (isLoading) {
             return (
@@ -439,6 +444,7 @@ export default function ChannelChat({ navigation, route }) {
                 colors={colors}
                 styles={styles}
                 isArabic={isArabic}
+                isDark={isDark}
                 isFollowing={isFollowing}
                 actionColor={actionColor}
                 isFollowLoading={isFollowLoading}
@@ -447,6 +453,7 @@ export default function ChannelChat({ navigation, route }) {
                 onToggleMenu={() => setMenuOpen((current) => !current)}
                 menuOpen={menuOpen}
                 onToggleLanguage={toggleLanguage}
+                onToggleTheme={handleToggleTheme}
                 onOpenSettings={() => {
                     setMenuOpen(false);
                     navigation.navigate("Settings");
@@ -513,6 +520,7 @@ function ChannelChatHeader({
     colors,
     styles,
     isArabic,
+    isDark,
     isFollowing,
     actionColor,
     isFollowLoading,
@@ -521,6 +529,7 @@ function ChannelChatHeader({
     onToggleMenu,
     menuOpen,
     onToggleLanguage,
+    onToggleTheme,
     onOpenSettings,
     onOpenProfile,
     t,
@@ -531,14 +540,14 @@ function ChannelChatHeader({
 
     return (
         <View style={styles.headerWrapper}>
-            <View style={[styles.headerRow, getRowDirectionStyle(isArabic)]}>
+            <View style={styles.headerRow}>
                 <TouchableOpacity
                     activeOpacity={0.82}
                     style={styles.backButton}
                     onPress={onBack}
                 >
                     <Feather
-                        name={isArabic ? "arrow-right" : "arrow-left"}
+                        name="arrow-left"
                         size={22}
                         color={colors.textPrimary}
                     />
@@ -649,6 +658,24 @@ function ChannelChatHeader({
                                 onPress={onToggleLanguage}
                             />
 
+
+                            <MenuItem
+                                icon={isDark ? "sun" : "moon"}
+                                label={
+                                    isDark
+                                        ? isArabic
+                                            ? "الوضع الفاتح"
+                                            : "Light Mode"
+                                        : isArabic
+                                            ? "الوضع الداكن"
+                                            : "Dark Mode"
+                                }
+                                colors={colors}
+                                styles={styles}
+                                isArabic={isArabic}
+                                onPress={onToggleTheme}
+                            />
+
                             <MenuItem
                                 icon="settings"
                                 label={t("home.menuSettings")}
@@ -698,18 +725,26 @@ function MenuItem({ icon, label, colors, styles, isArabic, onPress }) {
     return (
         <TouchableOpacity
             activeOpacity={0.82}
-            style={[styles.menuItem, getRowDirectionStyle(isArabic)]}
+            style={[
+                styles.menuItem,
+                isArabic ? styles.menuItemArabic : styles.menuItemEnglish,
+            ]}
             onPress={onPress}
         >
             <Feather name={icon} size={17} color={colors.textSecondary} />
 
-            <Text style={[styles.menuText, getTextDirectionStyle(isArabic)]}>
+            <Text
+                style={[
+                    styles.menuText,
+                    isArabic ? styles.menuTextArabic : styles.menuTextEnglish,
+                ]}
+                numberOfLines={1}
+            >
                 {label}
             </Text>
         </TouchableOpacity>
     );
 }
-
 function ChannelPostCard({
     post,
     channel,
@@ -738,7 +773,7 @@ function ChannelPostCard({
                         numberOfLines={1}
                         style={[
                             styles.messageChannelTitle,
-                            getTextDirectionStyle(isArabic),
+                            getAutoTextDirectionStyle(channel.title, isArabic),
                         ]}
                     >
                         {channel.title}
@@ -749,7 +784,7 @@ function ChannelPostCard({
                     <Text
                         style={[
                             styles.postTitle,
-                            getTextDirectionStyle(isArabic),
+                            getAutoTextDirectionStyle(post.title, isArabic),
                         ]}
                     >
                         {post.title}
@@ -768,7 +803,7 @@ function ChannelPostCard({
                     <Text
                         style={[
                             styles.messageText,
-                            getTextDirectionStyle(isArabic),
+                            getAutoTextDirectionStyle(post.body, isArabic),
                         ]}
                     >
                         {post.body}
@@ -776,7 +811,7 @@ function ChannelPostCard({
                 )}
 
                 {!!formattedDate && (
-                    <Text style={styles.messageTime}>{formattedDate}</Text>
+                    <Text style={[styles.messageTime, getAutoTextDirectionStyle(formattedDate, isArabic)]}>{formattedDate}</Text>
                 )}
             </View>
         </View>
@@ -940,22 +975,42 @@ const createStyles = (colors, isSmallScreen, isDark) =>
         },
 
         menuDropdownArabic: {
-            left: 0,
+            right: 0,
         },
 
         menuItem: {
-            flexDirection: "row",
             alignItems: "center",
-            gap: 10,
             paddingHorizontal: 14,
             paddingVertical: 12,
         },
 
+        menuItemArabic: {
+            flexDirection: "row-reverse",
+            justifyContent: "flex-start",
+            gap: 10,
+        },
+
+        menuItemEnglish: {
+            flexDirection: "row",
+            justifyContent: "flex-start",
+            gap: 10,
+        },
+
         menuText: {
-            flex: 1,
             color: colors.textPrimary,
             fontSize: 14,
             fontWeight: "800",
+            flexShrink: 1,
+        },
+
+        menuTextArabic: {
+            textAlign: "right",
+            writingDirection: "rtl",
+        },
+
+        menuTextEnglish: {
+            textAlign: "left",
+            writingDirection: "ltr",
         },
 
         patternLayer: {
@@ -1019,6 +1074,14 @@ const createStyles = (colors, isSmallScreen, isDark) =>
             justifyContent: "center",
         },
 
+        messageTitleRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 18,
+        },
+
+
         messageChannelTitle: {
             flex: 1,
             color: colors.blue,
@@ -1030,8 +1093,9 @@ const createStyles = (colors, isSmallScreen, isDark) =>
             color: colors.textPrimary,
             fontSize: isSmallScreen ? 17 : 18,
             lineHeight: isSmallScreen ? 24 : 26,
-            fontWeight: "900",
+            fontWeight: "700",
             marginBottom: 10,
+
         },
 
         messageText: {
@@ -1048,6 +1112,7 @@ const createStyles = (colors, isSmallScreen, isDark) =>
             fontWeight: "700",
             marginTop: 8,
         },
+
         fixedReadOnlyWrapper: {
             position: "absolute",
             left: 0,

@@ -4,11 +4,13 @@ import {
 } from "@/src/styles/globalStyles";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
-import React from "react";
+import * as FileSystem from "expo-file-system/legacy";
+import React, { useEffect, useState } from "react";
 import MediaMessage from "../components/MediaMessage";
 
 import {
     Platform,
+    Pressable,
     ScrollView,
     StyleSheet,
     Text,
@@ -41,6 +43,54 @@ const getLocalizedMessageTime = (time, tr, isArabic) => {
     }
 
     return time;
+};
+
+const RTL_TEXT_REGEX = /[\u0591-\u07FF\uFB1D-\uFDFD\uFE70-\uFEFC]/;
+const LTR_TEXT_REGEX = /[A-Za-z]/;
+
+const isRTLMessageText = (value = "", fallbackIsArabic = false) => {
+    const cleanValue = String(value || "").trim();
+
+    if (!cleanValue) {
+        return fallbackIsArabic;
+    }
+
+    for (const char of cleanValue) {
+        if (RTL_TEXT_REGEX.test(char)) {
+            return true;
+        }
+
+        if (LTR_TEXT_REGEX.test(char)) {
+            return false;
+        }
+    }
+
+    return fallbackIsArabic;
+};
+
+const getMessageTextDirectionStyle = (value = "", fallbackIsArabic = false) => {
+    const isRTL = isRTLMessageText(value, fallbackIsArabic);
+
+    return {
+        textAlign: isRTL ? "right" : "left",
+        writingDirection: isRTL ? "rtl" : "ltr",
+    };
+};
+
+const getReplyPreviewText = (message, tr) => {
+    if (!message) return "";
+
+    if (message.text) return message.text;
+    if (message.caption) return message.caption;
+    if (message.fileName) return message.fileName;
+
+    if (message.type === "image") return tr("imageMessage", "Image");
+    if (message.type === "video") return tr("videoMessage", "Video");
+    if (message.type === "document") return tr("document", "Document");
+    if (message.type === "audio") return tr("voiceMessage", "Voice message");
+    if (message.type === "quote") return tr("quoteSummary", "Quote Summary");
+
+    return tr("message", "Message");
 };
 
 const getFileIconName = (mimeType = "", fileName = "") => {
@@ -98,6 +148,173 @@ const getFileIconName = (mimeType = "", fileName = "") => {
     return "file-document";
 };
 
+const getFirstDocumentAttachment = (item) => {
+    if (Array.isArray(item?.attachments) && item.attachments.length > 0) {
+        return item.attachments[0];
+    }
+
+    if (Array.isArray(item?.raw?.attachments) && item.raw.attachments.length > 0) {
+        return item.raw.attachments[0];
+    }
+
+    return (
+        item?.attachment ||
+        item?.file ||
+        item?.media ||
+        item?.raw?.attachment ||
+        item?.raw?.file ||
+        item?.raw?.media ||
+        null
+    );
+};
+
+const getDocumentUri = (item) => {
+    const attachment = getFirstDocumentAttachment(item);
+
+    return (
+        item?.uri ||
+        item?.url ||
+        item?.file_url ||
+        item?.full_url ||
+        item?.original_url ||
+        item?.path ||
+        attachment?.url ||
+        attachment?.file_url ||
+        attachment?.full_url ||
+        attachment?.original_url ||
+        attachment?.path ||
+        attachment?.uri ||
+        ""
+    );
+};
+
+const decodeFileName = (fileName = "") => {
+    try {
+        return decodeURIComponent(String(fileName || ""));
+    } catch {
+        return String(fileName || "");
+    }
+};
+
+const getDocumentFileName = (item, tr) => {
+    const attachment = getFirstDocumentAttachment(item);
+
+    return decodeFileName(
+        item?.fileName ||
+        item?.name ||
+        item?.file_name ||
+        item?.filename ||
+        item?.original_name ||
+        attachment?.name ||
+        attachment?.file_name ||
+        attachment?.filename ||
+        attachment?.original_name ||
+        tr("attachedFile", "Attached file")
+    );
+};
+
+const getDocumentMimeType = (item) => {
+    const attachment = getFirstDocumentAttachment(item);
+
+    return (
+        item?.mimeType ||
+        item?.mime_type ||
+        attachment?.mime_type ||
+        attachment?.mimeType ||
+        item?.raw?.mime_type ||
+        item?.raw?.mimeType ||
+        "application/octet-stream"
+    );
+};
+
+const getDocumentSize = (item) => {
+    const attachment = getFirstDocumentAttachment(item);
+
+    return (
+        item?.size ||
+        item?.size_bytes ||
+        attachment?.size ||
+        attachment?.file_size ||
+        attachment?.size_bytes ||
+        item?.raw?.size ||
+        item?.raw?.file_size ||
+        item?.raw?.size_bytes ||
+        0
+    );
+};
+
+const getOpenableDocumentItem = (item, tr) => {
+    return {
+        ...item,
+        uri: getDocumentUri(item),
+        fileName: getDocumentFileName(item, tr),
+        mimeType: getDocumentMimeType(item),
+        size: getDocumentSize(item),
+    };
+};
+
+const getMessageSendState = (message) => {
+    const status = String(
+        message?.sendStatus ||
+        message?.status ||
+        message?.delivery_status ||
+        message?.deliveryStatus ||
+        ""
+    ).toLowerCase();
+
+    if (
+        message?.isFailed === true ||
+        message?.failed === true ||
+        status === "failed" ||
+        status === "error"
+    ) {
+        return "failed";
+    }
+
+    if (
+        message?.isSending === true ||
+        message?.sending === true ||
+        status === "sending" ||
+        status === "pending"
+    ) {
+        return "sending";
+    }
+
+    return "sent";
+};
+
+function MessageStatusIcon({ item, colors }) {
+    const sendState = getMessageSendState(item);
+
+    if (sendState === "failed") {
+        return (
+            <Ionicons
+                name="alert-circle"
+                size={15}
+                color={colors.danger}
+            />
+        );
+    }
+
+    if (sendState === "sending") {
+        return (
+            <Ionicons
+                name="time-outline"
+                size={15}
+                color={colors.muted}
+            />
+        );
+    }
+
+    return (
+        <Ionicons
+            name="checkmark-done"
+            size={15}
+            color={colors.blue}
+        />
+    );
+}
+
 export default function IndividualChatMessagesList({
     messages,
     messagesScrollRef,
@@ -113,6 +330,7 @@ export default function IndividualChatMessagesList({
     onOpenImage,
     onOpenVideo,
     onOpenDocument,
+    onMessageLongPress,
 }) {
     return (
         <ScrollView
@@ -144,42 +362,55 @@ export default function IndividualChatMessagesList({
                             time={displayTime}
                             isArabic={isArabic}
                             isCompactScreen={isCompactScreen}
+                            onLongPress={() => onMessageLongPress?.(item)}
                         />
                     );
                 }
 
                 if (item.type === "image" || item.type === "video") {
-                    return (
-                        <MediaMessage
-                            key={item.id}
-                            item={item}
-                            colors={colors}
-                            isCompactScreen={isCompactScreen}
-                            mediaWidth={imageMessageWidth}
-                            mediaHeight={imageMessageHeight}
-                            time={displayTime}
-                            onOpen={() => {
-                                if (item.type === "image") {
-                                    onOpenImage(item);
-                                    return;
-                                }
+                    const handleOpenMedia = () => {
+                        if (item.type === "image") {
+                            onOpenImage?.(item);
+                            return;
+                        }
 
-                                onOpenVideo(item);
-                            }}
-                        />
+                        onOpenVideo?.(item);
+                    };
+
+                    return (
+                        <Pressable
+                            key={item.id}
+                            delayLongPress={260}
+                            onPress={handleOpenMedia}
+                            onLongPress={() => onMessageLongPress?.(item)}
+                            onStartShouldSetResponderCapture={() => true}
+                        >
+                            <MediaMessage
+                                item={item}
+                                colors={colors}
+                                isCompactScreen={isCompactScreen}
+                                mediaWidth={imageMessageWidth}
+                                mediaHeight={imageMessageHeight}
+                                time={displayTime}
+                                onOpen={handleOpenMedia}
+                            />
+                        </Pressable>
                     );
                 }
 
                 if (item.type === "document") {
+                    const documentItem = getOpenableDocumentItem(item, tr);
+
                     return (
                         <DocumentMessage
                             key={item.id}
-                            item={item}
+                            item={documentItem}
                             colors={colors}
                             isCompactScreen={isCompactScreen}
                             tr={tr}
                             time={displayTime}
-                            onOpen={() => onOpenDocument(item)}
+                            onOpen={() => onOpenDocument(documentItem)}
+                            onLongPress={() => onMessageLongPress?.(item)}
                         />
                     );
                 }
@@ -193,6 +424,7 @@ export default function IndividualChatMessagesList({
                             isCompactScreen={isCompactScreen}
                             tr={tr}
                             time={displayTime}
+                            onLongPress={() => onMessageLongPress?.(item)}
                         />
                     );
                 }
@@ -207,7 +439,10 @@ export default function IndividualChatMessagesList({
                             isMine ? styles.myMessageRow : styles.employeeMessageRow,
                         ]}
                     >
-                        <View
+                        <TouchableOpacity
+                            activeOpacity={0.9}
+                            delayLongPress={260}
+                            onLongPress={() => onMessageLongPress?.(item)}
                             style={[
                                 styles.bubble,
                                 isCompactScreen && styles.bubbleCompact,
@@ -219,11 +454,21 @@ export default function IndividualChatMessagesList({
                                 },
                             ]}
                         >
+                            {!!item.replyToMessage && (
+                                <MessageReplyPreview
+                                    message={item.replyToMessage}
+                                    colors={colors}
+                                    tr={tr}
+                                    isArabic={isArabic}
+                                />
+                            )}
+
                             <Text
                                 style={[
                                     styles.messageText,
                                     isCompactScreen && styles.messageTextCompact,
                                     { color: colors.text },
+                                    getMessageTextDirectionStyle(item.text, isArabic),
                                 ]}
                             >
                                 {item.text}
@@ -235,14 +480,13 @@ export default function IndividualChatMessagesList({
                                 </Text>
 
                                 {isMine && (
-                                    <Ionicons
-                                        name="checkmark-done"
-                                        size={15}
-                                        color={colors.blue}
+                                    <MessageStatusIcon
+                                        item={item}
+                                        colors={colors}
                                     />
                                 )}
                             </View>
-                        </View>
+                        </TouchableOpacity>
                     </View>
                 );
             })}
@@ -251,10 +495,49 @@ export default function IndividualChatMessagesList({
 }
 
 
-function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen }) {
+function MessageReplyPreview({ message, colors, tr, isArabic }) {
+    const previewText = getReplyPreviewText(message, tr);
+
+    return (
+        <View
+            style={[
+                styles.messageReplyPreview,
+                {
+                    backgroundColor: colors.cardSoft,
+                    borderLeftColor: colors.primary || colors.blue,
+                },
+            ]}
+        >
+            <Text
+                style={[
+                    styles.messageReplyPreviewTitle,
+                    { color: colors.primary || colors.blue },
+                ]}
+                numberOfLines={1}
+            >
+                {tr("replyingTo", "Replying to message")}
+            </Text>
+
+            <Text
+                style={[
+                    styles.messageReplyPreviewText,
+                    { color: colors.text },
+                    getMessageTextDirectionStyle(previewText, isArabic),
+                ]}
+                numberOfLines={1}
+            >
+                {previewText}
+            </Text>
+        </View>
+    );
+}
+
+function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen, onLongPress }) {
     const isMine = item.side === "me";
-    const fileIconName = getFileIconName(item.mimeType, item.fileName);
-    const fileSizeText = formatFileSize(item.size);
+    const fileName = getDocumentFileName(item, tr);
+    const mimeType = getDocumentMimeType(item);
+    const fileSizeText = formatFileSize(getDocumentSize(item));
+    const fileIconName = getFileIconName(mimeType, fileName);
 
     return (
         <View
@@ -266,6 +549,8 @@ function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen }) {
             <TouchableOpacity
                 activeOpacity={0.85}
                 onPress={onOpen}
+                delayLongPress={260}
+                onLongPress={onLongPress}
                 style={[
                     styles.documentBubble,
                     isCompactScreen && styles.documentBubbleCompact,
@@ -293,17 +578,21 @@ function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen }) {
 
                 <View style={styles.documentInfo}>
                     <Text
-                        style={[styles.documentName, { color: colors.text }]}
+                        style={[
+                            styles.documentName,
+                            { color: colors.text },
+                            getMessageTextDirectionStyle(fileName, false),
+                        ]}
                         numberOfLines={2}
                     >
-                        {item.fileName || tr("attachedFile", "Attached file")}
+                        {fileName}
                     </Text>
 
                     <Text
                         style={[styles.documentMeta, { color: colors.muted }]}
                         numberOfLines={1}
                     >
-                        {fileSizeText || item.mimeType || tr("file", "File")}
+                        {fileSizeText || mimeType || tr("file", "File")}
                     </Text>
 
                     <View style={styles.documentTimeRow}>
@@ -312,10 +601,9 @@ function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen }) {
                         </Text>
 
                         {isMine && (
-                            <Ionicons
-                                name="checkmark-done"
-                                size={15}
-                                color={colors.blue}
+                            <MessageStatusIcon
+                                item={item}
+                                colors={colors}
                             />
                         )}
                     </View>
@@ -325,21 +613,196 @@ function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen }) {
     );
 }
 
-function AudioMessage({ item, colors, isCompactScreen, tr, time }) {
+
+const normalizeAudioUri = (uri = "") => {
+    const cleanUri = String(uri || "").trim();
+
+    if (!cleanUri) {
+        return "";
+    }
+
+    if (
+        cleanUri.startsWith("http://") ||
+        cleanUri.startsWith("https://") ||
+        cleanUri.startsWith("file://") ||
+        cleanUri.startsWith("content://")
+    ) {
+        return encodeURI(cleanUri);
+    }
+
+    return cleanUri;
+};
+
+const getAudioUri = (item) => {
+    const attachment = getFirstDocumentAttachment(item);
+
+    return normalizeAudioUri(
+        item?.uri ||
+        item?.audio?.uri ||
+        item?.voice?.uri ||
+        item?.url ||
+        item?.audio_url ||
+        item?.voice_url ||
+        item?.file_url ||
+        item?.full_url ||
+        item?.original_url ||
+        item?.path ||
+        attachment?.url ||
+        attachment?.audio_url ||
+        attachment?.voice_url ||
+        attachment?.file_url ||
+        attachment?.full_url ||
+        attachment?.original_url ||
+        attachment?.path ||
+        attachment?.uri ||
+        ""
+    );
+};
+
+const isRemoteAudioUri = (uri = "") => {
+    const cleanUri = String(uri || "").trim().toLowerCase();
+
+    return cleanUri.startsWith("http://") || cleanUri.startsWith("https://");
+};
+
+const getSafeAudioCacheName = (item = {}, uri = "") => {
+    const attachment = getFirstDocumentAttachment(item);
+    const rawName = String(
+        item?.fileName ||
+        item?.name ||
+        item?.filename ||
+        attachment?.file_name ||
+        attachment?.fileName ||
+        attachment?.filename ||
+        uri ||
+        `voice-message-${Date.now()}.m4a`
+    ).split("?")[0];
+
+    const lastPart = rawName.split("/").filter(Boolean).pop() || `voice-message-${Date.now()}.m4a`;
+    const decodedName = decodeFileName(lastPart);
+    const safeName = decodedName
+        .replace(/[^a-zA-Z0-9._-]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+    if (safeName.includes(".")) {
+        return safeName;
+    }
+
+    return `${safeName || `voice-message-${Date.now()}`}.m4a`;
+};
+
+
+const getAudioDurationMillisFromStatus = (status = {}) => {
+    const durationValue =
+        status?.durationMillis ||
+        status?.duration_millis ||
+        status?.totalDurationMillis ||
+        status?.total_duration_millis ||
+        status?.duration ||
+        status?.totalDuration ||
+        0;
+
+    const numericDuration = Number(durationValue || 0);
+
+    if (!Number.isFinite(numericDuration) || numericDuration <= 0) {
+        return 0;
+    }
+
+    return numericDuration > 0 && numericDuration < 1000
+        ? Math.round(numericDuration * 1000)
+        : Math.round(numericDuration);
+};
+
+const getPlayableAudioUri = async (item = {}) => {
+    const audioUri = getAudioUri(item);
+
+    if (!audioUri) {
+        return "";
+    }
+
+    if (!isRemoteAudioUri(audioUri)) {
+        return audioUri;
+    }
+
+    const cacheDirectory = FileSystem.cacheDirectory;
+
+    if (!cacheDirectory) {
+        return audioUri;
+    }
+
+    const targetUri = `${cacheDirectory}${getSafeAudioCacheName(item, audioUri)}`;
+
+    try {
+        const cachedInfo = await FileSystem.getInfoAsync(targetUri);
+
+        if (cachedInfo.exists) {
+            return targetUri;
+        }
+
+        const downloadResult = await FileSystem.downloadAsync(audioUri, targetUri);
+
+        return downloadResult?.uri || targetUri;
+    } catch (error) {
+        console.log("Prepare playable audio error:", error);
+        return audioUri;
+    }
+};
+
+function AudioMessage({ item, colors, isCompactScreen, tr, time, onLongPress }) {
     const isMine = item.side === "me";
-    const player = useAudioPlayer({ uri: item.uri });
+    const [playableAudioUri, setPlayableAudioUri] = useState(() => getAudioUri(item));
+    const player = useAudioPlayer(playableAudioUri ? { uri: playableAudioUri } : null);
     const playerStatus = useAudioPlayerStatus(player);
     const isPlaying = !!playerStatus?.playing;
-    const durationText = formatAudioDuration(item.durationMillis || 0);
+    const statusDurationMillis = getAudioDurationMillisFromStatus(playerStatus);
+    const durationText = formatAudioDuration(item.durationMillis || statusDurationMillis || 0);
 
-    const handleTogglePlayback = () => {
-        if (isPlaying) {
-            player.pause();
+    useEffect(() => {
+        let isMounted = true;
+
+        const prepareAudio = async () => {
+            const nextPlayableUri = await getPlayableAudioUri(item);
+
+            if (isMounted) {
+                setPlayableAudioUri(nextPlayableUri);
+            }
+        };
+
+        prepareAudio();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [item?.id, item?.uri, item?.fileName, item?.raw?.id]);
+
+    useEffect(() => {
+        if (!playableAudioUri || typeof player?.replace !== "function") {
             return;
         }
 
-        player.seekTo(0);
-        player.play();
+        try {
+            player.replace({ uri: playableAudioUri });
+        } catch (error) {
+            console.log("Audio player replace source error:", error);
+        }
+    }, [player, playableAudioUri]);
+
+    const handleTogglePlayback = () => {
+        if (!playableAudioUri) {
+            return;
+        }
+
+        try {
+            if (isPlaying) {
+                player.pause();
+                return;
+            }
+
+            player.seekTo(0);
+            player.play();
+        } catch (error) {
+            console.log("Audio playback error:", error);
+        }
     };
 
     return (
@@ -349,7 +812,10 @@ function AudioMessage({ item, colors, isCompactScreen, tr, time }) {
                 isMine ? styles.myMessageRow : styles.employeeMessageRow,
             ]}
         >
-            <View
+            <TouchableOpacity
+                activeOpacity={0.9}
+                delayLongPress={260}
+                onLongPress={onLongPress}
                 style={[
                     styles.audioBubble,
                     isCompactScreen && styles.audioBubbleCompact,
@@ -406,24 +872,26 @@ function AudioMessage({ item, colors, isCompactScreen, tr, time }) {
                             </Text>
 
                             {isMine && (
-                                <Ionicons
-                                    name="checkmark-done"
-                                    size={15}
-                                    color={colors.blue}
+                                <MessageStatusIcon
+                                    item={item}
+                                    colors={colors}
                                 />
                             )}
                         </View>
                     </View>
                 </View>
-            </View>
+            </TouchableOpacity>
         </View>
     );
 }
 
-function QuoteCard({ colors, tr, time, isArabic, isCompactScreen }) {
+function QuoteCard({ colors, tr, time, isArabic, isCompactScreen, onLongPress }) {
     return (
         <View style={styles.quoteRow}>
-            <View
+            <TouchableOpacity
+                activeOpacity={0.9}
+                delayLongPress={260}
+                onLongPress={onLongPress}
                 style={[
                     styles.quoteCard,
                     isCompactScreen && styles.quoteCardCompact,
@@ -600,7 +1068,7 @@ function QuoteCard({ colors, tr, time, isArabic, isCompactScreen }) {
                 <Text style={[styles.quoteTime, { color: colors.muted }]}>
                     {time}
                 </Text>
-            </View>
+            </TouchableOpacity>
         </View>
     );
 }
@@ -700,6 +1168,25 @@ const styles = StyleSheet.create({
         justifyContent: "flex-end",
         alignItems: "center",
         gap: 4,
+    },
+
+    messageReplyPreview: {
+        marginBottom: 8,
+        borderLeftWidth: 4,
+        borderRadius: 10,
+        paddingVertical: 6,
+        paddingHorizontal: 8,
+    },
+
+    messageReplyPreviewTitle: {
+        fontSize: 11,
+        fontWeight: "900",
+    },
+
+    messageReplyPreviewText: {
+        marginTop: 2,
+        fontSize: 12.5,
+        fontWeight: "700",
     },
 
     documentBubble: {
