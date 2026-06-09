@@ -35,6 +35,7 @@ import {
     View,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import ChatPatternBackground from "../../components/ChatPatternBackground";
 import IndividualChatComposer from "../../components/IndividualChatComposer";
 import IndividualChatHeader from "../../components/IndividualChatHeader";
 import IndividualChatMessagesList from "../../components/IndividualChatMessagesList";
@@ -528,6 +529,7 @@ const getVisibleShowConversationMessages = (response) => {
 };
 
 const getShowConversationMessagesMeta = (response) => {
+    const payload = getShowConversationPayload(response);
     const messagesWrapper = getShowConversationMessagesWrapper(response);
 
     return (
@@ -535,9 +537,93 @@ const getShowConversationMessagesMeta = (response) => {
         messagesWrapper?.pagination ||
         messagesWrapper?.data?.meta ||
         messagesWrapper?.data?.pagination ||
+        payload?.meta ||
+        payload?.pagination ||
+        payload?.data?.meta ||
+        payload?.data?.pagination ||
         null
     );
 };
+
+const getPaginationNumberValue = (value) => {
+    if (value === undefined || value === null || value === "") {
+        return null;
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return null;
+    }
+
+    return Math.floor(numericValue);
+};
+
+const getPaginationPageFromUrl = (url = "") => {
+    const cleanUrl = String(url || "").trim();
+
+    if (!cleanUrl) {
+        return null;
+    }
+
+    const pageMatch = cleanUrl.match(/[?&]page=(\d+)/i);
+
+    return getPaginationNumberValue(pageMatch?.[1]);
+};
+
+const getNextOlderMessagesPage = (meta) => {
+    if (!meta || typeof meta !== "object") {
+        return null;
+    }
+
+    const directNextPage =
+        getPaginationNumberValue(meta?.next_page) ||
+        getPaginationNumberValue(meta?.nextPage) ||
+        getPaginationNumberValue(meta?.next);
+
+    if (directNextPage) {
+        return directNextPage;
+    }
+
+    const nextPageFromUrl =
+        getPaginationPageFromUrl(meta?.next_page_url) ||
+        getPaginationPageFromUrl(meta?.nextPageUrl) ||
+        getPaginationPageFromUrl(meta?.links?.next) ||
+        getPaginationPageFromUrl(meta?.next_url) ||
+        getPaginationPageFromUrl(meta?.nextUrl);
+
+    if (nextPageFromUrl) {
+        return nextPageFromUrl;
+    }
+
+    const currentPage =
+        getPaginationNumberValue(meta?.current_page) ||
+        getPaginationNumberValue(meta?.currentPage) ||
+        getPaginationNumberValue(meta?.page);
+
+    const lastPage =
+        getPaginationNumberValue(meta?.last_page) ||
+        getPaginationNumberValue(meta?.lastPage) ||
+        getPaginationNumberValue(meta?.total_pages) ||
+        getPaginationNumberValue(meta?.totalPages);
+
+    if (currentPage && lastPage && currentPage < lastPage) {
+        return currentPage + 1;
+    }
+
+    const perPage =
+        getPaginationNumberValue(meta?.per_page) ||
+        getPaginationNumberValue(meta?.perPage);
+
+    const total = getPaginationNumberValue(meta?.total);
+
+    if (currentPage && perPage && total && currentPage * perPage < total) {
+        return currentPage + 1;
+    }
+
+    return null;
+};
+
 
 const getAttachmentRawName = (attachment) => {
     return String(
@@ -1470,6 +1556,7 @@ export default function IndividualChatScreen({ navigation, route }) {
     const ownSenderIdsRef = useRef(new Set());
     const pendingOutgoingSignaturesRef = useRef(new Map());
     const [isLoadingConversation, setIsLoadingConversation] = useState(false);
+    const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
     const [conversationMessagesMeta, setConversationMessagesMeta] = useState(null);
     const [isBlocked, setIsBlocked] = useState(() => getInitialBlockedState(route, employee));
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
@@ -1482,6 +1569,14 @@ export default function IndividualChatScreen({ navigation, route }) {
     const [isMutatingChat, setIsMutatingChat] = useState(false);
     const openLibraryAfterCameraCloseRef = useRef(false);
     const openLibraryTimerRef = useRef(null);
+    const isLoadingOlderMessagesRef = useRef(false);
+    const messagesScrollOffsetYRef = useRef(0);
+    const messagesContentHeightRef = useRef(0);
+    const shouldKeepScrollPositionAfterOlderLoadRef = useRef(false);
+    const olderMessagesScrollOffsetBeforePrependRef = useRef(0);
+    const olderMessagesContentHeightBeforePrependRef = useRef(0);
+    const suppressAutoScrollAfterOlderLoadUntilRef = useRef(0);
+    const canLoadOlderMessagesRef = useRef(false);
 
     const tr = (key, fallback) =>
         t(`individualChat.${key}`, {
@@ -1576,7 +1671,23 @@ export default function IndividualChatScreen({ navigation, route }) {
     }, []);
 
     useEffect(() => {
+        if (
+            shouldKeepScrollPositionAfterOlderLoadRef.current ||
+            isLoadingOlderMessagesRef.current ||
+            Date.now() < suppressAutoScrollAfterOlderLoadUntilRef.current
+        ) {
+            return;
+        }
+
         setTimeout(() => {
+            if (
+                shouldKeepScrollPositionAfterOlderLoadRef.current ||
+                isLoadingOlderMessagesRef.current ||
+                Date.now() < suppressAutoScrollAfterOlderLoadUntilRef.current
+            ) {
+                return;
+            }
+
             scrollToBottom(true);
         }, 100);
     }, [messages.length]);
@@ -1888,6 +1999,10 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
 
         loadedConversationIdRef.current = normalizedConversationId;
+        canLoadOlderMessagesRef.current = false;
+        messagesContentHeightRef.current = 0;
+        messagesScrollOffsetYRef.current = 0;
+        shouldKeepScrollPositionAfterOlderLoadRef.current = false;
 
         let isMounted = true;
 
@@ -1965,6 +2080,7 @@ export default function IndividualChatScreen({ navigation, route }) {
 
                 setTimeout(() => {
                     scrollToBottom(false);
+                    canLoadOlderMessagesRef.current = true;
                 }, 120);
             } catch (error) {
                 loadedConversationIdRef.current = null;
@@ -1994,28 +2110,164 @@ export default function IndividualChatScreen({ navigation, route }) {
         };
     }, [conversationId]);
 
+    const hasOlderMessages = !!getNextOlderMessagesPage(conversationMessagesMeta);
+
+    const handleMessagesScroll = (event) => {
+        messagesScrollOffsetYRef.current = Number(
+            event?.nativeEvent?.contentOffset?.y || 0
+        );
+    };
+
+    const handleMessagesContentSizeChange = (contentWidth, contentHeight) => {
+        const nextContentHeight = Number(contentHeight || 0);
+        const previousContentHeight = messagesContentHeightRef.current;
+
+        messagesContentHeightRef.current = nextContentHeight;
+
+        if (shouldKeepScrollPositionAfterOlderLoadRef.current) {
+            const baselineContentHeight = olderMessagesContentHeightBeforePrependRef.current;
+            const baselineOffsetY = olderMessagesScrollOffsetBeforePrependRef.current;
+
+            if (baselineContentHeight > 0 && nextContentHeight > baselineContentHeight) {
+                const heightDifference = nextContentHeight - baselineContentHeight;
+                const nextOffsetY = Math.max(0, baselineOffsetY + heightDifference);
+
+                shouldKeepScrollPositionAfterOlderLoadRef.current = false;
+                olderMessagesScrollOffsetBeforePrependRef.current = 0;
+                olderMessagesContentHeightBeforePrependRef.current = 0;
+                suppressAutoScrollAfterOlderLoadUntilRef.current = Date.now() + 900;
+
+                requestAnimationFrame(() => {
+                    messagesScrollRef.current?.scrollTo({
+                        y: nextOffsetY,
+                        animated: false,
+                    });
+                });
+            }
+
+            return;
+        }
+
+        if (
+            isLoadingOlderMessagesRef.current ||
+            Date.now() < suppressAutoScrollAfterOlderLoadUntilRef.current
+        ) {
+            return;
+        }
+
+        scrollToBottom(false);
+    };
+
+    const loadOlderMessages = async () => {
+        const normalizedConversationId = getNormalizedChatValue(conversationId);
+        const nextPage = getNextOlderMessagesPage(conversationMessagesMeta);
+
+        if (
+            !normalizedConversationId ||
+            !nextPage ||
+            isLoadingConversation ||
+            isLoadingOlderMessagesRef.current ||
+            !canLoadOlderMessagesRef.current
+        ) {
+            return;
+        }
+
+        isLoadingOlderMessagesRef.current = true;
+        suppressAutoScrollAfterOlderLoadUntilRef.current = Date.now() + 1200;
+        setIsLoadingOlderMessages(true);
+
+        try {
+            const response = await chatService.showConversation(normalizedConversationId, {
+                page: nextPage,
+                per_page: SHOW_CONVERSATION_MESSAGES_PER_PAGE,
+            });
+
+            const visibleApiMessages = getVisibleShowConversationMessages(response);
+            rememberOwnSenderIdsFromMessages(ownSenderIdsRef, visibleApiMessages);
+
+            const knownMessages = [
+                ...visibleApiMessages,
+                ...(messagesRef.current || []).map((message) => message?.raw || message),
+            ];
+
+            const preparedOlderMessages = sortMessagesOldestToNewest(
+                visibleApiMessages
+            ).map((message) =>
+                normalizeApiMessage(message, tr, isArabic, knownMessages)
+            );
+
+            setMessages((prevMessages) => {
+                const existingMessageIds = new Set(
+                    prevMessages
+                        .map((message) => getComparableMessageId(message))
+                        .filter((messageId) => messageId !== undefined && messageId !== null)
+                        .map((messageId) => String(messageId))
+                );
+
+                const uniqueOlderMessages = preparedOlderMessages.filter((message) => {
+                    const messageId = getComparableMessageId(message);
+
+                    if (messageId === undefined || messageId === null) {
+                        return true;
+                    }
+
+                    return !existingMessageIds.has(String(messageId));
+                });
+
+                if (uniqueOlderMessages.length === 0) {
+                    return prevMessages;
+                }
+
+                olderMessagesScrollOffsetBeforePrependRef.current = messagesScrollOffsetYRef.current;
+                olderMessagesContentHeightBeforePrependRef.current = messagesContentHeightRef.current;
+                shouldKeepScrollPositionAfterOlderLoadRef.current = true;
+                suppressAutoScrollAfterOlderLoadUntilRef.current = Date.now() + 1200;
+
+                return [...uniqueOlderMessages, ...prevMessages];
+            });
+
+            setConversationMessagesMeta(getShowConversationMessagesMeta(response));
+        } catch (error) {
+            shouldKeepScrollPositionAfterOlderLoadRef.current = false;
+            olderMessagesScrollOffsetBeforePrependRef.current = 0;
+            olderMessagesContentHeightBeforePrependRef.current = 0;
+            suppressAutoScrollAfterOlderLoadUntilRef.current = Date.now() + 900;
+            console.log("Load older conversation messages error:", error?.raw || error);
+        } finally {
+            isLoadingOlderMessagesRef.current = false;
+            suppressAutoScrollAfterOlderLoadUntilRef.current = Date.now() + 900;
+            setIsLoadingOlderMessages(false);
+        }
+    };
+
     const handleChangeLanguage = (value) => {
         i18n.changeLanguage(value);
     };
 
     const handleChangeTheme = (value) => {
-        if (typeof setThemeMode === "function") {
-            setThemeMode(value);
+        const nextShouldBeDark = value === "dark";
+
+        setMenuVisible(false);
+
+        if (nextShouldBeDark === isDark) {
             return;
         }
 
-        if (typeof changeTheme === "function") {
-            changeTheme(value);
-            return;
-        }
+        requestAnimationFrame(() => {
+            if (typeof setThemeMode === "function") {
+                setThemeMode(value);
+                return;
+            }
 
-        if (typeof toggleTheme === "function") {
-            const nextShouldBeDark = value === "dark";
+            if (typeof changeTheme === "function") {
+                changeTheme(value);
+                return;
+            }
 
-            if (nextShouldBeDark !== isDark) {
+            if (typeof toggleTheme === "function") {
                 toggleTheme();
             }
-        }
+        });
     };
 
     const addMessages = (nextMessages) => {
@@ -2577,14 +2829,19 @@ export default function IndividualChatScreen({ navigation, route }) {
 
     useEffect(() => {
         if (cameraCaptureVisible || !openLibraryAfterCameraCloseRef.current) {
-            return undefined;
+            return;
         }
 
         openLibraryAfterCameraCloseRef.current = false;
 
         console.log("[CameraLibrary] camera modal closed, scheduling library picker...");
 
-        const interactionTask = InteractionManager.runAfterInteractions(() => {
+        InteractionManager.runAfterInteractions(() => {
+            if (openLibraryTimerRef.current) {
+                clearTimeout(openLibraryTimerRef.current);
+                openLibraryTimerRef.current = null;
+            }
+
             openLibraryTimerRef.current = setTimeout(async () => {
                 openLibraryTimerRef.current = null;
 
@@ -2602,17 +2859,6 @@ export default function IndividualChatScreen({ navigation, route }) {
                 }
             }, Platform.OS === "android" ? 450 : 650);
         });
-
-        return () => {
-            if (typeof interactionTask?.cancel === "function") {
-                interactionTask.cancel();
-            }
-
-            if (openLibraryTimerRef.current) {
-                clearTimeout(openLibraryTimerRef.current);
-                openLibraryTimerRef.current = null;
-            }
-        };
     }, [cameraCaptureVisible, pickMediaFromLibrary]);
 
     // const {
@@ -3099,7 +3345,15 @@ export default function IndividualChatScreen({ navigation, route }) {
                         isVeryCompactScreen={isVeryCompactScreen}
                         isShortScreen={isShortScreen}
                         onOpenMenu={openChatMenu}
+                        conversationId={conversationId}         // أضفتها
+                        targetUserId={targetUserId}             // أضفتها
+                        employeePhone={employee?.phone}         // أضفتها
+                        employeeUsername={employee?.username}   // أضفتها
+                        employeeEmail={employee?.email}         // أضفتها
+                        employeeLocation={employee?.location}   // أضفتها
                     />
+
+                    <ChatPatternBackground topOffset={Platform.OS === "android" ? 76 : 78} />
 
                     <IndividualChatMessagesList
                         messages={messages}
@@ -3112,7 +3366,11 @@ export default function IndividualChatScreen({ navigation, route }) {
                         isKeyboardVisible={isKeyboardVisible}
                         imageMessageWidth={imageMessageWidth}
                         imageMessageHeight={imageMessageHeight}
-                        onContentSizeChange={() => scrollToBottom(false)}
+                        onContentSizeChange={handleMessagesContentSizeChange}
+                        onScroll={handleMessagesScroll}
+                        onLoadOlderMessages={loadOlderMessages}
+                        isLoadingOlderMessages={isLoadingOlderMessages}
+                        hasOlderMessages={hasOlderMessages}
                         onOpenImage={setPreviewMedia}
                         onOpenVideo={setPreviewMedia}
                         onOpenDocument={setPreviewDocument}
@@ -3229,6 +3487,12 @@ export default function IndividualChatScreen({ navigation, route }) {
                     onCaptured={handleCameraCaptured}
                     onOpenLibrary={() => {
                         console.log("[CameraLibrary] library button pressed inside camera.");
+
+                        if (openLibraryTimerRef.current) {
+                            clearTimeout(openLibraryTimerRef.current);
+                            openLibraryTimerRef.current = null;
+                        }
+
                         openLibraryAfterCameraCloseRef.current = true;
                         handleCloseCameraCapture();
                     }}
@@ -4071,6 +4335,7 @@ const styles = StyleSheet.create({
 
     container: {
         flex: 1,
+        position: "relative",
     },
 
     documentPreviewRoot: {

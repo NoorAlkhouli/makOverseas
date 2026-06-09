@@ -17,6 +17,7 @@ import {
     View,
 } from "react-native";
 
+import ChatPatternBackground from "@/src/components/ChatPatternBackground";
 import { appImages } from "@/src/constants/images";
 import { LANGUAGE_STORAGE_KEY } from "@/src/i18n";
 import channelEvents from "@/src/services/api/channelEvents";
@@ -465,16 +466,7 @@ export default function ChannelChat({ navigation, route }) {
                 t={t}
             />
 
-            <View style={styles.patternLayer} pointerEvents="none">
-                <PatternIcon name="package" top={20} left={22} styles={styles} />
-                <PatternIcon name="truck" top={62} right={28} styles={styles} />
-                <PatternIcon name="map-pin" top={138} left={14} styles={styles} />
-                <PatternIcon name="anchor" top={205} right={16} styles={styles} />
-                <PatternIcon name="box" top={305} left={30} styles={styles} />
-                <PatternIcon name="navigation" top={415} right={34} styles={styles} />
-                <PatternIcon name="globe" top={540} left={18} styles={styles} />
-                <PatternIcon name="package" top={640} right={18} styles={styles} />
-            </View>
+            <ChatPatternBackground topOffset={Platform.OS === "android" ? 113 : 127} />
 
             <ScrollView
                 contentContainerStyle={styles.scrollContent}
@@ -818,28 +810,13 @@ function ChannelPostCard({
     );
 }
 
-function PatternIcon({ name, top, left, right, styles }) {
-    return (
-        <Feather
-            name={name}
-            size={32}
-            style={[
-                styles.patternIcon,
-                {
-                    top,
-                    left,
-                    right,
-                },
-            ]}
-        />
-    );
-}
-
 const createStyles = (colors, isSmallScreen, isDark) =>
     StyleSheet.create({
         root: {
             flex: 1,
             backgroundColor: isSmallScreen ? colors.background : colors.background,
+            position: "relative",
+            overflow: "hidden",
         },
 
         headerWrapper: {
@@ -1011,20 +988,6 @@ const createStyles = (colors, isSmallScreen, isDark) =>
         menuTextEnglish: {
             textAlign: "left",
             writingDirection: "ltr",
-        },
-
-        patternLayer: {
-            position: "absolute",
-            top: Platform.OS === "android" ? 113 : 127,
-            right: 0,
-            bottom: 0,
-            left: 0,
-            opacity: 0.34,
-        },
-
-        patternIcon: {
-            position: "absolute",
-            color: colors.borderSoft,
         },
 
         scrollContent: {

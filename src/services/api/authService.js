@@ -1,8 +1,5 @@
 import { apiClient } from './apiClient';
-import { initEcho, disconnectEcho } from '../realtime/echoClient';
-import {
-    subscribeToUserChannel
-} from '../realtime/userRealtimeService';
+import { disconnectEcho } from '../realtime/echoClient';
 
 export const authService = {
     initiate: payload => {
@@ -14,7 +11,6 @@ export const authService = {
 
         const token = response?.data?.token;
         const user = response?.data?.user;
-
         const deviceId = payload?.device_id || payload?.deviceId;
 
         console.log('[Auth] Verify success:', {
@@ -22,55 +18,6 @@ export const authService = {
             userId: user?.id,
             hasDeviceId: Boolean(deviceId),
         });
-
-        if (token && deviceId && user?.id) {
-            try {
-                initEcho({
-                    token,
-                    deviceId,
-                    language: 'en',
-                });
-
-                subscribeToUserChannel({
-                    userId: user.id,
-
-                    onConversationUpdated: payload => {
-                        console.log('[Auth Realtime] Conversation updated:', payload);
-                    },
-
-                    onConversationBlockUpdated: payload => {
-                        console.log('[Auth Realtime] Conversation block updated:', payload);
-                    },
-
-                    onNotificationReceived: payload => {
-                        console.log('[Auth Realtime] Notification received:', payload);
-                    },
-
-                    onNotificationReadStateChanged: payload => {
-                        console.log('[Auth Realtime] Notification read state changed:', payload);
-                    },
-
-                    onCallInitiated: payload => {
-                        console.log('[Auth Realtime] Incoming call:', payload);
-                    },
-
-                    onCallStatusUpdated: payload => {
-                        console.log('[Auth Realtime] Call status updated:', payload);
-                    },
-                });
-            } catch (realtimeError) {
-                console.log('[Auth] Realtime init failed but auth succeeded:', {
-                    message: realtimeError?.message,
-                    error: realtimeError,
-                });
-            }
-        } else {
-            console.log('[Auth] Echo/User channel skipped:', {
-                hasToken: Boolean(token),
-                hasDeviceId: Boolean(deviceId),
-                hasUserId: Boolean(user?.id),
-            });
-        }
 
         return response;
     },
@@ -80,10 +27,15 @@ export const authService = {
             const response = await apiClient.delete('/api/v1/auth/session');
 
             disconnectEcho();
+            await apiClient.clearToken();
+            await apiClient.setDeviceId(null);
 
             return response;
         } catch (error) {
             disconnectEcho();
+            await apiClient.clearToken();
+            await apiClient.setDeviceId(null);
+
             throw error;
         }
     },

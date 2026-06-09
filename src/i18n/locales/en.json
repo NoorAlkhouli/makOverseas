@@ -329,5 +329,27 @@
                 "first": "Air freight capacity is limited on selected routes. Early booking is recommended for urgent cargo."
             }
         }
-    }
+    },
+    "chatProfile": {
+        "edit": "Edit",
+        "media": "Media",
+        "files": "Files",
+        "links": "Links",
+        "voice": "Voice",
+        "call": "Call",
+        "message": "Message",
+        "search": "Search",
+        "more": "More",
+        "mobile": "Mobile",
+        "username": "Username",
+        "email": "Email",
+        "department": "Department",
+        "location": "Location",
+        "searchMessages": "Search messages...",
+        "noSearchResults": "No results found",
+        "lightMode": "Light mode",
+        "darkMode": "Dark mode"
+    },
+    "online": "Online",
+    "blocked": "Blocked"
 }

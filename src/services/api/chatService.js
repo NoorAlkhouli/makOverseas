@@ -57,7 +57,9 @@ const getFileExtension = (fileName = "", uri = "") => {
     return source.slice(dotIndex + 1).toLowerCase();
 };
 
-const normalizeAttachmentMimeType = (attachment = {}) => {
+const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
+    const normalizedMessageType = Number(messageType);
+
     const rawType = String(
         attachment.type ||
         attachment.mimeType ||
@@ -74,6 +76,27 @@ const normalizeAttachmentMimeType = (attachment = {}) => {
 
     const extension = getFileExtension(fileName, attachment.uri);
 
+    if (normalizedMessageType === 8) {
+        if (extension === "m4a") return "audio/x-m4a";
+        if (extension === "mp3") return "audio/mpeg";
+        if (extension === "aac") return "audio/aac";
+        if (extension === "wav") return "audio/wav";
+        if (extension === "ogg" || extension === "oga") return "audio/ogg";
+        if (extension === "webm") return "audio/webm";
+        if (extension === "amr") return "audio/amr";
+
+        if (rawType === "audio/x-m4a") return "audio/x-m4a";
+        if (rawType === "audio/mpeg") return "audio/mpeg";
+        if (rawType === "audio/mp4") return "audio/mp4";
+        if (rawType === "audio/aac") return "audio/aac";
+        if (rawType === "audio/wav") return "audio/wav";
+        if (rawType === "audio/x-wav") return "audio/x-wav";
+        if (rawType === "audio/webm") return "audio/webm";
+        if (rawType === "audio/ogg") return "audio/ogg";
+
+        return "audio/x-m4a";
+    }
+
     if (
         rawType &&
         rawType !== "video" &&
@@ -81,6 +104,10 @@ const normalizeAttachmentMimeType = (attachment = {}) => {
         rawType !== "audio" &&
         rawType !== "document"
     ) {
+        if (extension === "m4a") {
+            return "audio/x-m4a";
+        }
+
         return rawType;
     }
 
@@ -95,7 +122,7 @@ const normalizeAttachmentMimeType = (attachment = {}) => {
     if (extension === "webp") return "image/webp";
     if (extension === "gif") return "image/gif";
 
-    if (extension === "m4a") return "audio/mp4";
+    if (extension === "m4a") return "audio/x-m4a";
     if (extension === "mp3") return "audio/mpeg";
     if (extension === "aac") return "audio/aac";
     if (extension === "wav") return "audio/wav";
@@ -117,12 +144,12 @@ const normalizeAttachmentMimeType = (attachment = {}) => {
 
     if (rawType === "video") return "video/mp4";
     if (rawType === "image") return "image/jpeg";
-    if (rawType === "audio") return "audio/mp4";
+    if (rawType === "audio") return "audio/x-m4a";
 
     return "application/octet-stream";
 };
 
-const buildAttachmentPayload = (attachment = {}) => {
+const buildAttachmentPayload = (attachment = {}, messageType = 1) => {
     if (!attachment?.uri) {
         return null;
     }
@@ -134,7 +161,7 @@ const buildAttachmentPayload = (attachment = {}) => {
             attachment.fileName ||
             attachment.filename ||
             `attachment-${Date.now()}`,
-        type: normalizeAttachmentMimeType(attachment),
+        type: normalizeAttachmentMimeType(attachment, messageType),
     };
 
     console.log("[Chat Upload] Attachment payload:", payload);
@@ -143,6 +170,29 @@ const buildAttachmentPayload = (attachment = {}) => {
 };
 
 export const chatService = {
+    async getProfile() {
+        return apiClient.get("/api/v1/profile");
+    },
+
+    async searchCustomers(phone) {
+        const cleanPhone = String(phone || "").trim();
+
+        if (!cleanPhone) {
+            return {
+                success: true,
+                data: [],
+            };
+        }
+
+        const response = await apiClient.get("/api/v1/customers/search", {
+            phone: cleanPhone,
+        });
+
+        console.log("[Customers Search] Response:", response);
+
+        return response;
+    },
+
     async listConversations(params = {}) {
         return apiClient.get("/api/v1/conversations", normalizeParams(params));
     },
@@ -234,7 +284,7 @@ export const chatService = {
             formData.append("reply_to_message_id", String(replyToMessageId));
         }
 
-        const attachmentPayload = buildAttachmentPayload(attachment);
+        const attachmentPayload = buildAttachmentPayload(attachment, messageType);
 
         if (attachmentPayload) {
             formData.append("attachment", attachmentPayload);
@@ -275,7 +325,7 @@ export const chatService = {
             formData.append("reply_to_message_id", String(replyToMessageId));
         }
 
-        const attachmentPayload = buildAttachmentPayload(attachment);
+        const attachmentPayload = buildAttachmentPayload(attachment, messageType);
 
         if (attachmentPayload) {
             formData.append("attachment", attachmentPayload);

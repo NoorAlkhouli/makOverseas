@@ -1,11 +1,15 @@
 import MainNavBar from "@/src/components/MainNavBar";
+import ChatSearchBox from "@/src/components/ChatSearchBox";
+import ChatUnreadBadge from "@/src/components/ChatUnreadBadge";
+import { BOTTOM_TAB_BADGE_EVENTS } from "@/src/components/BottomTabBar";
 import { appImages } from "@/src/constants/images";
+import { useAppRealtime } from "@/src/context/AppRealtimeProvider";
 import chatService from "@/src/services/api/chatService";
+import employeeService from "@/src/services/api/employeeService";
 import {
     getAutoTextDirectionStyle,
     getRowDirectionStyle,
     getTextDirectionStyle,
-    getTextInputDirectionFromValue,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { Feather } from "@expo/vector-icons";
@@ -15,18 +19,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
+    DeviceEventEmitter,
     ImageBackground,
+    Keyboard,
     Platform,
     RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     TouchableOpacity,
+    useWindowDimensions,
     View,
 } from "react-native";
 
 const CHAT_LIST_PER_PAGE = 20;
+const CUSTOMER_SEARCH_DEBOUNCE_MS = 450;
+const CUSTOMER_PHONE_REGEX = /^[0-9+]+$/;
 
 const filters = [
     "all",
@@ -36,6 +44,7 @@ const filters = [
     "seaFreightSales",
     "landFreightSales",
     "accounting",
+    "employees",
 ];
 
 const getNestedValue = (object, paths, fallback = "") => {
@@ -63,6 +72,16 @@ const getConversationItems = (response) => {
     return [];
 };
 
+const getCustomerItems = (response) => {
+    if (Array.isArray(response)) return response;
+    if (Array.isArray(response?.data)) return response.data;
+    if (Array.isArray(response?.data?.data)) return response.data.data;
+    if (Array.isArray(response?.items)) return response.items;
+    if (Array.isArray(response?.customers)) return response.customers;
+    if (Array.isArray(response?.data?.customers)) return response.data.customers;
+
+    return [];
+};
 
 const getPaginationMeta = (response) => {
     return (
@@ -118,6 +137,268 @@ const normalizeId = (value) => {
     }
 
     return String(value);
+};
+
+const getSafeText = (value, fallback = "") => {
+    if (value === undefined || value === null || value === "") {
+        return fallback;
+    }
+
+    if (typeof value === "object") {
+        return String(value?.name || value?.title || value?.full_name || value?.description || fallback || "");
+    }
+
+    return String(value);
+};
+
+const getProfilePayload = (response) => {
+    return (
+        response?.data?.user ||
+        response?.data?.profile ||
+        response?.data ||
+        response?.user ||
+        response?.profile ||
+        response
+    );
+};
+
+const normalizeRoleValue = (role) => {
+    if (role === undefined || role === null || role === "") {
+        return null;
+    }
+
+    if (typeof role === "object") {
+        return normalizeRoleValue(
+            role.id ||
+            role.value ||
+            role.key ||
+            role.name ||
+            role.slug ||
+            role.title
+        );
+    }
+
+    const roleText = String(role).trim().toLowerCase();
+    const roleNumber = Number(roleText);
+
+    if (Number.isFinite(roleNumber)) {
+        return roleNumber;
+    }
+
+    if (roleText.includes("customer")) {
+        return 1;
+    }
+
+    if (roleText.includes("employee")) {
+        return 2;
+    }
+
+    if (roleText.includes("admin")) {
+        return 3;
+    }
+
+    return null;
+};
+
+const getUserRoleFromProfile = (response) => {
+    const profile = getProfilePayload(response);
+
+    const role = getNestedValue(profile, [
+        "role_id",
+        "roleId",
+        "role",
+        "user_role",
+        "userRole",
+        "type",
+        "user.role_id",
+        "user.roleId",
+        "user.role",
+        "profile.role_id",
+        "profile.roleId",
+        "profile.role",
+    ], null);
+
+    return normalizeRoleValue(role);
+};
+
+const canUserSearchCustomers = (response) => {
+    const role = getUserRoleFromProfile(response);
+
+    return role === 2 || role === 3;
+};
+
+const getEmployeeItems = (response) => {
+    const data =
+        response?.data?.data ||
+        response?.data?.items ||
+        response?.data?.employees ||
+        response?.data ||
+        response?.items ||
+        response?.employees ||
+        response;
+
+    if (!Array.isArray(data)) {
+        return [];
+    }
+
+    const flattenedEmployees = [];
+
+    data.forEach((item) => {
+        const employeesList =
+            item?.employees ||
+            item?.users ||
+            item?.members ||
+            item?.items ||
+            item?.data ||
+            null;
+
+        if (Array.isArray(employeesList)) {
+            employeesList.forEach((employee) => {
+                flattenedEmployees.push({
+                    ...employee,
+                    department:
+                        employee?.department ||
+                        item?.department ||
+                        {
+                            id: item?.id,
+                            name: item?.name || item?.title,
+                            description: item?.description,
+                        },
+                });
+            });
+        } else {
+            flattenedEmployees.push(item);
+        }
+    });
+
+    return flattenedEmployees;
+};
+
+const getEmployeeDepartmentText = (employee) => {
+    const department = getNestedValue(employee, [
+        "department.name",
+        "department.title",
+        "department_name",
+        "department",
+        "user.department.name",
+        "user.department.title",
+        "user.department_name",
+        "user.department",
+        "profile.department.name",
+        "profile.department.title",
+        "profile.department",
+    ]);
+
+    return getSafeText(department);
+};
+
+const normalizeEmployee = (employee, isArabic) => {
+    const targetUserId = normalizeId(
+        employee?.user_id ||
+        employee?.userId ||
+        employee?.user?.id ||
+        employee?.profile?.user_id ||
+        employee?.profile?.id ||
+        employee?.id
+    );
+
+    const name = getSafeText(
+        getNestedValue(
+            employee,
+            [
+                "full_name",
+                "name",
+                "display_name",
+                "user.full_name",
+                "user.name",
+                "profile.full_name",
+                "profile.name",
+            ],
+            isArabic ? "موظف" : "Employee"
+        ),
+        isArabic ? "موظف" : "Employee"
+    );
+
+    const department = getEmployeeDepartmentText(employee);
+
+    const isOnline = Boolean(
+        getNestedValue(employee, [
+            "is_online",
+            "online",
+            "user.is_online",
+            "user.online",
+            "profile.is_online",
+            "profile.online",
+        ], false)
+    );
+
+    return {
+        id: `employee-${String(targetUserId || employee?.id || employee?.uuid || Date.now())}`,
+        conversationId: null,
+        targetUserId,
+        name,
+        department,
+        message: isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation",
+        time: "",
+        unread: 0,
+        status: isOnline ? "online" : "away",
+        isGroup: false,
+        isEmployee: true,
+        raw: employee,
+    };
+};
+
+const normalizeCustomer = (customer, isArabic) => {
+    const targetUserId = normalizeId(
+        customer?.id ||
+        customer?.user_id ||
+        customer?.userId ||
+        customer?.user?.id ||
+        customer?.profile?.id
+    );
+
+    const name = getSafeText(
+        getNestedValue(
+            customer,
+            [
+                "full_name",
+                "name",
+                "display_name",
+                "user.full_name",
+                "user.name",
+                "profile.full_name",
+                "profile.name",
+            ],
+            isArabic ? "عميل" : "Customer"
+        ),
+        isArabic ? "عميل" : "Customer"
+    );
+
+    const phone = getSafeText(
+        getNestedValue(customer, [
+            "phone",
+            "phone_number",
+            "phoneNumber",
+            "mobile",
+            "user.phone",
+            "user.phone_number",
+        ])
+    );
+
+    return {
+        id: `customer-search-${String(targetUserId || customer?.uuid || Date.now())}`,
+        conversationId: null,
+        targetUserId,
+        name,
+        department: isArabic ? "عميل" : "Customer",
+        message: phone || (isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation"),
+        time: "",
+        unread: 0,
+        status: "away",
+        isGroup: false,
+        isCustomerSearchResult: true,
+        raw: customer,
+    };
 };
 
 const getParticipantUserId = (participant) => {
@@ -201,11 +482,61 @@ const getDirectTargetUserId = (conversation) => {
     return normalizeId(targetUserId);
 };
 
+const normalizeDateInput = (value) => {
+    if (!value) return "";
+
+    const cleanValue = String(value).trim();
+
+    if (!cleanValue) return "";
+
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(cleanValue)) {
+        return `${cleanValue.replace(" ", "T")}Z`;
+    }
+
+    return cleanValue;
+};
+
+const getConversationTimeTimestamp = (value) => {
+    const normalizedValue = normalizeDateInput(value);
+
+    if (!normalizedValue) return 0;
+
+    const date = new Date(normalizedValue);
+
+    if (Number.isNaN(date.getTime())) {
+        return 0;
+    }
+
+    return date.getTime();
+};
+
+const getConversationRawTimeValue = (conversation) => {
+    return getNestedValue(conversation, [
+        "latest_message_at",
+        "last_message_at",
+        "latest_message.created_at",
+        "last_message.created_at",
+        "updated_at",
+        "created_at",
+        "time",
+    ]);
+};
+
+const getNewestConversationTimeValue = (firstValue, secondValue) => {
+    const firstTimestamp = getConversationTimeTimestamp(firstValue);
+    const secondTimestamp = getConversationTimeTimestamp(secondValue);
+
+    if (firstTimestamp >= secondTimestamp) {
+        return firstValue;
+    }
+
+    return secondValue;
+};
 
 const formatConversationTime = (value, isArabic) => {
     if (!value) return "";
 
-    const date = new Date(value);
+    const date = new Date(normalizeDateInput(value));
 
     if (Number.isNaN(date.getTime())) {
         return String(value);
@@ -241,7 +572,6 @@ const formatConversationTime = (value, isArabic) => {
         day: "numeric",
     });
 };
-
 
 const getConversationLatestMessageObject = (conversation) => {
     return (
@@ -305,6 +635,21 @@ const getConversationMessageType = (message, attachment) => {
     }
 
     if (
+        rawType === 8 ||
+        ["8", "audio", "voice", "voice_message", "voice-message"].includes(normalizedType) ||
+        mimeType.includes("audio") ||
+        fileName.endsWith(".m4a") ||
+        fileName.endsWith(".mp3") ||
+        fileName.endsWith(".aac") ||
+        fileName.endsWith(".wav") ||
+        fileName.endsWith(".ogg") ||
+        fileName.endsWith(".oga") ||
+        fileName.endsWith(".amr")
+    ) {
+        return "audio";
+    }
+
+    if (
         rawType === 3 ||
         ["3", "file", "document", "attachment"].includes(normalizedType) ||
         !!attachment
@@ -326,6 +671,19 @@ const getConversationMessageType = (message, attachment) => {
             fileName.endsWith(".m4v")
         ) {
             return "video";
+        }
+
+        if (
+            mimeType.includes("audio") ||
+            fileName.endsWith(".m4a") ||
+            fileName.endsWith(".mp3") ||
+            fileName.endsWith(".aac") ||
+            fileName.endsWith(".wav") ||
+            fileName.endsWith(".ogg") ||
+            fileName.endsWith(".oga") ||
+            fileName.endsWith(".amr")
+        ) {
+            return "audio";
         }
 
         return "document";
@@ -386,6 +744,10 @@ const getConversationMessagePreview = (conversation, isArabic) => {
         return isArabic ? "فيديو" : "Video";
     }
 
+    if (messageType === "audio") {
+        return isArabic ? "رسالة صوتية" : "Voice message";
+    }
+
     if (messageType === "document") {
         return isArabic ? "ملف مرفق" : "Attachment";
     }
@@ -416,16 +778,7 @@ const normalizeConversation = (conversation, isArabic) => {
     );
 
     const message = getConversationMessagePreview(conversation, isArabic);
-
-    const time = getNestedValue(conversation, [
-        "latest_message_at",
-        "last_message_at",
-        "latest_message.created_at",
-        "last_message.created_at",
-        "updated_at",
-        "created_at",
-        "time",
-    ]);
+    const time = getConversationRawTimeValue(conversation);
 
     const unread = Number(
         getNestedValue(conversation, ["unread_count", "unread", "unread_messages_count"], 0) || 0
@@ -471,11 +824,189 @@ const normalizeConversation = (conversation, isArabic) => {
     };
 };
 
+const isFallbackConversationName = (name, isArabic) => {
+    const cleanName = String(name || "").trim().toLowerCase();
+
+    if (!cleanName) {
+        return true;
+    }
+
+    return (
+        cleanName === "conversation" ||
+        cleanName === "محادثة" ||
+        cleanName === String(isArabic ? "محادثة" : "conversation").toLowerCase()
+    );
+};
+
+const getRealtimeConversationPayload = (payload) => {
+    return (
+        payload?.conversation ||
+        payload?.data?.conversation ||
+        payload?.conversation_data ||
+        payload?.data?.conversation_data ||
+        payload?.item?.conversation ||
+        payload?.data?.item?.conversation ||
+        payload?.data ||
+        payload
+    );
+};
+
+const getRealtimeMessagePayload = (payload, conversationPayload) => {
+    return (
+        payload?.message ||
+        payload?.data?.message ||
+        payload?.item ||
+        payload?.data?.item ||
+        payload?.latest_message ||
+        payload?.data?.latest_message ||
+        conversationPayload?.latest_message ||
+        conversationPayload?.last_message ||
+        conversationPayload?.message ||
+        null
+    );
+};
+
+const getRealtimeConversationId = (payload, conversationPayload) => {
+    return normalizeId(
+        getNestedValue(conversationPayload, [
+            "id",
+            "conversation_id",
+            "conversationId",
+        ], null) ||
+        getNestedValue(payload, [
+            "conversation_id",
+            "conversationId",
+            "conversation.id",
+            "conversation.conversation_id",
+            "data.conversation_id",
+            "data.conversationId",
+            "data.conversation.id",
+            "message.conversation_id",
+            "message.conversationId",
+            "data.message.conversation_id",
+            "data.message.conversationId",
+        ], null)
+    );
+};
+
+const getRealtimeSenderId = (payload, conversationPayload) => {
+    const message = getRealtimeMessagePayload(payload, conversationPayload);
+
+    return normalizeId(
+        getNestedValue(message, [
+            "sender_id",
+            "senderId",
+            "user_id",
+            "userId",
+            "sender.id",
+            "user.id",
+        ], null) ||
+        getNestedValue(payload, [
+            "sender_id",
+            "senderId",
+            "user_id",
+            "userId",
+            "sender.id",
+            "user.id",
+            "data.sender_id",
+            "data.senderId",
+            "data.sender.id",
+            "data.user_id",
+            "data.userId",
+        ], null)
+    );
+};
+
+const getRealtimeUnreadValue = (payload, conversationPayload) => {
+    const unreadValue =
+        getNestedValue(conversationPayload, [
+            "unread_count",
+            "unread",
+            "unread_messages_count",
+        ], null) ||
+        getNestedValue(payload, [
+            "unread_count",
+            "unread",
+            "unread_messages_count",
+            "data.unread_count",
+            "data.unread",
+            "data.unread_messages_count",
+        ], null);
+
+    if (unreadValue === undefined || unreadValue === null || unreadValue === "") {
+        return null;
+    }
+
+    const numericValue = Number(unreadValue);
+
+    return Number.isFinite(numericValue) ? numericValue : null;
+};
+
+const mergeChatKeepingNewestTime = (existingChat, nextChat, isArabic) => {
+    if (!existingChat) {
+        return nextChat;
+    }
+
+    const existingTimeValue = getConversationRawTimeValue(existingChat?.raw || {});
+    const nextTimeValue = getConversationRawTimeValue(nextChat?.raw || {});
+    const newestTimeValue = getNewestConversationTimeValue(existingTimeValue, nextTimeValue);
+
+    const existingTimestamp = getConversationTimeTimestamp(existingTimeValue);
+    const nextTimestamp = getConversationTimeTimestamp(nextTimeValue);
+    const shouldKeepExistingLatestData =
+        existingTimestamp > nextTimestamp &&
+        (existingChat?.message || existingChat?.raw?.latest_message_preview);
+
+    const mergedRaw = {
+        ...(nextChat?.raw || {}),
+        latest_message_at: newestTimeValue || nextChat?.raw?.latest_message_at || existingChat?.raw?.latest_message_at,
+    };
+
+    if (shouldKeepExistingLatestData) {
+        mergedRaw.latest_message = existingChat?.raw?.latest_message || mergedRaw.latest_message;
+        mergedRaw.latest_message_preview =
+            existingChat?.raw?.latest_message_preview ||
+            existingChat?.message ||
+            mergedRaw.latest_message_preview;
+    }
+
+    return {
+        ...nextChat,
+        message: shouldKeepExistingLatestData
+            ? existingChat.message
+            : nextChat.message,
+        time: formatConversationTime(newestTimeValue, isArabic),
+        raw: mergedRaw,
+    };
+};
+
+const mergePreparedChatsWithCurrent = (currentChats, preparedChats, isArabic) => {
+    return preparedChats.map((preparedChat) => {
+        const existingChat = currentChats.find((chat) => {
+            return (
+                String(chat.conversationId || "") === String(preparedChat.conversationId || "") ||
+                String(chat.id || "") === String(preparedChat.id || "")
+            );
+        });
+
+        return mergeChatKeepingNewestTime(existingChat, preparedChat, isArabic);
+    });
+};
+
 export default function Chat({ navigation }) {
+    const { height: screenHeight } = useWindowDimensions();
     const { t, i18n } = useTranslation();
     const isArabic = i18n.language === "ar";
 
-    const { colors, isDark } = useAppTheme();
+    const {
+        currentUserId,
+        latestConversationEvent,
+        latestConversationBlockEvent,
+    } = useAppRealtime();
+
+    const { colors, isDark, setThemeMode, changeTheme, toggleTheme } = useAppTheme();
+    const [currentIsDark, setCurrentIsDark] = useState(isDark);
+    useEffect(() => { setCurrentIsDark(isDark); }, [isDark]);
     const styles = useMemo(() => createStyles(colors), [colors]);
 
     const [chats, setChats] = useState([]);
@@ -489,14 +1020,136 @@ export default function Chat({ navigation }) {
     const [paginationMeta, setPaginationMeta] = useState(null);
     const [currentPage, setCurrentPage] = useState(1);
     const [errorMessage, setErrorMessage] = useState("");
+    const [canSearchCustomers, setCanSearchCustomers] = useState(false);
+    const [customerSearchResults, setCustomerSearchResults] = useState([]);
+    const [isSearchingCustomers, setIsSearchingCustomers] = useState(false);
+    const [customerSearchError, setCustomerSearchError] = useState("");
+    const [isSearchFocused, setIsSearchFocused] = useState(false);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
 
     const imageSource = isDark ? appImages.splashDark : appImages.splashLight;
     const filtersScrollRef = useRef(null);
     const hasLoadedInitialConversationsRef = useRef(false);
+    const lastHandledConversationEventRef = useRef(null);
+    const lastHandledConversationBlockEventRef = useRef(null);
+
+    const cleanSearch = search.trim();
+    const isCustomerSearchMode = canSearchCustomers && cleanSearch.length > 0;
+    const isValidCustomerPhoneSearch =
+        cleanSearch.length >= 3 &&
+        cleanSearch.length <= 20 &&
+        CUSTOMER_PHONE_REGEX.test(cleanSearch);
+
+    const chatListBottomPadding = useMemo(() => {
+        if (!isSearchFocused) {
+            return 8;
+        }
+
+        const fallbackKeyboardHeight = Math.round(screenHeight * 0.42);
+        const currentKeyboardHeight = keyboardHeight > 0 ? keyboardHeight : fallbackKeyboardHeight;
+        const bottomSafeSpace = Platform.OS === "android" ? 130 : 145;
+        const maxPadding = Math.round(screenHeight * 0.72);
+
+        return Math.min(currentKeyboardHeight + bottomSafeSpace, maxPadding);
+    }, [isSearchFocused, keyboardHeight, screenHeight]);
 
     const unreadTotal = useMemo(() => {
         return chats.reduce((total, chat) => total + Number(chat.unread || 0), 0);
     }, [chats]);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadProfilePermissions = async () => {
+            try {
+                const response = await chatService.getProfile();
+
+                if (!isMounted) {
+                    return;
+                }
+
+                setCanSearchCustomers(canUserSearchCustomers(response));
+            } catch (error) {
+                console.log("Load profile permissions error:", error?.raw || error);
+
+                if (isMounted) {
+                    setCanSearchCustomers(false);
+                }
+            }
+        };
+
+        loadProfilePermissions();
+
+        return () => {
+            isMounted = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        let isCancelled = false;
+        let timeoutId = null;
+
+        const runCustomerSearch = async () => {
+            if (!canSearchCustomers || !cleanSearch) {
+                setCustomerSearchResults([]);
+                setCustomerSearchError("");
+                setIsSearchingCustomers(false);
+                return;
+            }
+
+            if (!isValidCustomerPhoneSearch) {
+                setCustomerSearchResults([]);
+                setCustomerSearchError("");
+                setIsSearchingCustomers(false);
+                return;
+            }
+
+            setIsSearchingCustomers(true);
+            setCustomerSearchError("");
+
+            timeoutId = setTimeout(async () => {
+                try {
+                    const response = await chatService.searchCustomers(cleanSearch);
+
+                    if (isCancelled) {
+                        return;
+                    }
+
+                    const preparedCustomers = getCustomerItems(response).map((customer) =>
+                        normalizeCustomer(customer, isArabic)
+                    );
+
+                    setCustomerSearchResults(preparedCustomers);
+                } catch (error) {
+                    console.log("Search customers error:", error?.raw || error);
+
+                    if (!isCancelled) {
+                        setCustomerSearchResults([]);
+                        setCustomerSearchError(
+                            error?.userMessage ||
+                            (isArabic
+                                ? "صار خطأ أثناء البحث عن العملاء."
+                                : "Something went wrong while searching customers.")
+                        );
+                    }
+                } finally {
+                    if (!isCancelled) {
+                        setIsSearchingCustomers(false);
+                    }
+                }
+            }, CUSTOMER_SEARCH_DEBOUNCE_MS);
+        };
+
+        runCustomerSearch();
+
+        return () => {
+            isCancelled = true;
+
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+        };
+    }, [canSearchCustomers, cleanSearch, isArabic, isValidCustomerPhoneSearch]);
 
     const fetchConversations = useCallback(
         async ({
@@ -520,18 +1173,29 @@ export default function Chat({ navigation }) {
 
                 setErrorMessage("");
 
-                const response = await chatService.listConversations({
-                    page,
-                    perPage: CHAT_LIST_PER_PAGE,
-                });
+                let preparedChats = [];
 
-                const preparedChats = getConversationItems(response).map((conversation) =>
-                    normalizeConversation(conversation, isArabic)
-                );
+                if (activeFilter === "employees") {
+                    const employeesResponse = await employeeService.listEmployees();
+                    preparedChats = getEmployeeItems(employeesResponse).map((employee) =>
+                        normalizeEmployee(employee, isArabic)
+                    );
+                    setPaginationMeta(null);
+                } else {
+                    const response = await chatService.listConversations({
+                        page,
+                        perPage: CHAT_LIST_PER_PAGE,
+                    });
+
+                    preparedChats = getConversationItems(response).map((conversation) =>
+                        normalizeConversation(conversation, isArabic)
+                    );
+                    setPaginationMeta(getPaginationMeta(response));
+                }
 
                 setChats((currentChats) => {
                     if (page === 1) {
-                        return preparedChats;
+                        return mergePreparedChatsWithCurrent(currentChats, preparedChats, isArabic);
                     }
 
                     const existingIds = new Set(currentChats.map((chat) => String(chat.id)));
@@ -542,7 +1206,6 @@ export default function Chat({ navigation }) {
                     return [...currentChats, ...uniqueNewChats];
                 });
 
-                setPaginationMeta(getPaginationMeta(response));
                 setCurrentPage(page);
             } catch (error) {
                 console.log("List conversations error:", error?.raw || error);
@@ -558,8 +1221,187 @@ export default function Chat({ navigation }) {
                 setIsLoadingMore(false);
             }
         },
-        [isArabic]
+        [activeFilter, isArabic]
     );
+
+    const applyRealtimeConversationUpdate = useCallback((payload) => {
+        console.log(
+            "[Chat Realtime] ConversationUpdated RAW PAYLOAD:",
+            JSON.stringify(payload, null, 2)
+        );
+
+        const conversationPayload = getRealtimeConversationPayload(payload);
+        const conversationId = getRealtimeConversationId(payload, conversationPayload);
+        const messagePayload = getRealtimeMessagePayload(payload, conversationPayload);
+
+        console.log(
+            "[Chat Realtime] Conversation payload:",
+            JSON.stringify(conversationPayload, null, 2)
+        );
+
+        console.log(
+            "[Chat Realtime] Message payload:",
+            JSON.stringify(messagePayload, null, 2)
+        );
+
+        console.log("[Chat Realtime] Parsed values:", {
+            conversationId,
+            currentUserId,
+            senderId: getRealtimeSenderId(payload, conversationPayload),
+            unread: getRealtimeUnreadValue(payload, conversationPayload),
+        });
+
+        if (!conversationPayload || typeof conversationPayload !== "object" || !conversationId) {
+            console.log("[Chat Realtime] Missing conversation payload or id. Fetching first page.");
+
+            fetchConversations({ page: 1 }).catch((error) => {
+                console.log("Realtime conversation fallback fetch error:", error?.raw || error);
+            });
+
+            return;
+        }
+
+        const normalizedConversation = normalizeConversation(conversationPayload, isArabic);
+        const senderId = getRealtimeSenderId(payload, conversationPayload);
+        const unreadFromPayload = getRealtimeUnreadValue(payload, conversationPayload);
+        const hasUnreadFromPayload = unreadFromPayload !== null;
+        const isOwnMessage =
+            currentUserId &&
+            senderId &&
+            String(senderId) === String(currentUserId);
+
+        setChats((currentChats) => {
+            const existingIndex = currentChats.findIndex((chat) => {
+                return (
+                    String(chat.conversationId || "") === String(conversationId) ||
+                    String(chat.id || "") === String(conversationId)
+                );
+            });
+
+            const existingChat = existingIndex >= 0 ? currentChats[existingIndex] : null;
+
+            if (existingIndex === -1) {
+                console.log(
+                    "[Chat Realtime] Conversation does not exist locally. Fetching first page instead of adding fallback chat:",
+                    conversationId
+                );
+
+                setTimeout(() => {
+                    fetchConversations({ page: 1 }).catch((error) => {
+                        console.log("Realtime new conversation fetch error:", error?.raw || error);
+                    });
+                }, 50);
+
+                return currentChats;
+            }
+
+            const previousUnread = Number(existingChat?.unread || 0);
+
+            const nextUnread = hasUnreadFromPayload
+                ? unreadFromPayload
+                : isOwnMessage
+                    ? previousUnread
+                    : previousUnread;
+
+            const shouldKeepExistingName =
+                existingChat?.name &&
+                isFallbackConversationName(normalizedConversation.name, isArabic);
+
+            const shouldKeepExistingDepartment =
+                existingChat?.department &&
+                !normalizedConversation.department;
+
+            const shouldKeepExistingTargetUserId =
+                existingChat?.targetUserId &&
+                !normalizedConversation.targetUserId;
+
+            const shouldKeepExistingRawLatestMessage =
+                existingChat?.raw?.latest_message &&
+                !conversationPayload?.latest_message &&
+                !conversationPayload?.last_message &&
+                !conversationPayload?.message;
+
+            const existingTimeValue = getConversationRawTimeValue(existingChat?.raw || {});
+            const incomingTimeValue = getConversationRawTimeValue(conversationPayload);
+            const newestTimeValue = getNewestConversationTimeValue(
+                existingTimeValue,
+                incomingTimeValue
+            );
+
+            const nextRaw = {
+                ...(existingChat?.raw || {}),
+                ...conversationPayload,
+                latest_message_at:
+                    newestTimeValue ||
+                    conversationPayload?.latest_message_at ||
+                    existingChat?.raw?.latest_message_at,
+            };
+
+            if (shouldKeepExistingRawLatestMessage) {
+                nextRaw.latest_message = existingChat.raw.latest_message;
+            }
+
+            const nextChat = {
+                ...(existingChat || {}),
+                ...normalizedConversation,
+                id: String(normalizedConversation.id || conversationId),
+                conversationId: normalizedConversation.conversationId || conversationId,
+
+                name: shouldKeepExistingName
+                    ? existingChat.name
+                    : normalizedConversation.name,
+
+                department: shouldKeepExistingDepartment
+                    ? existingChat.department
+                    : normalizedConversation.department,
+
+                targetUserId: shouldKeepExistingTargetUserId
+                    ? existingChat.targetUserId
+                    : normalizedConversation.targetUserId,
+
+                unread: Number.isFinite(nextUnread) ? nextUnread : previousUnread,
+                time: formatConversationTime(newestTimeValue, isArabic),
+
+                raw: nextRaw,
+            };
+
+            console.log("[Chat Realtime] Existing chat:", existingChat);
+            console.log("[Chat Realtime] Next chat:", nextChat);
+
+            const remainingChats = currentChats.filter((_, index) => index !== existingIndex);
+
+            return [nextChat, ...remainingChats];
+        });
+    }, [currentUserId, fetchConversations, isArabic]);
+
+    useEffect(() => {
+        if (!latestConversationEvent) {
+            return;
+        }
+
+        if (lastHandledConversationEventRef.current === latestConversationEvent) {
+            return;
+        }
+
+        lastHandledConversationEventRef.current = latestConversationEvent;
+        applyRealtimeConversationUpdate(latestConversationEvent);
+    }, [applyRealtimeConversationUpdate, latestConversationEvent]);
+
+    useEffect(() => {
+        if (!latestConversationBlockEvent) {
+            return;
+        }
+
+        if (lastHandledConversationBlockEventRef.current === latestConversationBlockEvent) {
+            return;
+        }
+
+        lastHandledConversationBlockEventRef.current = latestConversationBlockEvent;
+
+        fetchConversations({ page: 1 }).catch((error) => {
+            console.log("Conversation block realtime refresh error:", error?.raw || error);
+        });
+    }, [fetchConversations, latestConversationBlockEvent]);
 
     useFocusEffect(
         useCallback(() => {
@@ -581,21 +1423,53 @@ export default function Chat({ navigation }) {
     );
 
     const visibleChats = useMemo(() => {
-        const searchText = search.trim().toLowerCase();
+        if (isCustomerSearchMode) {
+            return customerSearchResults.map((customerResult) => {
+                const matchedChat = chats.find((chat) => {
+                    const sameTargetUser =
+                        customerResult.targetUserId &&
+                        chat.targetUserId &&
+                        String(customerResult.targetUserId) === String(chat.targetUserId);
+
+                    const sameName =
+                        customerResult.name &&
+                        chat.name &&
+                        String(customerResult.name).trim().toLowerCase() ===
+                        String(chat.name).trim().toLowerCase();
+
+                    return sameTargetUser || sameName;
+                });
+
+                if (!matchedChat) {
+                    return customerResult;
+                }
+
+                return {
+                    ...customerResult,
+                    ...matchedChat,
+
+                    id: customerResult.id,
+                    name: customerResult.name || matchedChat.name,
+                    targetUserId: customerResult.targetUserId || matchedChat.targetUserId,
+                    conversationId: matchedChat.conversationId,
+                    unread: matchedChat.unread,
+                    message: matchedChat.message,
+                    time: matchedChat.time,
+                    department: matchedChat.department || customerResult.department,
+                    status: matchedChat.status,
+                    raw: matchedChat.raw || customerResult.raw,
+
+                    isCustomerSearchResult: true,
+                };
+            });
+        }
 
         return chats.filter((chat) => {
-            const chatName = String(chat.name || "").toLowerCase();
             const chatDepartment = String(chat.department || "").toLowerCase();
-            const chatMessage = String(chat.message || "").toLowerCase();
-
-            const matchesSearch =
-                !searchText ||
-                chatName.includes(searchText) ||
-                chatDepartment.includes(searchText) ||
-                chatMessage.includes(searchText);
 
             const matchesFilter =
                 activeFilter === "all" ||
+                (activeFilter === "employees" && chat.isEmployee === true) ||
                 (activeFilter === "groups" && chat.isGroup === true) ||
                 (activeFilter === "sales" && chatDepartment.includes("sales")) ||
                 (activeFilter === "airFreightSales" && chatDepartment.includes("air")) ||
@@ -603,11 +1477,19 @@ export default function Chat({ navigation }) {
                 (activeFilter === "landFreightSales" && chatDepartment.includes("land")) ||
                 (activeFilter === "accounting" && chatDepartment.includes("accounting"));
 
-            return matchesSearch && matchesFilter;
+            return matchesFilter;
         });
-    }, [activeFilter, chats, search]);
+    }, [activeFilter, chats, customerSearchResults, isCustomerSearchMode]);
 
     const canLoadMore = useMemo(() => {
+        if (isCustomerSearchMode) {
+            return false;
+        }
+
+        if (activeFilter === "employees") {
+            return false;
+        }
+
         if (!paginationMeta) {
             return false;
         }
@@ -629,7 +1511,7 @@ export default function Chat({ navigation }) {
         );
 
         return current < last;
-    }, [currentPage, paginationMeta]);
+    }, [activeFilter, currentPage, isCustomerSearchMode, paginationMeta]);
 
     const handleLoadMore = () => {
         if (isLoading || isLoadingMore || !canLoadMore) {
@@ -652,9 +1534,27 @@ export default function Chat({ navigation }) {
         }, 100);
     }, [isArabic]);
 
+    useEffect(() => {
+        const keyboardShowSubscription = Keyboard.addListener("keyboardDidShow", (event) => {
+            setKeyboardHeight(event?.endCoordinates?.height || 0);
+        });
+
+        const keyboardHideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+            setKeyboardHeight(0);
+            setIsSearchFocused(false);
+        });
+
+        return () => {
+            keyboardShowSubscription.remove();
+            keyboardHideSubscription.remove();
+        };
+    }, []);
+
     const toggleLanguage = () => {
         const nextLanguage = isArabic ? "en" : "ar";
-        i18n.changeLanguage(nextLanguage);
+        requestAnimationFrame(() => {
+            i18n.changeLanguage(nextLanguage);
+        });
     };
 
     const handleSelectChats = () => {
@@ -673,6 +1573,8 @@ export default function Chat({ navigation }) {
 
         try {
             await chatService.markAllConversationsRead();
+
+            DeviceEventEmitter.emit(BOTTOM_TAB_BADGE_EVENTS.CLEAR_ALL_CHAT);
         } catch (error) {
             console.log("Mark all conversations read error:", error?.raw || error);
             setChats(previousChats);
@@ -699,6 +1601,10 @@ export default function Chat({ navigation }) {
             chatService.markConversationRead(selectedChat.conversationId).catch((error) => {
                 console.log("Mark conversation read error:", error?.raw || error);
             });
+
+            DeviceEventEmitter.emit(BOTTOM_TAB_BADGE_EVENTS.CLEAR_CHAT_CONVERSATION, {
+                conversationId: selectedChat.conversationId,
+            });
         }
 
         navigation.navigate("IndividualChat", {
@@ -708,6 +1614,16 @@ export default function Chat({ navigation }) {
             target_user_id: selectedChat.targetUserId,
             isGroup: selectedChat.isGroup,
             is_group: selectedChat.isGroup,
+            customer: selectedChat.isCustomerSearchResult
+                ? {
+                    id: selectedChat.targetUserId,
+                    user_id: selectedChat.targetUserId,
+                    target_user_id: selectedChat.targetUserId,
+                    name: selectedChat.name,
+                    full_name: selectedChat.name,
+                    avatar: selectedChat.raw?.avatar,
+                }
+                : undefined,
             employee: {
                 id: selectedChat.targetUserId,
                 user_id: selectedChat.targetUserId,
@@ -721,9 +1637,25 @@ export default function Chat({ navigation }) {
         });
     };
 
-    const handleScroll = (event) => {
+    const handleChatListScroll = (event) => {
         const y = event.nativeEvent.contentOffset.y;
         setShowNavTitle(y > 45);
+
+        const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+        const distanceFromBottom =
+            contentSize.height - (layoutMeasurement.height + contentOffset.y);
+
+        if (distanceFromBottom < 80) {
+            handleLoadMore();
+        }
+    };
+
+    const handleRetryCustomerSearch = () => {
+        const currentSearch = cleanSearch;
+        setSearch("");
+        requestAnimationFrame(() => {
+            setSearch(currentSearch);
+        });
     };
 
     const chatMenuItems = [
@@ -746,6 +1678,50 @@ export default function Chat({ navigation }) {
     ];
 
     const renderChatCards = () => {
+        if (isCustomerSearchMode && !isValidCustomerPhoneSearch) {
+            return (
+                <View style={styles.loadingBox}>
+                    <Feather name="search" size={30} color={colors.textMuted} />
+                    <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
+                        {isArabic
+                            ? "اكتبي 3 أرقام على الأقل للبحث عن عميل."
+                            : "Enter at least 3 digits to search for a customer."}
+                    </Text>
+                </View>
+            );
+        }
+
+        if (isCustomerSearchMode && isSearchingCustomers) {
+            return (
+                <View style={styles.loadingBox}>
+                    <ActivityIndicator size="large" color={colors.primary} />
+                    <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
+                        {isArabic ? "جاري البحث عن العملاء..." : "Searching customers..."}
+                    </Text>
+                </View>
+            );
+        }
+
+        if (isCustomerSearchMode && customerSearchError) {
+            return (
+                <View style={styles.loadingBox}>
+                    <Feather name="alert-circle" size={30} color={colors.danger} />
+                    <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
+                        {customerSearchError}
+                    </Text>
+                    <TouchableOpacity
+                        activeOpacity={0.85}
+                        style={styles.retryButton}
+                        onPress={handleRetryCustomerSearch}
+                    >
+                        <Text style={styles.retryButtonText}>
+                            {isArabic ? "إعادة المحاولة" : "Try again"}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+            );
+        }
+
         if (isLoading) {
             return (
                 <View style={styles.loadingBox}>
@@ -782,7 +1758,13 @@ export default function Chat({ navigation }) {
                 <View style={styles.loadingBox}>
                     <Feather name="message-circle" size={30} color={colors.textMuted} />
                     <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
-                        {isArabic ? "لا توجد محادثات حالياً." : "No conversations yet."}
+                        {isCustomerSearchMode
+                            ? isArabic
+                                ? "لا يوجد عملاء بهذا الرقم."
+                                : "No customers found for this phone."
+                            : isArabic
+                                ? "لا توجد محادثات حالياً."
+                                : "No conversations yet."}
                     </Text>
                 </View>
             );
@@ -868,11 +1850,10 @@ export default function Chat({ navigation }) {
                             </Text>
                         </View>
 
-                        {chat.unread > 0 && (
-                            <View style={styles.unreadBadge}>
-                                <Text style={styles.unreadText}>{chat.unread}</Text>
-                            </View>
-                        )}
+                        <ChatUnreadBadge
+                            count={chat.unread}
+                            colors={colors}
+                        />
                     </TouchableOpacity>
                 ))}
 
@@ -919,21 +1900,7 @@ export default function Chat({ navigation }) {
                         menuItems={chatMenuItems}
                     />
 
-                    <ScrollView
-                        contentContainerStyle={styles.scrollContent}
-                        showsVerticalScrollIndicator={false}
-                        keyboardShouldPersistTaps="handled"
-                        onScroll={handleScroll}
-                        scrollEventThrottle={16}
-                        refreshControl={
-                            <RefreshControl
-                                refreshing={isRefreshing}
-                                onRefresh={() => fetchConversations({ page: 1, refreshLoading: true })}
-                                tintColor={colors.primary}
-                                colors={[colors.primary]}
-                            />
-                        }
-                    >
+                    <View style={styles.content}>
                         <View style={styles.headerBox}>
                             <Text style={[styles.title, getTextDirectionStyle(isArabic)]}>
                                 {t("chat.title")}
@@ -944,26 +1911,15 @@ export default function Chat({ navigation }) {
                             </Text>
                         </View>
 
-                        <View style={[styles.searchBox, getRowDirectionStyle(isArabic)]}>
-                            <Feather name="search" size={21} color={colors.textMuted} />
-
-                            <TextInput
-                                value={search}
-                                onChangeText={setSearch}
-                                placeholder={t("chat.searchPlaceholder")}
-                                placeholderTextColor={colors.textMuted}
-                                style={[
-                                    styles.searchInput,
-                                    getTextInputDirectionFromValue(search, isArabic),
-                                ]}
-                                autoCorrect={false}
-                                autoCapitalize="none"
-                            />
-
-                            <TouchableOpacity activeOpacity={0.85} style={styles.filterButton}>
-                                <Feather name="sliders" size={20} color={colors.textPrimary} />
-                            </TouchableOpacity>
-                        </View>
+                        <ChatSearchBox
+                            canSearchCustomers={canSearchCustomers}
+                            search={search}
+                            setSearch={setSearch}
+                            isArabic={isArabic}
+                            colors={colors}
+                            keyboardHeight={keyboardHeight}
+                            setIsSearchFocused={setIsSearchFocused}
+                        />
 
                         <ScrollView
                             ref={filtersScrollRef}
@@ -999,17 +1955,41 @@ export default function Chat({ navigation }) {
                                                 isActive && styles.filterChipTextActive,
                                             ]}
                                         >
-                                            {t(`chat.filters.${filter}`)}
+                                            {filter === "employees"
+                                                ? isArabic
+                                                    ? "الموظفون"
+                                                    : "Employees"
+                                                : t(`chat.filters.${filter}`)}
                                         </Text>
                                     </TouchableOpacity>
                                 );
                             })}
                         </ScrollView>
 
-                        <View style={styles.chatCardsWrapper}>
-                            {renderChatCards()}
-                        </View>
-                    </ScrollView>
+                        <ScrollView
+                            style={styles.chatListScroll}
+                            contentContainerStyle={[
+                                styles.chatListContent,
+                                { paddingBottom: chatListBottomPadding },
+                            ]}
+                            showsVerticalScrollIndicator={false}
+                            keyboardShouldPersistTaps="handled"
+                            onScroll={handleChatListScroll}
+                            scrollEventThrottle={16}
+                            refreshControl={
+                                <RefreshControl
+                                    refreshing={isRefreshing}
+                                    onRefresh={() => fetchConversations({ page: 1, refreshLoading: true })}
+                                    tintColor={colors.primary}
+                                    colors={[colors.primary]}
+                                />
+                            }
+                        >
+                            <View style={styles.chatCardsWrapper}>
+                                {renderChatCards()}
+                            </View>
+                        </ScrollView>
+                    </View>
                 </View>
             </ImageBackground>
         </View>
@@ -1036,19 +2016,19 @@ const createStyles = (colors) =>
             backgroundColor: colors.overlay,
         },
 
+        content: {
+            flex: 1,
+            paddingHorizontal: 20,
+            paddingTop: Platform.OS === "android" ? 130 : 150,
+            paddingBottom: Platform.OS === "android" ? 120 : 135,
+        },
+
         selectCircle: {
             width: 28,
             height: 28,
             borderRadius: 14,
             alignItems: "center",
             justifyContent: "center",
-        },
-
-        scrollContent: {
-            flexGrow: 1,
-            paddingHorizontal: 20,
-            paddingTop: Platform.OS === "android" ? 130 : 150,
-            paddingBottom: Platform.OS === "android" ? 120 : 135,
         },
 
         headerBox: {
@@ -1069,41 +2049,13 @@ const createStyles = (colors) =>
             fontWeight: "500",
         },
 
-        searchBox: {
-            height: 58,
-            borderRadius: 20,
-            backgroundColor: colors.card,
-            borderWidth: 1,
-            borderColor: colors.border,
-            flexDirection: "row",
-            alignItems: "center",
-            paddingHorizontal: 16,
-            gap: 10,
-            marginBottom: 18,
-        },
-
-        searchInput: {
-            flex: 1,
-            color: colors.textPrimary,
-            fontSize: 16,
-            fontWeight: "600",
-            paddingVertical: 0,
-        },
-
-        filterButton: {
-            width: 42,
-            height: 42,
-            borderRadius: 16,
-            backgroundColor: colors.buttonSoft,
-            alignItems: "center",
-            justifyContent: "center",
-        },
 
         filtersScroll: {
             height: 62,
             maxHeight: 62,
             marginHorizontal: -SCREEN_PADDING,
             marginBottom: 10,
+            flexGrow: 0,
         },
 
         filtersRow: {
@@ -1142,6 +2094,15 @@ const createStyles = (colors) =>
 
         filterChipTextActive: {
             color: colors.textPrimary,
+        },
+
+        chatListScroll: {
+            flex: 1,
+        },
+
+        chatListContent: {
+            flexGrow: 1,
+            paddingBottom: 8,
         },
 
         chatCardsWrapper: {
@@ -1243,21 +2204,6 @@ const createStyles = (colors) =>
             fontWeight: "500",
         },
 
-        unreadBadge: {
-            minWidth: 28,
-            height: 28,
-            borderRadius: 14,
-            backgroundColor: colors.primary,
-            alignItems: "center",
-            justifyContent: "center",
-            paddingHorizontal: 8,
-        },
-
-        unreadText: {
-            color: colors.darkText,
-            fontSize: 13,
-            fontWeight: "900",
-        },
 
         loadMoreButton: {
             alignSelf: "center",

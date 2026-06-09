@@ -7,32 +7,74 @@ import AccessCode from '../screens/auth/AccessCode';
 
 import MainTabsNavigator from './MainTabsNavigator';
 import IndividualChat from '../screens/main/IndividualChat';
+import IndividualChatProfile from '../screens/main/IndividualChatProfile';
 import ChannelChat from "../components/ChannelChat";
 
-const Stack = createNativeStackNavigator();
+import { AppRealtimeProvider } from '../context/AppRealtimeProvider';
+
+const RootStack = createNativeStackNavigator();
+const AppStack = createNativeStackNavigator();
+
+function AuthenticatedAppNavigator() {
+    return (
+        <AppRealtimeProvider>
+            <AppStack.Navigator
+                initialRouteName="MainTabs"
+                screenOptions={{
+                    headerShown: false,
+                }}
+            >
+                <AppStack.Screen
+                    name="MainTabs"
+                    component={MainTabsNavigator}
+                />
+
+                <AppStack.Screen
+                    name="IndividualChat"
+                    component={IndividualChat}
+                />
+
+                <AppStack.Screen
+                    name="IndividualChatProfile"
+                    component={IndividualChatProfile}
+                />
+
+                <AppStack.Screen
+                    name="ChannelChat"
+                    component={ChannelChat}
+                />
+            </AppStack.Navigator>
+        </AppRealtimeProvider>
+    );
+}
 
 export default function AuthNavigator() {
     return (
-        <Stack.Navigator
+        <RootStack.Navigator
             initialRouteName="Splash"
             screenOptions={{
                 headerShown: false,
             }}
         >
-            <Stack.Screen name="Splash" component={SplashScreen} />
-            <Stack.Screen name="Login" component={Login} />
-            <Stack.Screen name="AccessCode" component={AccessCode} />
-
-            <Stack.Screen name="MainTabsNavigator" component={MainTabsNavigator} />
-            <Stack.Screen
-                name="IndividualChat"
-                component={IndividualChat}
+            <RootStack.Screen
+                name="Splash"
+                component={SplashScreen}
             />
 
-            <Stack.Screen
-                name="ChannelChat"
-                component={ChannelChat}
+            <RootStack.Screen
+                name="Login"
+                component={Login}
             />
-        </Stack.Navigator>
+
+            <RootStack.Screen
+                name="AccessCode"
+                component={AccessCode}
+            />
+
+            <RootStack.Screen
+                name="MainTabsNavigator"
+                component={AuthenticatedAppNavigator}
+            />
+        </RootStack.Navigator>
     );
 }

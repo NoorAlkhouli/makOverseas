@@ -14,7 +14,30 @@ export default function IndividualChatHeader({
     isVeryCompactScreen,
     isShortScreen,
     onOpenMenu,
+    conversationId,
+    targetUserId,
+    employeePhone,
+    employeeUsername,
+    employeeEmail,
+    employeeLocation,
 }) {
+    const openChatProfile = () => {
+        navigation.navigate("IndividualChatProfile", {
+            conversationId,
+            targetUserId,
+            profile: {
+                initials: employeeInitials,
+                name: employeeName,
+                department: employeeDepartment || tr("department", "Sales Department"),
+                isBlocked,
+                phone: employeePhone || "+963 947 156 953",
+                username: employeeUsername || "@makoverseas_sales",
+                email: employeeEmail || "sales@mak-overseas.com",
+                location: employeeLocation || "Damascus, Syria",
+            },
+        });
+    };
+
     return (
         <View
             style={[
@@ -35,78 +58,84 @@ export default function IndividualChatHeader({
                 <Ionicons name="arrow-back" size={24} color={colors.text} />
             </TouchableOpacity>
 
-            <View style={styles.avatarWrapper}>
-                <View
-                    style={[
-                        styles.avatar,
-                        isCompactScreen && styles.avatarCompact,
-                        {
-                            backgroundColor: colors.avatarBackground,
-                            borderColor: colors.avatarBorder,
-                        },
-                    ]}
-                >
-                    <Text
-                        style={[
-                            styles.avatarText,
-                            isCompactScreen && styles.avatarTextCompact,
-                            { color: colors.text },
-                        ]}
-                    >
-                        {employeeInitials}
-                    </Text>
-                </View>
-            </View>
-
-            <View style={styles.headerInfo}>
-                <Text
-                    style={[
-                        styles.employeeName,
-                        isCompactScreen && styles.employeeNameCompact,
-                        isVeryCompactScreen && styles.employeeNameVeryCompact,
-                        { color: colors.text },
-                    ]}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                >
-                    {employeeName}
-                </Text>
-
-                <Text
-                    style={[
-                        styles.department,
-                        isCompactScreen && styles.departmentCompact,
-                        isVeryCompactScreen && styles.departmentVeryCompact,
-                        { color: colors.blue },
-                    ]}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                >
-                    {employeeDepartment || tr("department", "Sales Department")}
-                </Text>
-
-                <View style={styles.statusRow}>
+            <TouchableOpacity
+                style={styles.profilePressArea}
+                activeOpacity={0.82}
+                onPress={openChatProfile}
+            >
+                <View style={styles.avatarWrapper}>
                     <View
                         style={[
-                            styles.onlineDot,
-                            { backgroundColor: colors.primary },
+                            styles.avatar,
+                            isCompactScreen && styles.avatarCompact,
+                            {
+                                backgroundColor: colors.avatarBackground,
+                                borderColor: colors.avatarBorder,
+                            },
                         ]}
-                    />
+                    >
+                        <Text
+                            style={[
+                                styles.avatarText,
+                                isCompactScreen && styles.avatarTextCompact,
+                                { color: colors.text },
+                            ]}
+                        >
+                            {employeeInitials}
+                        </Text>
+                    </View>
+                </View>
+
+                <View style={styles.headerInfo}>
+                    <Text
+                        style={[
+                            styles.employeeName,
+                            isCompactScreen && styles.employeeNameCompact,
+                            isVeryCompactScreen && styles.employeeNameVeryCompact,
+                            { color: colors.text },
+                        ]}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                    >
+                        {employeeName}
+                    </Text>
 
                     <Text
                         style={[
-                            styles.onlineText,
-                            isVeryCompactScreen && styles.onlineTextVeryCompact,
-                            { color: colors.primary },
+                            styles.department,
+                            isCompactScreen && styles.departmentCompact,
+                            isVeryCompactScreen && styles.departmentVeryCompact,
+                            { color: colors.blue },
                         ]}
                         numberOfLines={1}
+                        ellipsizeMode="tail"
                     >
-                        {isBlocked
-                            ? tr("blocked", "Blocked")
-                            : tr("online", "Online")}
+                        {employeeDepartment || tr("department", "Sales Department")}
                     </Text>
+
+                    <View style={styles.statusRow}>
+                        <View
+                            style={[
+                                styles.onlineDot,
+                                { backgroundColor: colors.primary },
+                            ]}
+                        />
+
+                        <Text
+                            style={[
+                                styles.onlineText,
+                                isVeryCompactScreen && styles.onlineTextVeryCompact,
+                                { color: colors.primary },
+                            ]}
+                            numberOfLines={1}
+                        >
+                            {isBlocked
+                                ? tr("blocked", "Blocked")
+                                : tr("online", "Online")}
+                        </Text>
+                    </View>
                 </View>
-            </View>
+            </TouchableOpacity>
 
             <TouchableOpacity
                 style={[
@@ -174,6 +203,13 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
+    },
+
+    profilePressArea: {
+        flex: 1,
+        minWidth: 0,
+        flexDirection: "row",
+        alignItems: "center",
     },
 
     avatarWrapper: {

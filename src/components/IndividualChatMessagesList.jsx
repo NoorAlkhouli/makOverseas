@@ -9,6 +9,7 @@ import React, { useEffect, useState } from "react";
 import MediaMessage from "../components/MediaMessage";
 
 import {
+    ActivityIndicator,
     Platform,
     Pressable,
     ScrollView,
@@ -327,11 +328,25 @@ export default function IndividualChatMessagesList({
     imageMessageWidth,
     imageMessageHeight,
     onContentSizeChange,
+    onScroll,
+    onLoadOlderMessages,
+    isLoadingOlderMessages = false,
+    hasOlderMessages = false,
     onOpenImage,
     onOpenVideo,
     onOpenDocument,
     onMessageLongPress,
 }) {
+    const handleMessagesScroll = (event) => {
+        onScroll?.(event);
+
+        const offsetY = Number(event?.nativeEvent?.contentOffset?.y || 0);
+
+        if (offsetY <= 40 && hasOlderMessages && !isLoadingOlderMessages) {
+            onLoadOlderMessages?.();
+        }
+    };
+
     return (
         <ScrollView
             ref={messagesScrollRef}
@@ -348,8 +363,24 @@ export default function IndividualChatMessagesList({
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+            onScroll={handleMessagesScroll}
+            scrollEventThrottle={16}
             onContentSizeChange={onContentSizeChange}
         >
+            {isLoadingOlderMessages && (
+                <View style={styles.olderMessagesLoader}>
+                    <ActivityIndicator
+                        size="small"
+                        color={colors.primary || colors.blue}
+                    />
+                    <Text
+                        style={[styles.olderMessagesLoaderText, { color: colors.muted }]}
+                        numberOfLines={1}
+                    >
+                        {tr("loadingOlderMessages", "Loading earlier messages...")}
+                    </Text>
+                </View>
+            )}
             {messages.map((item) => {
                 const displayTime = getLocalizedMessageTime(item.time, tr, isArabic);
 
@@ -1123,6 +1154,20 @@ const styles = StyleSheet.create({
 
     messagesContentShort: {
         paddingBottom: 10,
+    },
+
+    olderMessagesLoader: {
+        minHeight: 38,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        marginBottom: 10,
+    },
+
+    olderMessagesLoaderText: {
+        fontSize: 12,
+        fontWeight: "800",
     },
 
     messageRow: {

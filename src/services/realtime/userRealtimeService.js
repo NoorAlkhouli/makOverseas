@@ -3,8 +3,51 @@ import { getEcho } from './echoClient';
 let userChannel = null;
 let subscribedUserId = null;
 
+// جديد: كل listener محفوظ في Map حسب مفتاح فريد
+const userListeners = new Map();
+
+function getListenerKey(listenerKey) {
+    return listenerKey || `listener-${Date.now()}-${Math.random()}`;
+}
+
+// تسجيل listener جديد
+function registerUserChannelListener({
+    listenerKey,
+    onConversationUpdated,
+    onConversationBlockUpdated,
+    onNotificationReceived,
+    onNotificationReadStateChanged,
+    onCallInitiated,
+    onCallStatusUpdated,
+}) {
+    const key = getListenerKey(listenerKey);
+
+    userListeners.set(key, {
+        onConversationUpdated,
+        onConversationBlockUpdated,
+        onNotificationReceived,
+        onNotificationReadStateChanged,
+        onCallInitiated,
+        onCallStatusUpdated,
+    });
+
+    return key;
+}
+
+// توجيه payload لكل listeners
+function notifyUserListeners(callbackName, payload) {
+    userListeners.forEach((listener) => {
+        const callback = listener?.[callbackName];
+
+        if (typeof callback === 'function') {
+            callback(payload);
+        }
+    });
+}
+
 export function subscribeToUserChannel({
     userId,
+    listenerKey,
     onConversationUpdated,
     onConversationBlockUpdated,
     onNotificationReceived,
@@ -24,9 +67,22 @@ export function subscribeToUserChannel({
         return null;
     }
 
+    const registeredListenerKey = registerUserChannelListener({
+        listenerKey,
+        onConversationUpdated,
+        onConversationBlockUpdated,
+        onNotificationReceived,
+        onNotificationReadStateChanged,
+        onCallInitiated,
+        onCallStatusUpdated,
+    });
+
     if (subscribedUserId === userId && userChannel) {
         console.log('[User Realtime] Already subscribed to user channel:', userId);
-        return userChannel;
+        return {
+            channel: userChannel,
+            listenerKey: registeredListenerKey,
+        };
     }
 
     if (subscribedUserId && subscribedUserId !== userId) {
@@ -50,35 +106,40 @@ export function subscribeToUserChannel({
             });
         })
         .listen('.ConversationUpdated', payload => {
-            console.log('[User Realtime] ConversationUpdated:', payload);
-            onConversationUpdated?.(payload);
+            notifyUserListeners('onConversationUpdated', payload);
         })
         .listen('.ConversationBlockUpdated', payload => {
-            console.log('[User Realtime] ConversationBlockUpdated:', payload);
-            onConversationBlockUpdated?.(payload);
+            notifyUserListeners('onConversationBlockUpdated', payload);
         })
         .listen('.notification.received', payload => {
-            console.log('[User Realtime] notification.received:', payload);
-            onNotificationReceived?.(payload);
+            notifyUserListeners('onNotificationReceived', payload);
         })
         .listen('.notification.read_state_changed', payload => {
-            console.log('[User Realtime] notification.read_state_changed:', payload);
-            onNotificationReadStateChanged?.(payload);
+            notifyUserListeners('onNotificationReadStateChanged', payload);
         })
         .listen('.call.initiated', payload => {
-            console.log('[User Realtime] call.initiated:', payload);
-            onCallInitiated?.(payload);
+            notifyUserListeners('onCallInitiated', payload);
         })
         .listen('.call.status_updated', payload => {
-            console.log('[User Realtime] call.status_updated:', payload);
-            onCallStatusUpdated?.(payload);
+            notifyUserListeners('onCallStatusUpdated', payload);
         });
 
     subscribedUserId = userId;
 
-    return userChannel;
+    return {
+        channel: userChannel,
+        listenerKey: registeredListenerKey,
+    };
 }
 
+// إزالة listener فقط
+export function unsubscribeUserChannelListener(listenerKey) {
+    if (!listenerKey) return;
+
+    userListeners.delete(listenerKey);
+}
+
+// ترك القناة بالكامل
 export function leaveUserChannel(userId) {
     const echo = getEcho();
 
@@ -95,5 +156,6 @@ export function leaveUserChannel(userId) {
     if (subscribedUserId === userId) {
         subscribedUserId = null;
         userChannel = null;
+        userListeners.clear();
     }
 }
