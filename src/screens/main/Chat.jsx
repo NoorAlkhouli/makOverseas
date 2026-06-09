@@ -1,6 +1,4 @@
 import MainNavBar from "@/src/components/MainNavBar";
-import ChatSearchBox from "@/src/components/ChatSearchBox";
-import ChatUnreadBadge from "@/src/components/ChatUnreadBadge";
 import { BOTTOM_TAB_BADGE_EVENTS } from "@/src/components/BottomTabBar";
 import { appImages } from "@/src/constants/images";
 import { useAppRealtime } from "@/src/context/AppRealtimeProvider";
@@ -10,6 +8,7 @@ import {
     getAutoTextDirectionStyle,
     getRowDirectionStyle,
     getTextDirectionStyle,
+    getTextInputDirectionFromValue,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { Feather } from "@expo/vector-icons";
@@ -27,6 +26,7 @@ import {
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     useWindowDimensions,
     View,
@@ -1195,7 +1195,7 @@ export default function Chat({ navigation }) {
 
                 setChats((currentChats) => {
                     if (page === 1) {
-                        return mergePreparedChatsWithCurrent(currentChats, preparedChats, isArabic);
+                        return preparedChats;
                     }
 
                     const existingIds = new Set(currentChats.map((chat) => String(chat.id)));
@@ -1205,7 +1205,6 @@ export default function Chat({ navigation }) {
 
                     return [...currentChats, ...uniqueNewChats];
                 });
-
                 setCurrentPage(page);
             } catch (error) {
                 console.log("List conversations error:", error?.raw || error);
@@ -1585,7 +1584,8 @@ export default function Chat({ navigation }) {
         if (selectMode) {
             return;
         }
-
+        Keyboard.dismiss();
+        setIsSearchFocused(false);
         setChats((currentChats) =>
             currentChats.map((chat) =>
                 chat.id === selectedChat.id
@@ -1850,10 +1850,11 @@ export default function Chat({ navigation }) {
                             </Text>
                         </View>
 
-                        <ChatUnreadBadge
-                            count={chat.unread}
-                            colors={colors}
-                        />
+                        {chat.unread > 0 && (
+                            <View style={styles.unreadBadge}>
+                                <Text style={styles.unreadText}>{chat.unread}</Text>
+                            </View>
+                        )}
                     </TouchableOpacity>
                 ))}
 
@@ -1911,15 +1912,51 @@ export default function Chat({ navigation }) {
                             </Text>
                         </View>
 
-                        <ChatSearchBox
-                            canSearchCustomers={canSearchCustomers}
-                            search={search}
-                            setSearch={setSearch}
-                            isArabic={isArabic}
-                            colors={colors}
-                            keyboardHeight={keyboardHeight}
-                            setIsSearchFocused={setIsSearchFocused}
-                        />
+                        {canSearchCustomers && (
+                            <View style={[styles.searchBox, getRowDirectionStyle(isArabic)]}>
+                                <Feather name="search" size={21} color={colors.textMuted} />
+
+                                <TextInput
+                                    value={search}
+                                    onFocus={() => setIsSearchFocused(true)}
+                                    onBlur={() => {
+                                        if (!keyboardHeight) {
+                                            setIsSearchFocused(false);
+                                        }
+                                    }}
+                                    onChangeText={setSearch}
+                                    placeholder={
+                                        isArabic
+                                            ? "ابحثي عن عميل برقم الهاتف..."
+                                            : "Search customers by phone..."
+                                    }
+                                    placeholderTextColor={colors.textMuted}
+                                    style={[
+                                        styles.searchInput,
+                                        getTextInputDirectionFromValue(search, isArabic),
+                                    ]}
+                                    autoCorrect={false}
+                                    autoCapitalize="none"
+                                    keyboardType="phone-pad"
+                                />
+
+                                {!!search && (
+                                    <TouchableOpacity
+                                        activeOpacity={0.85}
+                                        style={styles.filterButton}
+                                        onPress={() => setSearch("")}
+                                    >
+                                        <Feather name="x" size={20} color={colors.textPrimary} />
+                                    </TouchableOpacity>
+                                )}
+
+                                {!search && (
+                                    <View style={styles.filterButton}>
+                                        <Feather name="sliders" size={20} color={colors.textPrimary} />
+                                    </View>
+                                )}
+                            </View>
+                        )}
 
                         <ScrollView
                             ref={filtersScrollRef}
@@ -1974,6 +2011,11 @@ export default function Chat({ navigation }) {
                             ]}
                             showsVerticalScrollIndicator={false}
                             keyboardShouldPersistTaps="handled"
+                            keyboardDismissMode="on-drag"
+                            onScrollBeginDrag={() => {
+                                Keyboard.dismiss();
+                                setIsSearchFocused(false);
+                            }}
                             onScroll={handleChatListScroll}
                             scrollEventThrottle={16}
                             refreshControl={
@@ -2049,6 +2091,35 @@ const createStyles = (colors) =>
             fontWeight: "500",
         },
 
+        searchBox: {
+            height: 58,
+            borderRadius: 20,
+            backgroundColor: colors.card,
+            borderWidth: 1,
+            borderColor: colors.border,
+            flexDirection: "row",
+            alignItems: "center",
+            paddingHorizontal: 16,
+            gap: 10,
+            marginBottom: 18,
+        },
+
+        searchInput: {
+            flex: 1,
+            color: colors.textPrimary,
+            fontSize: 16,
+            fontWeight: "600",
+            paddingVertical: 0,
+        },
+
+        filterButton: {
+            width: 42,
+            height: 42,
+            borderRadius: 16,
+            backgroundColor: colors.buttonSoft,
+            alignItems: "center",
+            justifyContent: "center",
+        },
 
         filtersScroll: {
             height: 62,
@@ -2204,6 +2275,21 @@ const createStyles = (colors) =>
             fontWeight: "500",
         },
 
+        unreadBadge: {
+            minWidth: 28,
+            height: 28,
+            borderRadius: 14,
+            backgroundColor: colors.primary,
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 8,
+        },
+
+        unreadText: {
+            color: colors.darkText,
+            fontSize: 13,
+            fontWeight: "900",
+        },
 
         loadMoreButton: {
             alignSelf: "center",
