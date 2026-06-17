@@ -1,6 +1,66 @@
 import { Ionicons } from "@expo/vector-icons";
-import React from "react";
+import React, { useEffect } from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+
+const getStatusLabel = ({
+    isBlocked,
+    isTyping,
+    isOnline,
+    presenceText,
+    tr,
+}) => {
+    if (isBlocked) {
+        return tr("blocked", "Blocked");
+    }
+
+    if (isTyping) {
+        return tr("typingNow", "Typing...");
+    }
+
+    if (presenceText) {
+        return presenceText;
+    }
+
+    if (isOnline) {
+        return tr("onlineNow", "Online now");
+    }
+
+    return tr("offline", "Offline");
+};
+
+const getStatusColor = ({
+    colors,
+    isBlocked,
+    isTyping,
+    isOnline,
+}) => {
+    if (isBlocked) {
+        return colors.danger || colors.text;
+    }
+
+    if (isTyping || isOnline) {
+        return colors.primary;
+    }
+
+    return colors.textMuted || colors.muted || colors.text;
+};
+
+const getStatusDotColor = ({
+    colors,
+    isBlocked,
+    isTyping,
+    isOnline,
+}) => {
+    if (isBlocked) {
+        return colors.danger || colors.text;
+    }
+
+    if (isTyping || isOnline) {
+        return colors.primary;
+    }
+
+    return colors.textMuted || colors.muted || colors.border;
+};
 
 export default function IndividualChatHeader({
     navigation,
@@ -9,6 +69,10 @@ export default function IndividualChatHeader({
     employeeName,
     employeeDepartment,
     isBlocked,
+    isOnline = false,
+    isTyping = false,
+    lastSeenAt,
+    presenceText,
     tr,
     isCompactScreen,
     isVeryCompactScreen,
@@ -21,6 +85,79 @@ export default function IndividualChatHeader({
     employeeEmail,
     employeeLocation,
 }) {
+    const normalizedIsOnline = isOnline === true;
+    const normalizedIsTyping = isTyping === true && !isBlocked;
+
+    useEffect(() => {
+        console.log("[HEADER ONLINE DEBUG] Presence props received:", {
+            conversationId,
+            targetUserId,
+            employeeName,
+            isBlocked,
+            isOnline,
+            normalizedIsOnline,
+            isTyping,
+            normalizedIsTyping,
+            lastSeenAt,
+            presenceText,
+        });
+    }, [
+        conversationId,
+        targetUserId,
+        employeeName,
+        isBlocked,
+        isOnline,
+        normalizedIsOnline,
+        isTyping,
+        normalizedIsTyping,
+        lastSeenAt,
+        presenceText,
+    ]);
+
+    const statusLabel = getStatusLabel({
+        isBlocked,
+        isTyping: normalizedIsTyping,
+        isOnline: normalizedIsOnline,
+        presenceText,
+        tr,
+    });
+
+    const statusColor = getStatusColor({
+        colors,
+        isBlocked,
+        isTyping: normalizedIsTyping,
+        isOnline: normalizedIsOnline,
+    });
+
+    const statusDotColor = getStatusDotColor({
+        colors,
+        isBlocked,
+        isTyping: normalizedIsTyping,
+        isOnline: normalizedIsOnline,
+    });
+
+    useEffect(() => {
+        console.log("[HEADER ONLINE DEBUG] Status rendered:", {
+            conversationId,
+            targetUserId,
+            employeeName,
+            statusLabel,
+            statusColor,
+            statusDotColor,
+            normalizedIsOnline,
+            normalizedIsTyping,
+        });
+    }, [
+        conversationId,
+        targetUserId,
+        employeeName,
+        statusLabel,
+        statusColor,
+        statusDotColor,
+        normalizedIsOnline,
+        normalizedIsTyping,
+    ]);
+
     const openChatProfile = () => {
         navigation.navigate("IndividualChatProfile", {
             conversationId,
@@ -30,6 +167,10 @@ export default function IndividualChatHeader({
                 name: employeeName,
                 department: employeeDepartment || tr("department", "Sales Department"),
                 isBlocked,
+                isOnline: normalizedIsOnline,
+                isTyping: normalizedIsTyping,
+                lastSeenAt,
+                presenceText: statusLabel,
                 phone: employeePhone || "+963 947 156 953",
                 username: employeeUsername || "@makoverseas_sales",
                 email: employeeEmail || "sales@mak-overseas.com",
@@ -117,7 +258,13 @@ export default function IndividualChatHeader({
                         <View
                             style={[
                                 styles.onlineDot,
-                                { backgroundColor: colors.primary },
+                                {
+                                    backgroundColor: statusDotColor,
+                                    borderColor:
+                                        normalizedIsOnline || normalizedIsTyping || isBlocked
+                                            ? statusDotColor
+                                            : colors.border,
+                                },
                             ]}
                         />
 
@@ -125,13 +272,11 @@ export default function IndividualChatHeader({
                             style={[
                                 styles.onlineText,
                                 isVeryCompactScreen && styles.onlineTextVeryCompact,
-                                { color: colors.primary },
+                                { color: statusColor },
                             ]}
                             numberOfLines={1}
                         >
-                            {isBlocked
-                                ? tr("blocked", "Blocked")
-                                : tr("online", "Online")}
+                            {statusLabel}
                         </Text>
                     </View>
                 </View>
@@ -287,6 +432,7 @@ const styles = StyleSheet.create({
         width: 9,
         height: 9,
         borderRadius: 5,
+        borderWidth: 1,
     },
 
     onlineText: {

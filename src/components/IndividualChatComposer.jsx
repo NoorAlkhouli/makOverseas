@@ -1,3 +1,4 @@
+
 //MICrephone
 import { getTextInputDirectionFromValue } from "@/src/styles/globalStyles";
 import { Ionicons } from "@expo/vector-icons";
@@ -63,6 +64,7 @@ export default function IndividualChatComposer({
     isCompactScreen,
     messageText,
     onChangeMessageText,
+    onTyping,
     isRecordingVoice,
     recordingDurationText,
     hasMessage,
@@ -77,6 +79,11 @@ export default function IndividualChatComposer({
     onCancelReply,
 }) {
     const replyPreviewText = getReplyPreviewText(replyingToMessage, tr);
+
+    const handleChangeText = (text) => {
+        onChangeMessageText?.(text);
+        onTyping?.(text);
+    };
 
     return (
         <View
@@ -179,7 +186,7 @@ export default function IndividualChatComposer({
                     ) : (
                         <TextInput
                             value={messageText}
-                            onChangeText={onChangeMessageText}
+                            onChangeText={handleChangeText}
                             onFocus={onFocusInput}
                             placeholder={tr("inputPlaceholder", "Type a message...")}
                             placeholderTextColor={colors.muted}

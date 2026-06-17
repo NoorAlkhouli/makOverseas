@@ -151,6 +151,106 @@ const getSafeText = (value, fallback = "") => {
     return String(value);
 };
 
+
+const normalizePresenceBoolean = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+
+    if (typeof value === "string") {
+        const cleanValue = value.trim().toLowerCase();
+
+        if (["1", "true", "yes", "online", "active"].includes(cleanValue)) {
+            return true;
+        }
+
+        if (["0", "false", "no", "offline", "away", "inactive", "null", "undefined"].includes(cleanValue)) {
+            return false;
+        }
+    }
+
+    return false;
+};
+
+const getPresenceBooleanFromPaths = (source, paths) => {
+    for (const path of paths) {
+        const value = String(path)
+            .split(".")
+            .reduce((current, key) => current?.[key], source);
+
+        if (value !== undefined && value !== null && value !== "") {
+            return normalizePresenceBoolean(value);
+        }
+    }
+
+    return false;
+};
+
+const getPresenceValueFromPaths = (source, paths) => {
+    for (const path of paths) {
+        const value = String(path)
+            .split(".")
+            .reduce((current, key) => current?.[key], source);
+
+        if (value !== undefined && value !== null && value !== "") {
+            return value;
+        }
+    }
+
+    return null;
+};
+
+const getEmployeeLastSeenValue = (employee) => getPresenceValueFromPaths(employee, [
+    "last_seen_at",
+    "lastSeenAt",
+    "last_seen",
+    "lastSeen",
+    "offline_at",
+    "offlineAt",
+    "disconnected_at",
+    "disconnectedAt",
+    "user.last_seen_at",
+    "user.lastSeenAt",
+    "user.last_seen",
+    "user.lastSeen",
+    "user.offline_at",
+    "user.offlineAt",
+    "profile.last_seen_at",
+    "profile.lastSeenAt",
+    "profile.last_seen",
+    "profile.lastSeen",
+]);
+
+const getConversationLastSeenValue = (conversation) => getPresenceValueFromPaths(conversation, [
+    "last_seen_at",
+    "lastSeenAt",
+    "last_seen",
+    "lastSeen",
+    "offline_at",
+    "offlineAt",
+    "disconnected_at",
+    "disconnectedAt",
+    "employee.last_seen_at",
+    "employee.lastSeenAt",
+    "employee.last_seen",
+    "employee.lastSeen",
+    "customer.last_seen_at",
+    "customer.lastSeenAt",
+    "customer.last_seen",
+    "customer.lastSeen",
+    "participant.last_seen_at",
+    "participant.lastSeenAt",
+    "participant.last_seen",
+    "participant.lastSeen",
+    "other_participant.last_seen_at",
+    "other_participant.lastSeenAt",
+    "other_participant.last_seen",
+    "other_participant.lastSeen",
+    "user.last_seen_at",
+    "user.lastSeenAt",
+    "user.last_seen",
+    "user.lastSeen",
+]);
+
 const getProfilePayload = (response) => {
     return (
         response?.data?.user ||
@@ -321,16 +421,30 @@ const normalizeEmployee = (employee, isArabic) => {
 
     const department = getEmployeeDepartmentText(employee);
 
-    const isOnline = Boolean(
-        getNestedValue(employee, [
-            "is_online",
-            "online",
-            "user.is_online",
-            "user.online",
-            "profile.is_online",
-            "profile.online",
-        ], false)
-    );
+    const isOnline = getPresenceBooleanFromPaths(employee, [
+        "online_status",
+        "onlineStatus",
+        "is_online",
+        "isOnline",
+        "online",
+        "status",
+        "presence",
+        "user.online_status",
+        "user.onlineStatus",
+        "user.is_online",
+        "user.isOnline",
+        "user.online",
+        "user.status",
+        "user.presence",
+        "profile.online_status",
+        "profile.onlineStatus",
+        "profile.is_online",
+        "profile.isOnline",
+        "profile.online",
+        "profile.status",
+        "profile.presence",
+    ]);
+    const lastSeenAt = getEmployeeLastSeenValue(employee);
 
     return {
         id: `employee-${String(targetUserId || employee?.id || employee?.uuid || Date.now())}`,
@@ -341,7 +455,9 @@ const normalizeEmployee = (employee, isArabic) => {
         message: isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation",
         time: "",
         unread: 0,
-        status: isOnline ? "online" : "away",
+        status: isOnline ? "online" : "offline",
+        isOnline,
+        lastSeenAt,
         isGroup: false,
         isEmployee: true,
         raw: employee,
@@ -394,7 +510,9 @@ const normalizeCustomer = (customer, isArabic) => {
         message: phone || (isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation"),
         time: "",
         unread: 0,
-        status: "away",
+        status: "offline",
+        isOnline: false,
+        lastSeenAt: getEmployeeLastSeenValue(customer),
         isGroup: false,
         isCustomerSearchResult: true,
         raw: customer,
@@ -460,6 +578,10 @@ const getDirectTargetUserId = (conversation) => {
     const targetUserId = getNestedValue(conversation, [
         "target_user_id",
         "targetUserId",
+        "target_user.id",
+        "target_user.user_id",
+        "targetUser.id",
+        "targetUser.user_id",
         "other_participant.user_id",
         "other_participant.userId",
         "other_participant.user.id",
@@ -531,6 +653,46 @@ const getNewestConversationTimeValue = (firstValue, secondValue) => {
     }
 
     return secondValue;
+};
+
+const formatLastSeenText = (value, isArabic) => {
+    if (!value) {
+        return isArabic ? "غير متصل" : "Offline";
+    }
+
+    const date = new Date(normalizeDateInput(value));
+
+    if (Number.isNaN(date.getTime())) {
+        return isArabic
+            ? `آخر ظهور ${String(value)}`
+            : `Last seen ${String(value)}`;
+    }
+
+    const now = new Date();
+    const diffMs = Math.max(0, now.getTime() - date.getTime());
+    const diffMinutes = Math.floor(diffMs / 60000);
+
+    if (diffMinutes < 1) {
+        return isArabic ? "آخر ظهور الآن" : "Last seen now";
+    }
+
+    if (diffMinutes < 60) {
+        return isArabic
+            ? `آخر ظهور منذ ${diffMinutes} دقيقة`
+            : `Last seen ${diffMinutes} min ago`;
+    }
+
+    const diffHours = Math.floor(diffMinutes / 60);
+
+    if (diffHours < 24) {
+        return isArabic
+            ? `آخر ظهور منذ ${diffHours} ساعة`
+            : `Last seen ${diffHours}h ago`;
+    }
+
+    return isArabic
+        ? `آخر ظهور ${date.toLocaleDateString("ar")}`
+        : `Last seen ${date.toLocaleDateString("en")}`;
 };
 
 const formatConversationTime = (value, isArabic) => {
@@ -784,16 +946,59 @@ const normalizeConversation = (conversation, isArabic) => {
         getNestedValue(conversation, ["unread_count", "unread", "unread_messages_count"], 0) || 0
     );
 
-    const isOnline = Boolean(
-        getNestedValue(conversation, [
-            "is_online",
-            "online",
-            "employee.is_online",
-            "customer.is_online",
-            "participant.is_online",
-            "other_participant.is_online",
-        ], false)
-    );
+    const isOnline = getPresenceBooleanFromPaths(conversation, [
+        "online_status",
+        "onlineStatus",
+        "is_online",
+        "isOnline",
+        "online",
+        "status",
+        "presence",
+        "target_user.online_status",
+        "target_user.onlineStatus",
+        "target_user.is_online",
+        "target_user.isOnline",
+        "targetUser.online_status",
+        "targetUser.onlineStatus",
+        "targetUser.is_online",
+        "targetUser.isOnline",
+        "employee.online_status",
+        "employee.onlineStatus",
+        "employee.is_online",
+        "employee.isOnline",
+        "employee.online",
+        "employee.status",
+        "employee.presence",
+        "customer.online_status",
+        "customer.onlineStatus",
+        "customer.is_online",
+        "customer.isOnline",
+        "customer.online",
+        "customer.status",
+        "customer.presence",
+        "participant.online_status",
+        "participant.onlineStatus",
+        "participant.is_online",
+        "participant.isOnline",
+        "participant.online",
+        "participant.status",
+        "participant.presence",
+        "other_participant.online_status",
+        "other_participant.onlineStatus",
+        "other_participant.is_online",
+        "other_participant.isOnline",
+        "other_participant.online",
+        "other_participant.status",
+        "other_participant.presence",
+        "user.online_status",
+        "user.onlineStatus",
+        "user.is_online",
+        "user.isOnline",
+        "user.online",
+        "user.status",
+        "user.presence",
+    ]);
+    const lastSeenAt = getConversationLastSeenValue(conversation);
 
     const conversationType = String(
         getNestedValue(conversation, ["type", "conversation_type"], "")
@@ -818,7 +1023,9 @@ const normalizeConversation = (conversation, isArabic) => {
         message: String(message || ""),
         time: formatConversationTime(time, isArabic),
         unread: Number.isFinite(unread) ? unread : 0,
-        status: isOnline ? "online" : "away",
+        status: isOnline ? "online" : "offline",
+        isOnline,
+        lastSeenAt,
         isGroup,
         raw: conversation,
     };
@@ -1002,6 +1209,9 @@ export default function Chat({ navigation }) {
         currentUserId,
         latestConversationEvent,
         latestConversationBlockEvent,
+        isUserOnline,
+        onlineUserIds = [],
+        presenceVersion,
     } = useAppRealtime();
 
     const { colors, isDark, setThemeMode, changeTheme, toggleTheme } = useAppTheme();
@@ -1032,6 +1242,15 @@ export default function Chat({ navigation }) {
     const hasLoadedInitialConversationsRef = useRef(false);
     const lastHandledConversationEventRef = useRef(null);
     const lastHandledConversationBlockEventRef = useRef(null);
+
+    useEffect(() => {
+        console.log("[CHAT ONLINE DEBUG] AppRealtime context changed:", {
+            currentUserId,
+            onlineUserIds,
+            presenceVersion,
+            hasIsUserOnline: typeof isUserOnline === "function",
+        });
+    }, [currentUserId, onlineUserIds, presenceVersion, isUserOnline]);
 
     const cleanSearch = search.trim();
     const isCustomerSearchMode = canSearchCustomers && cleanSearch.length > 0;
@@ -1192,6 +1411,19 @@ export default function Chat({ navigation }) {
                     );
                     setPaginationMeta(getPaginationMeta(response));
                 }
+
+                console.log("[CHAT ONLINE DEBUG] Prepared chats after API normalize:", preparedChats.map((chat) => ({
+                    name: chat.name,
+                    id: chat.id,
+                    conversationId: chat.conversationId,
+                    targetUserId: chat.targetUserId,
+                    isGroup: chat.isGroup,
+                    isEmployee: chat.isEmployee,
+                    apiIsOnline: chat.isOnline,
+                    rawOnlineStatus: chat.raw?.online_status,
+                    status: chat.status,
+                    lastSeenAt: chat.lastSeenAt,
+                })));
 
                 setChats((currentChats) => {
                     if (page === 1) {
@@ -1456,12 +1688,25 @@ export default function Chat({ navigation }) {
                     time: matchedChat.time,
                     department: matchedChat.department || customerResult.department,
                     status: matchedChat.status,
+                    isOnline: matchedChat.isOnline || customerResult.isOnline,
+                    lastSeenAt: matchedChat.lastSeenAt || customerResult.lastSeenAt,
                     raw: matchedChat.raw || customerResult.raw,
 
                     isCustomerSearchResult: true,
                 };
             });
         }
+
+        console.log("[CHAT ONLINE DEBUG] Building visible chats:", chats.map((chat) => ({
+            name: chat.name,
+            id: chat.id,
+            conversationId: chat.conversationId,
+            targetUserId: chat.targetUserId,
+            isGroup: chat.isGroup,
+            isEmployee: chat.isEmployee,
+            isOnline: chat.isOnline,
+            status: chat.status,
+        })));
 
         return chats.filter((chat) => {
             const chatDepartment = String(chat.department || "").toLowerCase();
@@ -1607,6 +1852,30 @@ export default function Chat({ navigation }) {
             });
         }
 
+        const selectedChatTargetUserId = normalizeId(selectedChat.targetUserId);
+        const selectedChatLiveIsOnline = !!(
+            selectedChatTargetUserId &&
+            typeof isUserOnline === "function" &&
+            isUserOnline(selectedChatTargetUserId)
+        );
+        const selectedChatIsOnline = !selectedChat.isGroup && (
+            selectedChatLiveIsOnline ||
+            (!selectedChatTargetUserId && selectedChat.isOnline === true)
+        );
+
+        console.log("[CHAT ONLINE DEBUG] Open chat press:", {
+            name: selectedChat.name,
+            id: selectedChat.id,
+            conversationId: selectedChat.conversationId,
+            targetUserId: selectedChat.targetUserId,
+            selectedChatTargetUserId,
+            isGroup: selectedChat.isGroup,
+            apiIsOnline: selectedChat.isOnline,
+            selectedChatLiveIsOnline,
+            selectedChatIsOnline,
+            onlineUserIds,
+        });
+
         navigation.navigate("IndividualChat", {
             conversationId: selectedChat.conversationId,
             conversation: selectedChat.raw,
@@ -1630,7 +1899,11 @@ export default function Chat({ navigation }) {
                 target_user_id: selectedChat.targetUserId,
                 name: selectedChat.name,
                 department: selectedChat.department,
-                status: selectedChat.status,
+                status: selectedChatIsOnline ? "online" : "offline",
+                is_online: selectedChatIsOnline,
+                isOnline: selectedChatIsOnline,
+                last_seen_at: selectedChat.lastSeenAt,
+                lastSeenAt: selectedChat.lastSeenAt,
                 conversation_id: selectedChat.conversationId,
                 is_group: selectedChat.isGroup,
             },
@@ -1772,91 +2045,158 @@ export default function Chat({ navigation }) {
 
         return (
             <>
-                {visibleChats.map((chat) => (
-                    <TouchableOpacity
-                        key={chat.id}
-                        activeOpacity={0.88}
-                        style={[styles.chatCard, getRowDirectionStyle(isArabic)]}
-                        onPress={() => handleChatPress(chat)}
-                    >
-                        {selectMode && (
-                            <View style={styles.selectCircle}>
-                                <Feather
-                                    name="circle"
-                                    size={20}
-                                    color={colors.textSecondary}
-                                />
-                            </View>
-                        )}
+                {visibleChats.map((chat) => {
+                    const normalizedTargetUserId = normalizeId(chat.targetUserId);
+                    const liveIsOnline = !!(
+                        !chat.isGroup &&
+                        normalizedTargetUserId &&
+                        typeof isUserOnline === "function" &&
+                        isUserOnline(normalizedTargetUserId)
+                    );
+                    const chatIsOnline = !chat.isGroup && (
+                        liveIsOnline ||
+                        (!normalizedTargetUserId && chat.isOnline === true)
+                    );
+                    const statusText = chatIsOnline
+                        ? (isArabic ? "متصل الآن" : "Online")
+                        : formatLastSeenText(chat.lastSeenAt, isArabic);
 
-                        <View style={styles.avatarBox}>
-                            <View style={styles.avatarCircle}>
-                                <Feather
-                                    name="user"
-                                    size={28}
-                                    color={colors.textPrimary}
-                                />
-                            </View>
+                    console.log("[CHAT ONLINE DEBUG] Render chat row:", {
+                        name: chat.name,
+                        id: chat.id,
+                        conversationId: chat.conversationId,
+                        targetUserId: chat.targetUserId,
+                        normalizedTargetUserId,
+                        isGroup: chat.isGroup,
+                        apiIsOnline: chat.isOnline,
+                        rawOnlineStatus: chat.raw?.online_status,
+                        rawOnlineStatusCamel: chat.raw?.onlineStatus,
+                        liveIsOnline,
+                        chatIsOnline,
+                        onlineUserIds,
+                        status: chat.status,
+                        statusText,
+                        rawTargetCandidates: {
+                            target_user_id: chat.raw?.target_user_id,
+                            targetUserId: chat.raw?.targetUserId,
+                            target_user_id_nested: chat.raw?.target_user?.id,
+                            target_user_user_id: chat.raw?.target_user?.user_id,
+                            targetUser_id_nested: chat.raw?.targetUser?.id,
+                            targetUser_user_id: chat.raw?.targetUser?.user_id,
+                            other_participant_user_id: chat.raw?.other_participant?.user_id,
+                            other_participant_userId: chat.raw?.other_participant?.userId,
+                            other_participant_user_id_nested: chat.raw?.other_participant?.user?.id,
+                            participant_user_id: chat.raw?.participant?.user_id,
+                            participant_userId: chat.raw?.participant?.userId,
+                            participant_user_id_nested: chat.raw?.participant?.user?.id,
+                            employee_user_id: chat.raw?.employee?.user_id,
+                            employee_userId: chat.raw?.employee?.userId,
+                            customer_user_id: chat.raw?.customer?.user_id,
+                            customer_userId: chat.raw?.customer?.userId,
+                            user_id: chat.raw?.user_id,
+                            user_id_nested: chat.raw?.user?.id,
+                        },
+                    });
 
-                            <View
-                                style={[
-                                    styles.statusDot,
-                                    chat.status === "away" && styles.statusDotAway,
-                                ]}
-                            />
-                        </View>
-
-                        <View style={styles.chatInfo}>
-                            <View
-                                style={[
-                                    styles.chatTopRow,
-                                    getRowDirectionStyle(isArabic),
-                                ]}
-                            >
-                                <Text
-                                    style={[
-                                        styles.staffName,
-                                        getTextDirectionStyle(isArabic),
-                                    ]}
-                                    numberOfLines={1}
-                                >
-                                    {chat.name}
-                                </Text>
-
-                                <Text style={styles.chatTime}>{chat.time}</Text>
-                            </View>
-
-                            {!!chat.department && (
-                                <View
-                                    style={[
-                                        styles.departmentRow,
-                                        getRowDirectionStyle(isArabic),
-                                    ]}
-                                >
-                                    <Text style={styles.departmentText} numberOfLines={1}>
-                                        {chat.department}
-                                    </Text>
+                    return (
+                        <TouchableOpacity
+                            key={chat.id}
+                            activeOpacity={0.88}
+                            style={[styles.chatCard, getRowDirectionStyle(isArabic)]}
+                            onPress={() => handleChatPress(chat)}
+                        >
+                            {selectMode && (
+                                <View style={styles.selectCircle}>
+                                    <Feather
+                                        name="circle"
+                                        size={20}
+                                        color={colors.textSecondary}
+                                    />
                                 </View>
                             )}
 
-                            <Text
-                                style={[
-                                    styles.messageText,
-                                    getAutoTextDirectionStyle(chat.message, isArabic),
-                                ]}
-                                numberOfLines={2}
-                            >
-                                {chat.message || (isArabic ? "لا توجد رسائل بعد" : "No messages yet")}
-                            </Text>
-                        </View>
+                            <View style={styles.avatarBox}>
+                                <View style={styles.avatarCircle}>
+                                    <Feather
+                                        name="user"
+                                        size={28}
+                                        color={colors.textPrimary}
+                                    />
+                                </View>
 
-                        {chat.unread > 0 && (
-                            <View style={styles.unreadBadge}>
-                                <Text style={styles.unreadText}>{chat.unread}</Text>
+                                <View
+                                    style={[
+                                        styles.statusDot,
+                                        !chatIsOnline && styles.statusDotOffline,
+                                    ]}
+                                />
                             </View>
-                        )}
-                    </TouchableOpacity>
-                ))}
+
+                            <View style={styles.chatInfo}>
+                                <View
+                                    style={[
+                                        styles.chatTopRow,
+                                        getRowDirectionStyle(isArabic),
+                                    ]}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.staffName,
+                                            getTextDirectionStyle(isArabic),
+                                        ]}
+                                        numberOfLines={1}
+                                    >
+                                        {chat.name}
+                                    </Text>
+
+                                    <Text style={styles.chatTime}>{chat.time}</Text>
+                                </View>
+
+                                {!!chat.department && (
+                                    <View
+                                        style={[
+                                            styles.departmentRow,
+                                            getRowDirectionStyle(isArabic),
+                                        ]}
+                                    >
+                                        <Text style={styles.departmentText} numberOfLines={1}>
+                                            {chat.department}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {!chat.isGroup && (
+                                    <Text
+                                        style={[
+                                            styles.presenceText,
+                                            { color: chatIsOnline ? colors.primary : colors.textMuted },
+                                            getTextDirectionStyle(isArabic),
+                                        ]}
+                                        numberOfLines={1}
+                                    >
+                                        {statusText}
+                                    </Text>
+                                )}
+
+                                <Text
+                                    style={[
+                                        styles.messageText,
+                                        getAutoTextDirectionStyle(chat.message, isArabic),
+                                    ]}
+                                    numberOfLines={2}
+                                >
+                                    {chat.message || (isArabic ? "لا توجد رسائل بعد" : "No messages yet")}
+                                </Text>
+                            </View>
+
+                            {chat.unread > 0 && (
+                                <View style={styles.unreadBadge}>
+                                    <Text style={styles.unreadText}>{chat.unread}</Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+                    );
+                })}
 
                 {canLoadMore && (
                     <TouchableOpacity
@@ -2222,8 +2562,9 @@ const createStyles = (colors) =>
             borderColor: colors.statusBorder,
         },
 
-        statusDotAway: {
-            backgroundColor: colors.warning,
+        statusDotOffline: {
+            backgroundColor: colors.textMuted,
+            opacity: 0.72,
         },
 
         chatInfo: {
@@ -2266,6 +2607,13 @@ const createStyles = (colors) =>
             backgroundColor: colors.blueSoft,
             borderWidth: 1,
             borderColor: colors.blueBorder,
+        },
+
+        presenceText: {
+            marginBottom: 4,
+            fontSize: 12,
+            lineHeight: 16,
+            fontWeight: "800",
         },
 
         messageText: {

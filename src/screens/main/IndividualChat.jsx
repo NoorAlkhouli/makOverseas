@@ -3,6 +3,7 @@ import {
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
+import { useAppRealtime } from "../../context/AppRealtimeProvider";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
     AudioModule,
@@ -39,10 +40,12 @@ import ChatPatternBackground from "../../components/ChatPatternBackground";
 import IndividualChatComposer from "../../components/IndividualChatComposer";
 import IndividualChatHeader from "../../components/IndividualChatHeader";
 import IndividualChatMessagesList from "../../components/IndividualChatMessagesList";
+import QuoteFormModal from "@/src/components/quotes/QuoteFormModal";
 import { API_BASE_URL } from "../../constants/config/apiConfig";
 import chatService from "../../services/api/chatService";
 import {
     leaveConversationChannel,
+    sendConversationTypingWhisper,
     subscribeToConversationChannel,
 } from "../../services/realtime/conversationRealtimeService";
 // import {
@@ -71,6 +74,32 @@ const formatAudioDuration = (milliseconds = 0) => {
 
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
 };
+
+const getRecorderUri = (audioRecorder, recorderState) => {
+    const candidates = [
+        audioRecorder?.uri,
+        audioRecorder?.url,
+        audioRecorder?._uri,
+        audioRecorder?._url,
+        recorderState?.uri,
+        recorderState?.url,
+        recorderState?.recordingUri,
+        recorderState?.recording_uri,
+    ];
+
+    const validUri = candidates.find((value) => {
+        const cleanValue = String(value || "").trim();
+
+        return (
+            cleanValue.startsWith("file://") ||
+            cleanValue.startsWith("content://")
+        );
+    });
+
+    return validUri ? String(validUri).trim() : "";
+};
+
+const getVoiceRecordingFileName = () => `voice-message-${Date.now()}.m4a`;
 
 const getFileIconName = (mimeType = "", fileName = "") => {
     const lowerName = fileName.toLowerCase();
@@ -302,6 +331,295 @@ const getInitialBlockedState = (route, employee) => {
     );
 };
 
+
+const getProfilePayload = (response) => {
+    return (
+        response?.data?.data?.user ||
+        response?.data?.data?.profile ||
+        response?.data?.data ||
+        response?.data?.user ||
+        response?.data?.profile ||
+        response?.data ||
+        response?.user ||
+        response?.profile ||
+        response ||
+        null
+    );
+};
+
+const getProfileRoleValue = (profile) => {
+    const roleValue =
+        profile?.role?.value ??
+        profile?.role_id ??
+        profile?.roleId ??
+        profile?.role ??
+        profile?.user?.role?.value ??
+        profile?.user?.role_id ??
+        profile?.user?.roleId ??
+        profile?.user?.role ??
+        profile?.profile?.role?.value ??
+        profile?.profile?.role_id ??
+        profile?.profile?.roleId ??
+        profile?.profile?.role ??
+        null;
+
+    const numericRole = Number(roleValue);
+
+    if ([1, 2, 3].includes(numericRole)) {
+        return numericRole;
+    }
+
+    const roleText = normalizeRoleText(
+        typeof roleValue === "string"
+            ? roleValue
+            : profile?.role?.label ||
+            profile?.role?.name ||
+            profile?.role_name ||
+            profile?.roleName ||
+            profile?.type ||
+            profile?.user_type ||
+            profile?.userType ||
+            profile?.user?.role?.label ||
+            profile?.user?.role?.name ||
+            profile?.user?.role_name ||
+            profile?.user?.roleName ||
+            ""
+    );
+
+    if (["customer", "client", "user", "customer_user", "client_user"].includes(roleText)) {
+        return 1;
+    }
+
+    if (["employee", "staff", "agent", "support", "sales", "operation", "operations"].includes(roleText)) {
+        return 2;
+    }
+
+    if (["admin", "super_admin", "administrator"].includes(roleText)) {
+        return 3;
+    }
+
+    return null;
+};
+
+const normalizeRoleText = (value = "") => {
+    return String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_");
+};
+
+const getNestedProfileValue = (source, paths = []) => {
+    if (!source || typeof source !== "object") {
+        return null;
+    }
+
+    for (const path of paths) {
+        const value = String(path)
+            .split(".")
+            .reduce((current, key) => current?.[key], source);
+
+        if (value !== undefined && value !== null && value !== "") {
+            return value;
+        }
+    }
+
+    return null;
+};
+
+const hasTruthyQuotePermission = (source) => {
+    if (!source || typeof source !== "object") {
+        return false;
+    }
+
+    const directValues = [
+        source?.can_create_quote,
+        source?.canCreateQuote,
+        source?.can_create_quotes,
+        source?.canCreateQuotes,
+        source?.create_quote,
+        source?.createQuote,
+        source?.create_quotes,
+        source?.createQuotes,
+        source?.is_admin,
+        source?.isAdmin,
+        source?.is_employee,
+        source?.isEmployee,
+    ];
+
+    if (
+        directValues.some((value) =>
+            value === true ||
+            value === 1 ||
+            value === "1" ||
+            String(value).toLowerCase() === "true"
+        )
+    ) {
+        return true;
+    }
+
+    const nestedSources = [
+        source?.permissions,
+        source?.abilities,
+        source?.meta,
+        source?.raw,
+        source?.user,
+        source?.profile,
+        source?.data,
+    ].filter(Boolean);
+
+    if (nestedSources.some((nestedSource) => hasTruthyQuotePermission(nestedSource))) {
+        return true;
+    }
+
+    const permissionCollections = [
+        source?.permissions,
+        source?.abilities,
+        source?.roles,
+        source?.scopes,
+    ].filter(Array.isArray);
+
+    return permissionCollections.some((collection) =>
+        collection.some((item) => {
+            const normalizedItem = normalizeRoleText(
+                typeof item === "string"
+                    ? item
+                    : item?.name ||
+                    item?.slug ||
+                    item?.key ||
+                    item?.title ||
+                    item?.permission ||
+                    item?.ability
+            );
+
+            return [
+                "create_quote",
+                "create_quotes",
+                "can_create_quote",
+                "can_create_quotes",
+                "quotes_create",
+                "quote_create",
+                "admin",
+                "super_admin",
+                "employee",
+                "staff",
+            ].includes(normalizedItem);
+        })
+    );
+};
+
+const isExplicitCustomerProfile = (profile) => {
+    if (!profile || typeof profile !== "object") {
+        return false;
+    }
+
+    const roleCandidates = [
+        profile?.role,
+        profile?.role_name,
+        profile?.roleName,
+        profile?.type,
+        profile?.user_type,
+        profile?.userType,
+        profile?.account_type,
+        profile?.accountType,
+        profile?.guard,
+        profile?.user?.role,
+        profile?.user?.role_name,
+        profile?.user?.roleName,
+        profile?.user?.type,
+        profile?.user?.user_type,
+        profile?.profile?.role,
+        profile?.profile?.type,
+        getNestedProfileValue(profile, ["role.name", "role.slug", "role.key", "role.title"]),
+    ]
+        .map(normalizeRoleText)
+        .filter(Boolean);
+
+    return roleCandidates.some((role) =>
+        [
+            "customer",
+            "client",
+            "user",
+            "guest",
+            "customer_user",
+            "client_user",
+        ].includes(role)
+    );
+};
+
+const canProfileCreateQuotes = (profile) => {
+    if (!profile || typeof profile !== "object") {
+        return false;
+    }
+
+    const profileRole = getProfileRoleValue(profile);
+
+    if (profileRole !== null) {
+        return canRoleCreateQuotes(profileRole);
+    }
+
+    if (isExplicitCustomerProfile(profile)) {
+        return false;
+    }
+
+    if (hasTruthyQuotePermission(profile)) {
+        return true;
+    }
+
+    const roleCandidates = [
+        profile?.role,
+        profile?.role_name,
+        profile?.roleName,
+        profile?.type,
+        profile?.user_type,
+        profile?.userType,
+        profile?.account_type,
+        profile?.accountType,
+        profile?.guard,
+        profile?.user?.role,
+        profile?.user?.role_name,
+        profile?.user?.roleName,
+        profile?.user?.type,
+        profile?.user?.user_type,
+        profile?.profile?.role,
+        profile?.profile?.type,
+        getNestedProfileValue(profile, ["role.name", "role.slug", "role.key", "role.title"]),
+    ]
+        .map(normalizeRoleText)
+        .filter(Boolean);
+
+    return roleCandidates.some((role) =>
+        [
+            "admin",
+            "super_admin",
+            "administrator",
+            "employee",
+            "staff",
+            "agent",
+            "support",
+            "sales",
+            "manager",
+            "operation",
+            "operations",
+        ].includes(role)
+    );
+};
+
+const canConversationCreateQuotes = (...sources) => {
+    return sources.some((source) => hasTruthyQuotePermission(source));
+};
+
+const USER_ROLE = {
+    CUSTOMER: 1,
+    EMPLOYEE: 2,
+    ADMIN: 3,
+};
+
+const canRoleCreateQuotes = (roleValue) => {
+    const numericRole = Number(roleValue);
+
+    return numericRole === USER_ROLE.EMPLOYEE || numericRole === USER_ROLE.ADMIN;
+};
+
 const getMessagePreviewText = (message, tr) => {
     if (!message) return "";
 
@@ -330,16 +648,34 @@ const buildReplyMessage = (message, tr) => {
     };
 };
 
-const isMessageDeletable = (message) => {
-    if (!message) return false;
+const getMessageDeleteId = (message) => {
+    const messageId =
+        message?.raw?.id ||
+        message?.message_id ||
+        message?.id ||
+        null;
 
-    const messageId = message.id || message.message_id || message.uuid || message.raw?.id;
+    const numericMessageId = Number(messageId);
 
-    return !!messageId && !message.is_deleted;
+    if (!Number.isInteger(numericMessageId) || numericMessageId <= 0) {
+        return null;
+    }
+
+    return numericMessageId;
 };
 
-const getMessageDeleteId = (message) => {
-    return message?.id || message?.message_id || message?.uuid || message?.raw?.id || null;
+const isMessageDeletable = (message) => {
+    if (
+        !message ||
+        message.is_deleted ||
+        message.isLocal ||
+        message.isOptimistic ||
+        message.isSending
+    ) {
+        return false;
+    }
+
+    return !!getMessageDeleteId(message);
 };
 
 const getValidApiMessageId = (message) => {
@@ -455,6 +791,136 @@ const getMessageResponseObject = (response) => {
     ];
 
     return candidates.find(isPlainObject) || null;
+};
+
+
+const getQuotePayloadFromMessageResponse = (message) => {
+    const candidates = [
+        message?.quote,
+        message?.quote_data,
+        message?.quoteData,
+        message?.data?.quote,
+        message?.data?.quote_data,
+        message?.data?.quoteData,
+        message?.message?.quote,
+        message?.message?.quote_data,
+        message?.raw?.quote,
+        message?.raw?.quote_data,
+    ];
+
+    return candidates.find(isPlainObject) || null;
+};
+
+const getQuoteIdFromMessageResponse = (message) => {
+    return (
+        message?.quote_id ||
+        message?.quoteId ||
+        message?.data?.quote_id ||
+        message?.data?.quoteId ||
+        message?.quote?.id ||
+        message?.quote_data?.id ||
+        message?.quoteData?.id ||
+        null
+    );
+};
+
+const getQuoteObjectFromQuoteResponse = (response) => {
+    const payload = response?.data || response || {};
+
+    const candidates = [
+        payload?.data?.quote,
+        payload?.quote,
+        payload?.data?.item?.quote,
+        payload?.item?.quote,
+        payload?.message?.quote,
+        payload?.data?.message?.quote,
+    ];
+
+    return candidates.find(isPlainObject) || null;
+};
+
+const buildQuoteResponseWithFallbackQuote = (response, quotePayload = {}) => {
+    const responseMessage = getMessageResponseObject(response);
+
+    if (!responseMessage) {
+        return response;
+    }
+
+    const responseQuote =
+        getQuotePayloadFromMessageResponse(responseMessage) ||
+        getQuoteObjectFromQuoteResponse(response);
+
+    const fallbackQuoteId =
+        getQuoteIdFromMessageResponse(responseMessage) ||
+        responseQuote?.id ||
+        null;
+
+    const fallbackRoute =
+        responseQuote?.route ||
+        quotePayload?.route ||
+        {
+            origin_city: quotePayload?.origin_city || quotePayload?.originCity || "",
+            origin_country: quotePayload?.origin_country || quotePayload?.originCountry || "",
+            destination_city: quotePayload?.destination_city || quotePayload?.destinationCity || "",
+            destination_country: quotePayload?.destination_country || quotePayload?.destinationCountry || "",
+        };
+
+    const fallbackQuote = responseQuote || {
+        ...quotePayload,
+        ...(fallbackQuoteId ? { id: fallbackQuoteId } : {}),
+        route: fallbackRoute,
+        status:
+            responseMessage?.status ||
+            responseMessage?.quote_status ||
+            quotePayload?.status ||
+            {
+                value: 1,
+                label: "Pending",
+            },
+    };
+
+    const enhancedMessage = {
+        ...responseMessage,
+        quote_id: responseMessage?.quote_id || responseMessage?.quoteId || fallbackQuoteId,
+        quoteId: responseMessage?.quoteId || responseMessage?.quote_id || fallbackQuoteId,
+        quote: fallbackQuote,
+        quote_data: fallbackQuote,
+        quoteData: fallbackQuote,
+    };
+
+    const responseData = response?.data;
+
+    if (isPlainObject(responseData)) {
+        return {
+            ...response,
+            data: {
+                ...responseData,
+                data: isPlainObject(responseData?.data)
+                    ? {
+                        ...responseData.data,
+                        quote: fallbackQuote,
+                        message: enhancedMessage,
+                        item:
+                            responseData.data.item === responseMessage
+                                ? enhancedMessage
+                                : responseData.data.item,
+                    }
+                    : responseData?.data,
+                quote: responseData?.quote || fallbackQuote,
+                message: enhancedMessage,
+                item:
+                    responseData?.item === responseMessage
+                        ? enhancedMessage
+                        : responseData?.item,
+            },
+        };
+    }
+
+    return {
+        ...response,
+        quote: fallbackQuote,
+        message: enhancedMessage,
+    };
 };
 
 const getConversationFromMessageResponse = (response) => {
@@ -1065,9 +1531,24 @@ const normalizeApiMessage = (message, tr, isArabic, knownMessages = []) => {
     }
 
     if (type === "quote") {
+        const quotePayload =
+            message?.quote ||
+            message?.quote_data ||
+            message?.quoteData ||
+            message?.data?.quote ||
+            message?.data?.quote_data ||
+            message?.data?.quoteData ||
+            message?.message?.quote ||
+            message?.message?.quote_data ||
+            message?.raw?.quote ||
+            message?.raw?.quote_data ||
+            null;
+
         return {
             ...baseMessage,
-            quote: message?.quote || message?.quote_data || null,
+            quote: quotePayload,
+            quote_data: quotePayload,
+            quoteData: quotePayload,
             text: body,
         };
     }
@@ -1160,6 +1641,12 @@ const createOptimisticMessage = ({
     }
 
     if (localType === "audio") {
+        const durationMillis = Number(
+            attachment?.durationMillis ||
+            attachment?.duration_millis ||
+            0
+        );
+
         return {
             ...baseMessage,
             uri: attachment?.uri || "",
@@ -1168,9 +1655,10 @@ const createOptimisticMessage = ({
                 attachment?.fileName ||
                 attachment?.filename ||
                 tr("voiceMessage", "Voice message"),
-            mimeType: attachment?.type || attachment?.mimeType || "audio/mp4",
+            mimeType: attachment?.type || attachment?.mimeType || attachment?.mime_type || "audio/mp4",
             size: attachment?.size || attachment?.fileSize || attachment?.file_size || 0,
-            durationMillis: attachment?.durationMillis || attachment?.duration_millis || 0,
+            durationMillis: Number.isFinite(durationMillis) ? durationMillis : 0,
+            duration: Math.round((Number.isFinite(durationMillis) ? durationMillis : 0) / 1000),
             caption: cleanBody,
         };
     }
@@ -1487,6 +1975,121 @@ const getConversationBlockedStateFromShowResponse = (response) => {
     );
 };
 
+const getNestedPresenceValue = (source, paths = []) => {
+    if (!source || typeof source !== "object") {
+        return null;
+    }
+
+    for (const path of paths) {
+        const value = String(path)
+            .split(".")
+            .reduce((current, key) => current?.[key], source);
+
+        if (value !== undefined && value !== null && value !== "") {
+            return value;
+        }
+    }
+
+    return null;
+};
+
+const getLastSeenAtFromSources = (...sources) => {
+    const paths = [
+        "last_seen_at",
+        "lastSeenAt",
+        "last_seen",
+        "lastSeen",
+        "offline_at",
+        "offlineAt",
+        "disconnected_at",
+        "disconnectedAt",
+        "employee.last_seen_at",
+        "employee.lastSeenAt",
+        "employee.last_seen",
+        "employee.lastSeen",
+        "customer.last_seen_at",
+        "customer.lastSeenAt",
+        "customer.last_seen",
+        "customer.lastSeen",
+        "participant.last_seen_at",
+        "participant.lastSeenAt",
+        "participant.last_seen",
+        "participant.lastSeen",
+        "other_participant.last_seen_at",
+        "other_participant.lastSeenAt",
+        "other_participant.last_seen",
+        "other_participant.lastSeen",
+        "user.last_seen_at",
+        "user.lastSeenAt",
+        "user.last_seen",
+        "user.lastSeen",
+    ];
+
+    for (const source of sources) {
+        const value = getNestedPresenceValue(source, paths);
+
+        if (value) {
+            return value;
+        }
+    }
+
+    return null;
+};
+
+const formatLastSeenText = (lastSeenAt, isArabic) => {
+    if (!lastSeenAt) {
+        return isArabic ? "غير متصل" : "Offline";
+    }
+
+    const date = new Date(lastSeenAt);
+
+    if (Number.isNaN(date.getTime())) {
+        return isArabic
+            ? `آخر ظهور ${String(lastSeenAt)}`
+            : `Last seen ${String(lastSeenAt)}`;
+    }
+
+    const locale = isArabic ? "ar" : "en";
+    const now = new Date();
+    const isSameDay =
+        date.getFullYear() === now.getFullYear() &&
+        date.getMonth() === now.getMonth() &&
+        date.getDate() === now.getDate();
+    const timeText = date.toLocaleTimeString(locale, {
+        hour: "numeric",
+        minute: "2-digit",
+    });
+
+    if (isSameDay) {
+        return isArabic ? `آخر ظهور ${timeText}` : `Last seen ${timeText}`;
+    }
+
+    const dateText = date.toLocaleDateString(locale, {
+        month: "short",
+        day: "numeric",
+    });
+
+    return isArabic
+        ? `آخر ظهور ${dateText} ${timeText}`
+        : `Last seen ${dateText} ${timeText}`;
+};
+
+const formatPresenceText = ({ isBlocked, isTyping, isOnline, lastSeenAt, isArabic, tr }) => {
+    if (isBlocked) {
+        return tr("blocked", "Blocked");
+    }
+
+    if (isTyping) {
+        return tr("typingNow", isArabic ? "يكتب الآن..." : "Typing...");
+    }
+
+    if (isOnline) {
+        return tr("onlineNow", isArabic ? "متصل الآن" : "Online now");
+    }
+
+    return formatLastSeenText(lastSeenAt, isArabic);
+};
+
 export default function IndividualChatScreen({ navigation, route }) {
     const { t, i18n } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -1496,6 +2099,7 @@ export default function IndividualChatScreen({ navigation, route }) {
     const recorderState = useAudioRecorderState(audioRecorder, 250);
     const isRecordingRef = useRef(false);
     const isCancellingRecordingRef = useRef(false);
+    const isStoppingRecordingRef = useRef(false);
 
     const {
         colors: appColors,
@@ -1504,6 +2108,10 @@ export default function IndividualChatScreen({ navigation, route }) {
         changeTheme,
         toggleTheme,
     } = useAppTheme();
+    const {
+        currentUserId,
+        isUserOnline,
+    } = useAppRealtime();
 
     const employee = route?.params?.employee;
     const conversation = route?.params?.conversation;
@@ -1565,6 +2173,13 @@ export default function IndividualChatScreen({ navigation, route }) {
     const [messageOptionsMessage, setMessageOptionsMessage] = useState(null);
     const [copyToastVisible, setCopyToastVisible] = useState(false);
     const copyToastTimerRef = useRef(null);
+    const [isTargetTyping, setIsTargetTyping] = useState(false);
+    const typingTimeoutRef = useRef(null);
+    const typingStopTimeoutRef = useRef(null);
+    const lastTypingWhisperAtRef = useRef(0);
+    const [targetLastSeenAt, setTargetLastSeenAt] = useState(() =>
+        getLastSeenAtFromSources(employee, conversation, route?.params?.customer)
+    );
     const loadedConversationIdRef = useRef(null);
     const [isMutatingChat, setIsMutatingChat] = useState(false);
     const openLibraryAfterCameraCloseRef = useRef(false);
@@ -1577,6 +2192,10 @@ export default function IndividualChatScreen({ navigation, route }) {
     const olderMessagesContentHeightBeforePrependRef = useRef(0);
     const suppressAutoScrollAfterOlderLoadUntilRef = useRef(0);
     const canLoadOlderMessagesRef = useRef(false);
+    const [canCreateQuote, setCanCreateQuote] = useState(false);
+    const [currentUserRole, setCurrentUserRole] = useState(null);
+    const [quoteFormVisible, setQuoteFormVisible] = useState(false);
+    const [isSubmittingQuote, setIsSubmittingQuote] = useState(false);
 
     const tr = (key, fallback) =>
         t(`individualChat.${key}`, {
@@ -1624,6 +2243,65 @@ export default function IndividualChatScreen({ navigation, route }) {
         };
     }, [appColors, isDark]);
 
+    const canViewerCreateQuote =
+        canRoleCreateQuotes(currentUserRole) ||
+        (currentUserRole === null && canCreateQuote);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadCurrentProfileForQuotePermissions = async () => {
+            try {
+                const response = await chatService.getProfile();
+                const profile = getProfilePayload(response);
+
+                if (!isMounted) {
+                    return;
+                }
+
+                const profileRole = getProfileRoleValue(profile);
+
+                setCurrentUserRole(profileRole);
+
+                if (profileRole !== null) {
+                    setCanCreateQuote(canRoleCreateQuotes(profileRole));
+                    return;
+                }
+
+                setCanCreateQuote(
+                    canProfileCreateQuotes(profile) ||
+                    canConversationCreateQuotes(conversation, employee, route?.params)
+                );
+            } catch (error) {
+                console.log("Load quote permissions profile error:", error?.raw || error);
+
+                if (isMounted) {
+                    setCanCreateQuote((currentValue) =>
+                        currentValue ||
+                        canConversationCreateQuotes(conversation, employee, route?.params)
+                    );
+                }
+            }
+        };
+
+        loadCurrentProfileForQuotePermissions();
+
+        return () => {
+            isMounted = false;
+        };
+    }, []);
+
+    const targetOnline = !isGroupConversation && !!targetUserId && isUserOnline?.(targetUserId);
+    const targetTyping = !isGroupConversation && targetOnline && isTargetTyping;
+    const headerPresenceText = formatPresenceText({
+        isBlocked,
+        isTyping: targetTyping,
+        isOnline: targetOnline,
+        lastSeenAt: targetLastSeenAt,
+        isArabic,
+        tr,
+    });
+
     const scrollToBottom = (animated = true) => {
         requestAnimationFrame(() => {
             messagesScrollRef.current?.scrollToEnd({ animated });
@@ -1647,6 +2325,18 @@ export default function IndividualChatScreen({ navigation, route }) {
         return () => {
             if (copyToastTimerRef.current) {
                 clearTimeout(copyToastTimerRef.current);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (typingTimeoutRef.current) {
+                clearTimeout(typingTimeoutRef.current);
+            }
+
+            if (typingStopTimeoutRef.current) {
+                clearTimeout(typingStopTimeoutRef.current);
             }
         };
     }, []);
@@ -1979,12 +2669,64 @@ export default function IndividualChatScreen({ navigation, route }) {
                     })
                 );
             },
+
+            onTyping: (typingEvent) => {
+                const typingConversationId = getNormalizedChatValue(
+                    typingEvent?.conversation_id || typingEvent?.conversationId
+                );
+                const typingUserId = getNormalizedChatValue(
+                    typingEvent?.user_id || typingEvent?.userId
+                );
+                const normalizedCurrentUserId = getNormalizedChatValue(currentUserId);
+                const normalizedTargetUserId = getNormalizedChatValue(targetUserId);
+                const isTypingNow = typingEvent?.is_typing !== false && typingEvent?.isTyping !== false;
+
+                if (
+                    typingConversationId &&
+                    typingConversationId !== normalizedConversationId
+                ) {
+                    return;
+                }
+
+                if (
+                    typingUserId &&
+                    normalizedCurrentUserId &&
+                    typingUserId === normalizedCurrentUserId
+                ) {
+                    return;
+                }
+
+                if (
+                    typingUserId &&
+                    normalizedTargetUserId &&
+                    typingUserId !== normalizedTargetUserId
+                ) {
+                    return;
+                }
+
+                if (typingTimeoutRef.current) {
+                    clearTimeout(typingTimeoutRef.current);
+                    typingTimeoutRef.current = null;
+                }
+
+                if (!isTypingNow) {
+                    setIsTargetTyping(false);
+                    return;
+                }
+
+                setIsTargetTyping(true);
+
+                typingTimeoutRef.current = setTimeout(() => {
+                    setIsTargetTyping(false);
+                    typingTimeoutRef.current = null;
+                }, 2800);
+            },
         });
 
         return () => {
             leaveConversationChannel(normalizedConversationId);
         };
-    }, [conversationId, isArabic]);
+    }, [conversationId, currentUserId, isArabic, targetUserId]);
 
 
     useEffect(() => {
@@ -2020,6 +2762,30 @@ export default function IndividualChatScreen({ navigation, route }) {
                 }
 
                 const showConversationObject = getShowConversationObject(response);
+
+                setCanCreateQuote((currentValue) => {
+                    if (canRoleCreateQuotes(currentUserRole)) {
+                        return true;
+                    }
+
+                    if (Number(currentUserRole) === USER_ROLE.CUSTOMER) {
+                        return false;
+                    }
+
+                    return (
+                        currentValue ||
+                        canConversationCreateQuotes(
+                            showConversationObject,
+                            showConversationObject?.raw,
+                            showConversationObject?.meta,
+                            showConversationObject?.permissions,
+                            conversation,
+                            employee,
+                            route?.params
+                        )
+                    );
+                });
+
                 const nextConversationId =
                     getConversationIdFromShowConversationObject(showConversationObject) ||
                     normalizedConversationId;
@@ -2039,6 +2805,18 @@ export default function IndividualChatScreen({ navigation, route }) {
                     isGroup: nextIsGroup,
                     targetUserId: nextTargetUserId,
                 });
+                setTargetLastSeenAt(
+                    getLastSeenAtFromSources(
+                        showConversationObject,
+                        showConversationObject?.other_participant,
+                        showConversationObject?.participant,
+                        showConversationObject?.employee,
+                        showConversationObject?.customer,
+                        employee,
+                        conversation,
+                        route?.params?.customer
+                    )
+                );
 
                 if (nextConversationId) {
                     setActiveConversationId(nextConversationId);
@@ -2336,28 +3114,44 @@ export default function IndividualChatScreen({ navigation, route }) {
                     responseMessageWithReply,
                     tr,
                     isArabic,
-                    messages
+                    messagesRef.current || messages
                 )
             );
 
             setMessages((prev) => {
-                const existingIds = new Set(
-                    prev
-                        .filter((item) => String(item.id) !== String(optimisticMessageId))
-                        .map((item) => String(item.id))
-                );
+                const existingIndex = prev.findIndex((item) => {
+                    const itemId = getComparableMessageId(item);
 
-                if (existingIds.has(String(preparedMessage.id))) {
-                    return prev.filter(
-                        (item) => String(item.id) !== String(optimisticMessageId)
+                    return (
+                        itemId !== undefined &&
+                        itemId !== null &&
+                        String(itemId) === String(preparedMessage.id)
+                    );
+                });
+
+                if (existingIndex !== -1) {
+                    return prev.map((item, index) =>
+                        index === existingIndex
+                            ? markMessageAsSent(forceMessageAsMine(preparedMessage))
+                            : item
                     );
                 }
 
-                return prev.map((item) =>
-                    String(item.id) === String(optimisticMessageId)
-                        ? markMessageAsSent(preparedMessage)
-                        : item
-                );
+                if (optimisticMessageId) {
+                    const optimisticIndex = prev.findIndex(
+                        (item) => String(item.id) === String(optimisticMessageId)
+                    );
+
+                    if (optimisticIndex !== -1) {
+                        return prev.map((item, index) =>
+                            index === optimisticIndex
+                                ? markMessageAsSent(preparedMessage)
+                                : item
+                        );
+                    }
+                }
+
+                return [...prev, markMessageAsSent(preparedMessage)];
             });
 
             return;
@@ -2430,6 +3224,28 @@ export default function IndividualChatScreen({ navigation, route }) {
         try {
             setIsMutatingChat(true);
 
+            if (attachment) {
+                console.log("[SEND MESSAGE DEBUG] Sending attachment message:", {
+                    activeConversationIdForSend,
+                    activeTargetUserIdForSend,
+                    type,
+                    body,
+                    attachment: {
+                        uri: attachment?.uri,
+                        name: attachment?.name,
+                        fileName: attachment?.fileName,
+                        filename: attachment?.filename,
+                        type: attachment?.type,
+                        mimeType: attachment?.mimeType,
+                        mime_type: attachment?.mime_type,
+                        size: attachment?.size,
+                        durationMillis: attachment?.durationMillis,
+                        duration_millis: attachment?.duration_millis,
+                    },
+                    replyToMessageId,
+                });
+            }
+
             const response = activeConversationIdForSend
                 ? await chatService.sendMessage(activeConversationIdForSend, messagePayload)
                 : await chatService.startDirectMessage(
@@ -2473,6 +3289,53 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
     };
 
+    const sendTypingWhisper = (isTyping) => {
+        const normalizedConversationId = getNormalizedChatValue(conversationId);
+
+        if (!normalizedConversationId || isGroupConversation) {
+            return;
+        }
+
+        sendConversationTypingWhisper({
+            conversationId: normalizedConversationId,
+            userId: currentUserId,
+            userName: "",
+            targetUserId,
+            isTyping,
+        });
+    };
+
+    const handleTyping = (text) => {
+        const hasTypedText = String(text || "").trim().length > 0;
+        const now = Date.now();
+
+        if (!hasTypedText) {
+            if (typingStopTimeoutRef.current) {
+                clearTimeout(typingStopTimeoutRef.current);
+                typingStopTimeoutRef.current = null;
+            }
+
+            sendTypingWhisper(false);
+            lastTypingWhisperAtRef.current = 0;
+            return;
+        }
+
+        if (now - lastTypingWhisperAtRef.current > 1200) {
+            sendTypingWhisper(true);
+            lastTypingWhisperAtRef.current = now;
+        }
+
+        if (typingStopTimeoutRef.current) {
+            clearTimeout(typingStopTimeoutRef.current);
+        }
+
+        typingStopTimeoutRef.current = setTimeout(() => {
+            sendTypingWhisper(false);
+            typingStopTimeoutRef.current = null;
+            lastTypingWhisperAtRef.current = 0;
+        }, 1800);
+    };
+
     const handleSend = () => {
         const cleanText = messageText.trim();
         if (!cleanText) return;
@@ -2483,6 +3346,7 @@ export default function IndividualChatScreen({ navigation, route }) {
 
         setMessageText("");
         setReplyingToMessage(null);
+        sendTypingWhisper(false);
 
         void sendOutgoingChatMessage({
             type: 1,
@@ -2490,6 +3354,70 @@ export default function IndividualChatScreen({ navigation, route }) {
             replyToMessageId,
             localReplyMessage: currentReplyingToMessage,
         });
+    };
+
+    const handleSubmitQuote = async (quotePayload) => {
+        const activeConversationIdForQuote = getNormalizedChatValue(conversationId);
+
+        if (!canViewerCreateQuote) {
+            Alert.alert(
+                tr("quoteUnavailableTitle", "Quote unavailable"),
+                tr("quotePermissionMessage", "You do not have permission to create quotes.")
+            );
+            return false;
+        }
+
+        if (!activeConversationIdForQuote) {
+            Alert.alert(
+                tr("missingConversationTitle", "Conversation not ready"),
+                tr("quoteNeedsConversationMessage", "Please open a saved conversation before sending a quote.")
+            );
+            return false;
+        }
+
+        try {
+            setIsSubmittingQuote(true);
+
+            const response = await chatService.createQuote(
+                activeConversationIdForQuote,
+                quotePayload
+            );
+
+            const responseMessage = getMessageResponseObject(response);
+
+            if (responseMessage?.id) {
+                rememberOutgoingApiMessage(
+                    ownRealtimeMessageIdsRef,
+                    pendingOutgoingSignaturesRef,
+                    ownSenderIdsRef,
+                    responseMessage
+                );
+            }
+
+            await appendMessageResponseToList(
+                buildQuoteResponseWithFallbackQuote(response, quotePayload)
+            );
+
+            setQuoteFormVisible(false);
+
+            setTimeout(() => {
+                scrollToBottom(true);
+            }, 100);
+
+            return true;
+        } catch (error) {
+            console.log("Create quote error:", error?.raw || error);
+
+            Alert.alert(
+                tr("errorTitle", "Something went wrong"),
+                error?.userMessage ||
+                tr("createQuoteError", "Could not send the quote. Please check the details and try again.")
+            );
+
+            return false;
+        } finally {
+            setIsSubmittingQuote(false);
+        }
     };
 
     const getFileNameExtension = (fileName = "") => {
@@ -2681,6 +3609,10 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const startVoiceRecording = async () => {
+        if (isRecordingRef.current || recorderState?.isRecording || isStoppingRecordingRef.current) {
+            return;
+        }
+
         try {
             Keyboard.dismiss();
 
@@ -2706,8 +3638,25 @@ export default function IndividualChatScreen({ navigation, route }) {
             await audioRecorder.prepareToRecordAsync();
             audioRecorder.record();
             isRecordingRef.current = true;
+            isStoppingRecordingRef.current = false;
+
+            console.log("[VOICE RECORDING DEBUG] Voice recording started:", {
+                conversationId,
+                targetUserId,
+            });
         } catch (error) {
+            isRecordingRef.current = false;
+            isStoppingRecordingRef.current = false;
             console.log("Voice recording start error:", error);
+
+            try {
+                await setAudioModeAsync({
+                    allowsRecording: false,
+                    playsInSilentMode: true,
+                });
+            } catch (audioModeError) {
+                console.log("Audio mode reset after start error:", audioModeError);
+            }
 
             Alert.alert(
                 tr("errorTitle", "Something went wrong"),
@@ -2717,13 +3666,26 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const stopVoiceRecording = async () => {
-        try {
-            const durationMillis = recorderState?.durationMillis || 0;
+        if (isStoppingRecordingRef.current) {
+            return;
+        }
 
+        if (!isRecordingRef.current && !recorderState?.isRecording) {
+            return;
+        }
+
+        isStoppingRecordingRef.current = true;
+
+        let voiceUri = "";
+        let durationMillis = Number(recorderState?.durationMillis || 0);
+
+        try {
             await audioRecorder.stop();
             isRecordingRef.current = false;
 
-            const voiceUri = audioRecorder.uri || recorderState?.url;
+            await new Promise((resolve) => setTimeout(resolve, 120));
+
+            voiceUri = getRecorderUri(audioRecorder, recorderState);
 
             await setAudioModeAsync({
                 allowsRecording: false,
@@ -2737,36 +3699,82 @@ export default function IndividualChatScreen({ navigation, route }) {
                 );
                 return;
             }
-            const replyToMessageId = getValidApiMessageId(replyingToMessage);
 
+            if (!Number.isFinite(durationMillis) || durationMillis <= 0) {
+                durationMillis = 1000;
+            }
+
+            if (durationMillis < 500) {
+                Alert.alert(
+                    tr("voiceTooShortTitle", "Voice message too short"),
+                    tr("voiceTooShortMessage", "Please record a longer voice message.")
+                );
+                return;
+            }
+
+            const replyToMessageId = getValidApiMessageId(replyingToMessage);
             const currentReplyingToMessage = replyingToMessage;
 
             setReplyingToMessage(null);
 
             const voiceSize = await getLocalAttachmentSize(voiceUri);
+            const voiceFileName = getVoiceRecordingFileName();
 
-            void sendOutgoingChatMessage({
+            console.log("[VOICE RECORDING DEBUG] Sending voice message:", {
+                conversationId,
+                targetUserId,
+                voiceUri,
+                voiceFileName,
+                voiceSize,
+                durationMillis,
+            });
+
+            const sentSuccessfully = await sendOutgoingChatMessage({
                 type: 8,
-                body: tr("voiceMessage", "Voice message"),
+                body: "",
                 attachment: {
                     uri: voiceUri,
-                    name: `voice-message-${Date.now()}.m4a`,
+                    name: voiceFileName,
+                    fileName: voiceFileName,
+                    filename: voiceFileName,
                     type: "audio/mp4",
+                    mimeType: "audio/mp4",
+                    mime_type: "audio/mp4",
                     size: voiceSize,
                     fileSize: voiceSize,
+                    file_size: voiceSize,
                     durationMillis,
+                    duration_millis: durationMillis,
+                    duration: Math.round(durationMillis / 1000),
                 },
                 replyToMessageId,
                 localReplyMessage: currentReplyingToMessage,
             });
+
+            console.log("[VOICE RECORDING DEBUG] Voice send result:", {
+                sentSuccessfully,
+                conversationId,
+                targetUserId,
+            });
         } catch (error) {
             isRecordingRef.current = false;
-            console.log("Voice recording stop error:", error);
+            console.log("[VOICE RECORDING DEBUG] Voice recording stop/send error:", error);
 
             Alert.alert(
                 tr("errorTitle", "Something went wrong"),
                 tr("voiceRecordStopError", "Could not send the voice message. Please try again.")
             );
+        } finally {
+            isStoppingRecordingRef.current = false;
+
+            try {
+                await setAudioModeAsync({
+                    allowsRecording: false,
+                    playsInSilentMode: true,
+                });
+            } catch (audioModeError) {
+                console.log("[VOICE RECORDING DEBUG] Audio mode reset after stop error:", audioModeError);
+            }
         }
     };
 
@@ -2774,7 +3782,7 @@ export default function IndividualChatScreen({ navigation, route }) {
     const cancelVoiceRecordingIfActive = async () => {
         const isActuallyRecording = isRecordingRef.current || !!recorderState?.isRecording;
 
-        if (!isActuallyRecording || isCancellingRecordingRef.current) {
+        if (!isActuallyRecording || isCancellingRecordingRef.current || isStoppingRecordingRef.current) {
             return;
         }
 
@@ -2787,6 +3795,7 @@ export default function IndividualChatScreen({ navigation, route }) {
         } finally {
             isRecordingRef.current = false;
             isCancellingRecordingRef.current = false;
+            isStoppingRecordingRef.current = false;
 
             try {
                 await setAudioModeAsync({
@@ -2800,7 +3809,11 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const handleMicPress = async () => {
-        if (isRecordingVoice) {
+        if (isStoppingRecordingRef.current) {
+            return;
+        }
+
+        if (isRecordingRef.current || isRecordingVoice) {
             await stopVoiceRecording();
             return;
         }
@@ -2957,8 +3970,22 @@ export default function IndividualChatScreen({ navigation, route }) {
             return;
         }
 
+        if (type === "quote") {
+            await cancelVoiceRecordingIfActive();
+            setQuoteFormVisible(true);
+            return;
+        }
+
         if (type === "scan") {
-            await scanDocumentWithCamera();
+            if (typeof scanDocumentWithCamera === "function") {
+                await scanDocumentWithCamera();
+                return;
+            }
+
+            Alert.alert(
+                tr("scanUnavailableTitle", "Scan unavailable"),
+                tr("scanUnavailableMessage", "Document scanning is not available right now.")
+            );
         }
     };
 
@@ -3115,6 +4142,14 @@ export default function IndividualChatScreen({ navigation, route }) {
 
         const messageDeleteId = getMessageDeleteId(message);
 
+        if (!messageDeleteId) {
+            Alert.alert(
+                tr("deleteUnavailableTitle", "Delete unavailable"),
+                tr("deleteUnavailableMessage", "This message cannot be deleted yet.")
+            );
+            return;
+        }
+
         Alert.alert(
             tr("confirmDeleteMessageTitle", "Delete message?"),
             tr("confirmDeleteMessageBody", "This message will be deleted from the conversation."),
@@ -3124,15 +4159,11 @@ export default function IndividualChatScreen({ navigation, route }) {
                     text: tr("delete", "Delete"),
                     style: "destructive",
                     onPress: async () => {
-                        const previousMessages = messages;
+                        const previousMessages = messagesRef.current || messages;
 
                         setMessages((prev) =>
-                            prev.filter((item) => String(getMessageDeleteId(item)) !== String(messageDeleteId))
+                            prev.filter((item) => getMessageDeleteId(item) !== messageDeleteId)
                         );
-
-                        if (!messageDeleteId) {
-                            return;
-                        }
 
                         try {
                             await chatService.deleteMessage(messageDeleteId);
@@ -3351,6 +4382,10 @@ export default function IndividualChatScreen({ navigation, route }) {
                         employeeUsername={employee?.username}   // أضفتها
                         employeeEmail={employee?.email}         // أضفتها
                         employeeLocation={employee?.location}   // أضفتها
+                        isOnline={targetOnline}
+                        isTyping={targetTyping}
+                        lastSeenAt={targetLastSeenAt}
+                        presenceText={headerPresenceText}
                     />
 
                     <ChatPatternBackground topOffset={Platform.OS === "android" ? 76 : 78} />
@@ -3375,6 +4410,8 @@ export default function IndividualChatScreen({ navigation, route }) {
                         onOpenVideo={setPreviewMedia}
                         onOpenDocument={setPreviewDocument}
                         onMessageLongPress={handleMessageLongPress}
+                        canCreateQuote={canViewerCreateQuote}
+                        viewerRole={currentUserRole}
                     />
 
                     <IndividualChatComposer
@@ -3384,6 +4421,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                         isCompactScreen={isCompactScreen}
                         messageText={messageText}
                         onChangeMessageText={setMessageText}
+                        onTyping={handleTyping}
                         isRecordingVoice={isRecordingVoice}
                         recordingDurationText={recordingDurationText}
                         hasMessage={hasMessage}
@@ -3411,6 +4449,17 @@ export default function IndividualChatScreen({ navigation, route }) {
                     tr={tr}
                     isArabic={isArabic}
                     isCompactScreen={isCompactScreen}
+                    canCreateQuote={canViewerCreateQuote}
+                />
+
+                <QuoteFormModal
+                    visible={quoteFormVisible}
+                    colors={colors}
+                    tr={tr}
+                    isArabic={isArabic}
+                    isSubmitting={isSubmittingQuote}
+                    onClose={() => setQuoteFormVisible(false)}
+                    onSubmit={handleSubmitQuote}
                 />
 
                 <ChatOptionsModal
@@ -4028,6 +5077,7 @@ function AttachmentOptionsModal({
     tr,
     isArabic,
     isCompactScreen,
+    canCreateQuote = false,
 }) {
     if (!visible) {
         return null;
@@ -4055,6 +5105,17 @@ function AttachmentOptionsModal({
             iconName: "file-document",
             color: colors.blue,
         },
+        ...(canCreateQuote
+            ? [
+                {
+                    key: "quote",
+                    label: tr("quote", "Quote"),
+                    iconType: "material",
+                    iconName: "file-document-edit-outline",
+                    color: colors.primary || colors.blue,
+                },
+            ]
+            : []),
         {
             key: "scan",
             label: tr("scanDocument", "Scan Document"),

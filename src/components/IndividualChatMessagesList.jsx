@@ -1,12 +1,10 @@
-import {
-    getRowDirectionStyle,
-    getTextDirectionStyle,
-} from "@/src/styles/globalStyles";
+import { getTextDirectionStyle } from "@/src/styles/globalStyles";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import React, { useEffect, useState } from "react";
 import MediaMessage from "../components/MediaMessage";
+import QuoteMessageCard from "@/src/components/quotes/QuoteMessageCard";
 
 import {
     ActivityIndicator,
@@ -336,6 +334,8 @@ export default function IndividualChatMessagesList({
     onOpenVideo,
     onOpenDocument,
     onMessageLongPress,
+    canCreateQuote = false,
+    viewerRole = null,
 }) {
     const handleMessagesScroll = (event) => {
         onScroll?.(event);
@@ -386,14 +386,17 @@ export default function IndividualChatMessagesList({
 
                 if (item.type === "quote") {
                     return (
-                        <QuoteCard
+                        <QuoteMessageCard
                             key={item.id}
+                            item={item}
                             colors={colors}
                             tr={tr}
                             time={displayTime}
                             isArabic={isArabic}
                             isCompactScreen={isCompactScreen}
                             onLongPress={() => onMessageLongPress?.(item)}
+                            viewerCanCreateQuote={canCreateQuote}
+                            viewerRole={viewerRole}
                         />
                     );
                 }
@@ -916,224 +919,6 @@ function AudioMessage({ item, colors, isCompactScreen, tr, time, onLongPress }) 
     );
 }
 
-function QuoteCard({ colors, tr, time, isArabic, isCompactScreen, onLongPress }) {
-    return (
-        <View style={styles.quoteRow}>
-            <TouchableOpacity
-                activeOpacity={0.9}
-                delayLongPress={260}
-                onLongPress={onLongPress}
-                style={[
-                    styles.quoteCard,
-                    isCompactScreen && styles.quoteCardCompact,
-                    {
-                        backgroundColor: colors.card,
-                        borderColor: colors.primary,
-                    },
-                ]}
-            >
-                <Text
-                    style={[
-                        styles.quoteTitle,
-                        isCompactScreen && styles.quoteTitleCompact,
-                        { color: colors.primary },
-                        getTextDirectionStyle(isArabic),
-                    ]}
-                >
-                    {tr("quoteSummary", "Quote Summary")}
-                </Text>
-
-                <View
-                    style={[
-                        styles.quoteBody,
-                        isCompactScreen && styles.quoteBodyCompact,
-                        !isCompactScreen && getRowDirectionStyle(isArabic),
-                    ]}
-                >
-                    <View style={styles.quoteDetails}>
-                        <QuoteLine
-                            icon="map-marker-path"
-                            label={tr("route", "Route")}
-                            value="Shanghai (CN) → Dubai (UAE)"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="package-variant-closed"
-                            label={tr("cargoType", "Cargo Type")}
-                            value="General Cargo"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="shipping-pallet"
-                            label={tr("container", "Container")}
-                            value="20ft FCL"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="cube-outline"
-                            label={tr("volumeWeight", "Volume / Weight")}
-                            value="12 CBM / 8,000 KG"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="calendar-clock"
-                            label="ETD"
-                            value="May 28, 2024"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                        <QuoteLine
-                            icon="calendar-check"
-                            label="ETA"
-                            value="Jun 04, 2024"
-                            colors={colors}
-                            isArabic={isArabic}
-                        />
-                    </View>
-
-                    <View
-                        style={[
-                            styles.priceCard,
-                            isCompactScreen && styles.priceCardCompact,
-                            {
-                                borderColor: colors.border,
-                                backgroundColor: colors.cardSoft,
-                            },
-                        ]}
-                    >
-                        <Text style={[styles.priceLabel, { color: colors.text }]}>
-                            {tr("totalPrice", "Total Price (All-In)")}
-                        </Text>
-
-                        <Text
-                            style={[
-                                styles.priceValue,
-                                isCompactScreen && styles.priceValueCompact,
-                                { color: colors.primary },
-                            ]}
-                        >
-                            USD 1,250
-                        </Text>
-
-                        <Text style={[styles.validText, { color: colors.muted }]}>
-                            {tr("validUntil", "Valid Until")}: May 31, 2024
-                        </Text>
-
-                        <View
-                            style={[
-                                styles.divider,
-                                { backgroundColor: colors.border },
-                            ]}
-                        />
-
-                        <Text
-                            style={[
-                                styles.includesTitle,
-                                { color: colors.primary },
-                            ]}
-                        >
-                            {tr("includes", "Includes")}:
-                        </Text>
-
-                        {[
-                            "Ocean Freight",
-                            "Terminal Handling",
-                            "Documentation",
-                            "Customs Clearance",
-                            "Delivery in Dubai",
-                        ].map((item) => (
-                            <View key={item} style={styles.includeRow}>
-                                <Ionicons
-                                    name="checkmark"
-                                    size={14}
-                                    color={colors.primary}
-                                />
-                                <Text
-                                    style={[
-                                        styles.includeText,
-                                        { color: colors.text },
-                                    ]}
-                                >
-                                    {item}
-                                </Text>
-                            </View>
-                        ))}
-                    </View>
-                </View>
-
-                <TouchableOpacity
-                    style={[
-                        styles.viewQuoteButton,
-                        { borderColor: colors.border },
-                    ]}
-                    activeOpacity={0.8}
-                >
-                    <View style={styles.viewQuoteLeft}>
-                        <MaterialCommunityIcons
-                            name="file-document-outline"
-                            size={20}
-                            color={colors.primary}
-                        />
-
-                        <Text
-                            style={[
-                                styles.viewQuoteText,
-                                { color: colors.text },
-                            ]}
-                        >
-                            {tr("viewFullQuote", "View Full Quote")}
-                        </Text>
-                    </View>
-
-                    <Ionicons
-                        name={isArabic ? "chevron-back" : "chevron-forward"}
-                        size={20}
-                        color={colors.text}
-                    />
-                </TouchableOpacity>
-
-                <Text style={[styles.quoteTime, { color: colors.muted }]}>
-                    {time}
-                </Text>
-            </TouchableOpacity>
-        </View>
-    );
-}
-
-function QuoteLine({ icon, label, value, colors, isArabic }) {
-    return (
-        <View style={[styles.quoteLine, getRowDirectionStyle(isArabic)]}>
-            <MaterialCommunityIcons name={icon} size={21} color={colors.primary} />
-
-            <View style={styles.quoteLineTextWrapper}>
-                <Text
-                    style={[
-                        styles.quoteLineLabel,
-                        { color: colors.muted },
-                        getTextDirectionStyle(isArabic),
-                    ]}
-                >
-                    {label}
-                </Text>
-
-                <Text
-                    style={[
-                        styles.quoteLineValue,
-                        { color: colors.text },
-                        getTextDirectionStyle(isArabic),
-                    ]}
-                >
-                    {value}
-                </Text>
-            </View>
-        </View>
-    );
-}
-
 const styles = StyleSheet.create({
     messagesList: {
         flex: 1,
@@ -1351,153 +1136,6 @@ const styles = StyleSheet.create({
     },
 
     timeText: {
-        fontSize: 11.5,
-    },
-
-    quoteRow: {
-        marginBottom: 10,
-        alignItems: "flex-start",
-    },
-
-    quoteCard: {
-        width: "100%",
-        borderRadius: 18,
-        borderWidth: 1.4,
-        padding: 14,
-    },
-
-    quoteCardCompact: {
-        padding: 12,
-        borderRadius: 16,
-    },
-
-    quoteTitle: {
-        fontSize: 16,
-        fontWeight: "900",
-        marginBottom: 12,
-    },
-
-    quoteTitleCompact: {
-        fontSize: 15,
-        marginBottom: 10,
-    },
-
-    quoteBody: {
-        flexDirection: "row",
-        gap: 12,
-    },
-
-    quoteBodyCompact: {
-        flexDirection: "column",
-        gap: 12,
-    },
-
-    quoteDetails: {
-        flex: 1,
-        gap: 9,
-    },
-
-    quoteLine: {
-        flexDirection: "row",
-        gap: 8,
-        alignItems: "flex-start",
-    },
-
-    quoteLineTextWrapper: {
-        flex: 1,
-    },
-
-    quoteLineLabel: {
-        fontSize: 12,
-    },
-
-    quoteLineValue: {
-        fontSize: 13,
-        fontWeight: "700",
-        marginTop: 1,
-    },
-
-    priceCard: {
-        width: 158,
-        borderRadius: 16,
-        borderWidth: 1,
-        padding: 10,
-    },
-
-    priceCardCompact: {
-        width: "100%",
-    },
-
-    priceLabel: {
-        fontSize: 12,
-        textAlign: "center",
-    },
-
-    priceValue: {
-        marginTop: 5,
-        fontSize: 21,
-        fontWeight: "900",
-        textAlign: "center",
-    },
-
-    priceValueCompact: {
-        fontSize: 20,
-    },
-
-    validText: {
-        marginTop: 6,
-        fontSize: 11,
-        textAlign: "center",
-    },
-
-    divider: {
-        height: 1,
-        marginVertical: 8,
-    },
-
-    includesTitle: {
-        fontSize: 12,
-        fontWeight: "800",
-        marginBottom: 4,
-    },
-
-    includeRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        marginTop: 3,
-    },
-
-    includeText: {
-        flex: 1,
-        fontSize: 10.5,
-    },
-
-    viewQuoteButton: {
-        marginTop: 13,
-        borderWidth: 1,
-        borderRadius: 13,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-
-    viewQuoteLeft: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 8,
-    },
-
-    viewQuoteText: {
-        fontSize: 14,
-        fontWeight: "800",
-    },
-
-    quoteTime: {
-        marginTop: 5,
-        textAlign: "right",
         fontSize: 11.5,
     },
 });

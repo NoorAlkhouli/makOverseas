@@ -55,6 +55,78 @@ const getMessageDebugInfo = (message) => {
     };
 };
 
+const getTypingUserId = (event) => {
+    const userId =
+        event?.user_id ||
+        event?.userId ||
+        event?.sender_id ||
+        event?.senderId ||
+        event?.id ||
+        event?.user?.id ||
+        event?.user?.user_id ||
+        event?.user?.userId ||
+        null;
+
+    if (userId === undefined || userId === null || userId === '') {
+        return null;
+    }
+
+    return String(userId);
+};
+
+const normalizeTypingEvent = (event = {}, conversationId = null) => {
+    const userId = getTypingUserId(event);
+    const now = new Date().toISOString();
+
+    return {
+        ...event,
+        conversation_id:
+            event?.conversation_id ||
+            event?.conversationId ||
+            conversationId ||
+            null,
+        conversationId:
+            event?.conversationId ||
+            event?.conversation_id ||
+            conversationId ||
+            null,
+        user_id: userId,
+        userId,
+        target_user_id:
+            event?.target_user_id ||
+            event?.targetUserId ||
+            event?.receiver_id ||
+            event?.receiverId ||
+            null,
+        targetUserId:
+            event?.targetUserId ||
+            event?.target_user_id ||
+            event?.receiverId ||
+            event?.receiver_id ||
+            null,
+        is_typing:
+            event?.is_typing !== undefined
+                ? event.is_typing
+                : event?.isTyping !== undefined
+                    ? event.isTyping
+                    : true,
+        isTyping:
+            event?.isTyping !== undefined
+                ? event.isTyping
+                : event?.is_typing !== undefined
+                    ? event.is_typing
+                    : true,
+        typed_at:
+            event?.typed_at ||
+            event?.typedAt ||
+            now,
+        typedAt:
+            event?.typedAt ||
+            event?.typed_at ||
+            now,
+    };
+};
+
 const bindMessageEvent = (channelState, eventName, logName, handlerKey) => {
     channelState.channel.listen(eventName, (payload) => {
         const message = getMessageFromPayload(payload);
@@ -85,10 +157,34 @@ const bindMessageEvent = (channelState, eventName, logName, handlerKey) => {
     });
 };
 
+const bindTypingWhisperEvent = (channelState) => {
+    if (typeof channelState?.channel?.listenForWhisper !== 'function') {
+        console.log(
+            '[Conversation Realtime] listenForWhisper is not available on this channel.'
+        );
+        return;
+    }
+
+    channelState.channel.listenForWhisper('typing', (event) => {
+        const normalizedTypingEvent = normalizeTypingEvent(
+            event,
+            channelState.conversationId
+        );
+
+        console.log(
+            '[Conversation Realtime] Typing whisper received:',
+            normalizedTypingEvent
+        );
+
+        channelState.handlers?.onTyping?.(normalizedTypingEvent, event);
+    });
+};
+
 export function subscribeToConversationChannel({
     conversationId,
     onMessageSent,
     onMessageUpdated,
+    onTyping,
 }) {
     const echo = getEcho();
 
@@ -109,6 +205,7 @@ export function subscribeToConversationChannel({
         existingChannelState.handlers = {
             onMessageSent,
             onMessageUpdated,
+            onTyping,
         };
 
         console.log(
@@ -126,9 +223,11 @@ export function subscribeToConversationChannel({
     const channel = echo.private(channelName);
     const channelState = {
         channel,
+        conversationId: normalizedConversationId,
         handlers: {
             onMessageSent,
             onMessageUpdated,
+            onTyping,
         },
     };
 
@@ -153,9 +252,74 @@ export function subscribeToConversationChannel({
     bindMessageEvent(channelState, '.message.updated', 'message.updated', 'onMessageUpdated');
     bindMessageEvent(channelState, 'message.updated', 'message.updated(no-dot)', 'onMessageUpdated');
 
+    bindTypingWhisperEvent(channelState);
+
     conversationChannels.set(normalizedConversationId, channelState);
 
     return channel;
+}
+
+export function sendConversationTypingWhisper({
+    conversationId,
+    userId,
+    userName,
+    targetUserId,
+    isTyping = true,
+} = {}) {
+    if (!conversationId) {
+        console.log('[Conversation Realtime] Cannot send typing whisper: conversationId is missing.');
+        return false;
+    }
+
+    const normalizedConversationId = String(conversationId);
+    const channelState = conversationChannels.get(normalizedConversationId);
+    const channel = channelState?.channel;
+
+    if (!channel) {
+        console.log(
+            '[Conversation Realtime] Cannot send typing whisper: channel is not subscribed.',
+            normalizedConversationId
+        );
+        return false;
+    }
+
+    if (typeof channel.whisper !== 'function') {
+        console.log('[Conversation Realtime] Cannot send typing whisper: whisper is not available.');
+        return false;
+    }
+
+    const now = new Date().toISOString();
+
+    const payload = {
+        conversation_id: normalizedConversationId,
+        conversationId: normalizedConversationId,
+        user_id: userId ? String(userId) : null,
+        userId: userId ? String(userId) : null,
+        user_name: userName || '',
+        userName: userName || '',
+        target_user_id: targetUserId ? String(targetUserId) : null,
+        targetUserId: targetUserId ? String(targetUserId) : null,
+        is_typing: !!isTyping,
+        isTyping: !!isTyping,
+        typed_at: now,
+        typedAt: now,
+    };
+
+    console.log('[Conversation Realtime] Sending typing whisper:', payload);
+
+    channel.whisper('typing', payload);
+
+    return true;
+}
+
+export function getConversationChannel(conversationId) {
+    if (!conversationId) {
+        return null;
+    }
+
+    const normalizedConversationId = String(conversationId);
+
+    return conversationChannels.get(normalizedConversationId)?.channel || null;
 }
 
 export function leaveConversationChannel(conversationId) {

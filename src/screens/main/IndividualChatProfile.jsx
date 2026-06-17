@@ -1,7 +1,7 @@
 import { Feather, Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     Animated,
@@ -45,15 +45,50 @@ export default function IndividualChatProfile({ navigation, route }) {
     const profile = route?.params?.profile || {};
 
     const data = {
+        conversationId: route?.params?.conversationId || profile.conversationId || null,
+        targetUserId:
+            route?.params?.targetUserId ||
+            route?.params?.target_user_id ||
+            profile.targetUserId ||
+            profile.target_user_id ||
+            null,
         initials: profile.initials || "MO",
         name: profile.name || "MAK Overseas Sales Employee",
         department: profile.department || "Sales",
         isBlocked: !!profile.isBlocked,
+        isOnline: profile.isOnline === true,
+        isTyping: profile.isTyping === true,
+        presenceText: profile.presenceText || "",
+        lastSeenAt: profile.lastSeenAt || null,
         phone: profile.phone || "+963 947 156 953",
         username: profile.username || "@makoverseas_sales",
         email: profile.email || "sales@mak-overseas.com",
         location: profile.location || "Damascus, Syria",
     };
+
+    useEffect(() => {
+        console.log("[PROFILE ONLINE DEBUG] Profile presence received:", {
+            conversationId: data.conversationId,
+            targetUserId: data.targetUserId,
+            name: data.name,
+            isBlocked: data.isBlocked,
+            isOnline: data.isOnline,
+            isTyping: data.isTyping,
+            presenceText: data.presenceText,
+            lastSeenAt: data.lastSeenAt,
+            routeParams: route?.params,
+        });
+    }, [
+        data.conversationId,
+        data.targetUserId,
+        data.name,
+        data.isBlocked,
+        data.isOnline,
+        data.isTyping,
+        data.presenceText,
+        data.lastSeenAt,
+        route?.params,
+    ]);
 
     const colors = useMemo(
         () => ({
@@ -87,6 +122,40 @@ export default function IndividualChatProfile({ navigation, route }) {
     );
 
     const styles = useMemo(() => createStyles(colors), [colors]);
+
+    const statusText = data.isBlocked
+        ? t("blocked", "Blocked")
+        : data.isTyping
+            ? t("typingNow", "Typing...")
+            : data.presenceText || (data.isOnline
+                ? t("onlineNow", "Online now")
+                : t("offline", "Offline"));
+
+    const statusColor = data.isBlocked
+        ? colors.danger
+        : data.isOnline || data.isTyping
+            ? colors.primary
+            : colors.textMuted;
+
+    useEffect(() => {
+        console.log("[PROFILE ONLINE DEBUG] Profile status rendered:", {
+            conversationId: data.conversationId,
+            targetUserId: data.targetUserId,
+            statusText,
+            statusColor,
+            isOnline: data.isOnline,
+            isTyping: data.isTyping,
+            isBlocked: data.isBlocked,
+        });
+    }, [
+        data.conversationId,
+        data.targetUserId,
+        statusText,
+        statusColor,
+        data.isOnline,
+        data.isTyping,
+        data.isBlocked,
+    ]);
 
     const headerTitleOpacity = scrollY.interpolate({
         inputRange: [80, 145],
@@ -331,27 +400,17 @@ export default function IndividualChatProfile({ navigation, route }) {
                         <View
                             style={[
                                 styles.onlineDot,
-                                {
-                                    backgroundColor: data.isBlocked
-                                        ? colors.danger
-                                        : colors.primary,
-                                },
+                                { backgroundColor: statusColor },
                             ]}
                         />
 
                         <Text
                             style={[
                                 styles.statusText,
-                                {
-                                    color: data.isBlocked
-                                        ? colors.danger
-                                        : colors.primary,
-                                },
+                                { color: statusColor },
                             ]}
                         >
-                            {data.isBlocked
-                                ? t("blocked", "Blocked")
-                                : t("online", "Online")}
+                            {statusText}
                         </Text>
                     </View>
                 </View>
@@ -721,13 +780,18 @@ function SearchResultRow({ item, colors, styles, isArabic }) {
 }
 
 function MediaTile({ item, data, colors, styles }) {
+    const chatDotColor = data.isBlocked
+        ? colors.danger
+        : data.isOnline || data.isTyping
+            ? colors.primary
+            : colors.textMuted;
     if (item.type === "chat") {
         return (
             <View style={styles.chatTile}>
                 <View style={styles.chatRow}>
                     <View style={styles.chatAvatar}>
                         <Ionicons name="person-outline" size={26} color={colors.text} />
-                        <View style={styles.chatDot} />
+                        <View style={[styles.chatDot, { backgroundColor: chatDotColor }]} />
                     </View>
 
                     <View style={styles.chatTextBox}>
@@ -751,7 +815,7 @@ function MediaTile({ item, data, colors, styles }) {
                 <View style={styles.chatRow}>
                     <View style={styles.chatAvatar}>
                         <Ionicons name="person-outline" size={26} color={colors.text} />
-                        <View style={styles.chatDot} />
+                        <View style={[styles.chatDot, { backgroundColor: chatDotColor }]} />
                     </View>
 
                     <View style={styles.chatTextBox}>
@@ -1309,7 +1373,7 @@ const createStyles = (colors) =>
             width: 10,
             height: 10,
             borderRadius: 5,
-            backgroundColor: colors.warning || "#ffc533",
+            backgroundColor: colors.textMuted,
             borderWidth: 1,
             borderColor: colors.cardStrong,
         },

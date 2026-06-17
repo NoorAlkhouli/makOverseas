@@ -57,15 +57,65 @@ const getFileExtension = (fileName = "", uri = "") => {
     return source.slice(dotIndex + 1).toLowerCase();
 };
 
+const normalizeUploadUri = (uri = "") => {
+    const cleanUri = String(uri || "").trim();
+
+    if (!cleanUri) {
+        return "";
+    }
+
+    if (cleanUri.startsWith("file://") || cleanUri.startsWith("content://")) {
+        return cleanUri;
+    }
+
+    return `file://${cleanUri}`;
+};
+
+const ensureFileNameExtension = (fileName = "", fallbackExtension = "") => {
+    const cleanFileName = String(fileName || "").trim();
+
+    if (!cleanFileName) {
+        return "";
+    }
+
+    if (!fallbackExtension || getFileExtension(cleanFileName)) {
+        return cleanFileName;
+    }
+
+    return `${cleanFileName}.${fallbackExtension}`;
+};
+
+const getAttachmentDurationMillis = (attachment = {}) => {
+    const durationValue =
+        attachment.duration_millis ||
+        attachment.durationMillis ||
+        attachment.audio_duration_millis ||
+        attachment.audioDurationMillis ||
+        attachment.duration ||
+        0;
+
+    const numericDuration = Number(durationValue || 0);
+
+    if (!Number.isFinite(numericDuration) || numericDuration <= 0) {
+        return 0;
+    }
+
+    return numericDuration > 0 && numericDuration < 1000
+        ? Math.round(numericDuration * 1000)
+        : Math.round(numericDuration);
+};
+
 const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
     const normalizedMessageType = Number(messageType);
 
     const rawType = String(
-        attachment.type ||
         attachment.mimeType ||
         attachment.mime_type ||
+        attachment.type ||
         ""
-    ).toLowerCase();
+    )
+        .trim()
+        .toLowerCase();
 
     const fileName = String(
         attachment.name ||
@@ -77,7 +127,7 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
     const extension = getFileExtension(fileName, attachment.uri);
 
     if (normalizedMessageType === 8) {
-        if (extension === "m4a") return "audio/x-m4a";
+        if (extension === "m4a") return "audio/mp4";
         if (extension === "mp3") return "audio/mpeg";
         if (extension === "aac") return "audio/aac";
         if (extension === "wav") return "audio/wav";
@@ -85,7 +135,7 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
         if (extension === "webm") return "audio/webm";
         if (extension === "amr") return "audio/amr";
 
-        if (rawType === "audio/x-m4a") return "audio/x-m4a";
+        if (rawType === "audio/x-m4a") return "audio/mp4";
         if (rawType === "audio/mpeg") return "audio/mpeg";
         if (rawType === "audio/mp4") return "audio/mp4";
         if (rawType === "audio/aac") return "audio/aac";
@@ -94,7 +144,7 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
         if (rawType === "audio/webm") return "audio/webm";
         if (rawType === "audio/ogg") return "audio/ogg";
 
-        return "audio/x-m4a";
+        return "audio/mp4";
     }
 
     if (
@@ -105,13 +155,13 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
         rawType !== "document"
     ) {
         if (extension === "m4a") {
-            return "audio/x-m4a";
+            return "audio/mp4";
         }
 
         return rawType;
     }
 
-    if (extension === "mp4") return "video/mp4";
+    if (extension === "mp4") return normalizedMessageType === 8 ? "audio/mp4" : "video/mp4";
     if (extension === "mov") return "video/quicktime";
     if (extension === "m4v") return "video/x-m4v";
     if (extension === "avi") return "video/x-msvideo";
@@ -122,7 +172,7 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
     if (extension === "webp") return "image/webp";
     if (extension === "gif") return "image/gif";
 
-    if (extension === "m4a") return "audio/x-m4a";
+    if (extension === "m4a") return "audio/mp4";
     if (extension === "mp3") return "audio/mpeg";
     if (extension === "aac") return "audio/aac";
     if (extension === "wav") return "audio/wav";
@@ -144,9 +194,134 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
 
     if (rawType === "video") return "video/mp4";
     if (rawType === "image") return "image/jpeg";
-    if (rawType === "audio") return "audio/x-m4a";
+    if (rawType === "audio") return "audio/mp4";
 
     return "application/octet-stream";
+};
+
+const isFilledValue = (value) => {
+    return value !== undefined && value !== null && String(value).trim() !== "";
+};
+
+const normalizeQuoteNumber = (value) => {
+    if (!isFilledValue(value)) {
+        return null;
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+        return null;
+    }
+
+    return numericValue;
+};
+
+const normalizeQuoteInteger = (value) => {
+    if (!isFilledValue(value)) {
+        return null;
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isInteger(numericValue)) {
+        return null;
+    }
+
+    return numericValue;
+};
+
+const normalizeQuoteString = (value) => {
+    if (!isFilledValue(value)) {
+        return null;
+    }
+
+    return String(value).trim();
+};
+
+const normalizeQuoteDate = (value) => {
+    const cleanValue = normalizeQuoteString(value);
+
+    if (!cleanValue) {
+        return null;
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}/.test(cleanValue)) {
+        return cleanValue.slice(0, 10);
+    }
+
+    return cleanValue;
+};
+
+const normalizeQuoteIncludes = (includes) => {
+    if (Array.isArray(includes)) {
+        return includes
+            .map((item) => normalizeQuoteString(item))
+            .filter(Boolean);
+    }
+
+    if (typeof includes === "string") {
+        return includes
+            .split(/\r?\n|,/)
+            .map((item) => normalizeQuoteString(item))
+            .filter(Boolean);
+    }
+
+    return [];
+};
+
+const appendIfFilled = (payload, key, value) => {
+    if (value !== undefined && value !== null && value !== "") {
+        payload[key] = value;
+    }
+};
+
+const buildQuotePayload = (quote = {}) => {
+    const payload = {};
+
+    appendIfFilled(payload, "risk_level", normalizeQuoteInteger(quote.risk_level ?? quote.riskLevel));
+    appendIfFilled(payload, "origin_city", normalizeQuoteString(quote.origin_city ?? quote.originCity));
+    appendIfFilled(payload, "origin_country", normalizeQuoteString(quote.origin_country ?? quote.originCountry)?.toUpperCase());
+    appendIfFilled(payload, "destination_city", normalizeQuoteString(quote.destination_city ?? quote.destinationCity));
+    appendIfFilled(payload, "destination_country", normalizeQuoteString(quote.destination_country ?? quote.destinationCountry)?.toUpperCase());
+    appendIfFilled(payload, "cargo_type", normalizeQuoteString(quote.cargo_type ?? quote.cargoType));
+    appendIfFilled(payload, "container_type", normalizeQuoteString(quote.container_type ?? quote.containerType));
+    appendIfFilled(payload, "volume_cbm", normalizeQuoteNumber(quote.volume_cbm ?? quote.volumeCbm));
+    appendIfFilled(payload, "weight_kg", normalizeQuoteNumber(quote.weight_kg ?? quote.weightKg));
+    appendIfFilled(payload, "etd_date", normalizeQuoteDate(quote.etd_date ?? quote.etdDate));
+    appendIfFilled(payload, "eta_date", normalizeQuoteDate(quote.eta_date ?? quote.etaDate));
+    appendIfFilled(payload, "currency", normalizeQuoteString(quote.currency)?.toUpperCase());
+    appendIfFilled(payload, "total_price", normalizeQuoteNumber(quote.total_price ?? quote.totalPrice));
+    appendIfFilled(payload, "valid_until", normalizeQuoteDate(quote.valid_until ?? quote.validUntil));
+    appendIfFilled(payload, "notes", normalizeQuoteString(quote.notes));
+    appendIfFilled(payload, "employee_id", normalizeQuoteInteger(quote.employee_id ?? quote.employeeId));
+
+    const includes = normalizeQuoteIncludes(quote.includes);
+
+    if (includes.length > 0) {
+        payload.includes = includes;
+    }
+
+    return payload;
+};
+
+const validateRequiredQuotePayload = (payload = {}) => {
+    const requiredKeys = [
+        "risk_level",
+        "origin_city",
+        "origin_country",
+        "destination_city",
+        "destination_country",
+        "cargo_type",
+        "currency",
+        "total_price",
+    ];
+
+    const missingKeys = requiredKeys.filter((key) => !isFilledValue(payload[key]));
+
+    if (missingKeys.length > 0) {
+        throw new Error(`Missing required quote fields: ${missingKeys.join(", ")}.`);
+    }
 };
 
 const buildAttachmentPayload = (attachment = {}, messageType = 1) => {
@@ -154,19 +329,64 @@ const buildAttachmentPayload = (attachment = {}, messageType = 1) => {
         return null;
     }
 
+    const normalizedMessageType = Number(messageType);
+    const mimeType = normalizeAttachmentMimeType(attachment, normalizedMessageType);
+    const fallbackExtension = normalizedMessageType === 8
+        ? "m4a"
+        : getFileExtension(attachment.name || attachment.fileName || attachment.filename || "", attachment.uri);
+    const fallbackName = normalizedMessageType === 8
+        ? `voice-message-${Date.now()}.m4a`
+        : `attachment-${Date.now()}${fallbackExtension ? `.${fallbackExtension}` : ""}`;
+    const rawFileName =
+        attachment.name ||
+        attachment.fileName ||
+        attachment.filename ||
+        fallbackName;
+    const fileName = normalizedMessageType === 8
+        ? ensureFileNameExtension(rawFileName, "m4a") || fallbackName
+        : rawFileName;
+
     const payload = {
-        uri: attachment.uri,
-        name:
-            attachment.name ||
-            attachment.fileName ||
-            attachment.filename ||
-            `attachment-${Date.now()}`,
-        type: normalizeAttachmentMimeType(attachment, messageType),
+        uri: normalizeUploadUri(attachment.uri),
+        name: String(fileName),
+        type: mimeType,
     };
 
-    console.log("[Chat Upload] Attachment payload:", payload);
+    console.log("[Chat Upload] Attachment payload:", {
+        ...payload,
+        messageType: normalizedMessageType,
+        size: attachment.size || attachment.fileSize || attachment.file_size || 0,
+        durationMillis: getAttachmentDurationMillis(attachment),
+    });
 
     return payload;
+};
+
+const appendAttachmentMetadata = (formData, attachment, messageType) => {
+    const normalizedMessageType = Number(messageType);
+
+    if (!attachment) {
+        return;
+    }
+
+    const size = Number(attachment.size || attachment.fileSize || attachment.file_size || 0);
+
+    if (Number.isFinite(size) && size > 0) {
+        formData.append("file_size", String(Math.round(size)));
+        formData.append("size", String(Math.round(size)));
+    }
+
+    if (normalizedMessageType === 8) {
+        const durationMillis = getAttachmentDurationMillis(attachment);
+
+        if (durationMillis > 0) {
+            formData.append("duration_millis", String(durationMillis));
+            formData.append("audio_duration_millis", String(durationMillis));
+            formData.append("duration", String(Math.round(durationMillis / 1000)));
+        }
+
+        formData.append("mime_type", normalizeAttachmentMimeType(attachment, normalizedMessageType));
+    }
 };
 
 export const chatService = {
@@ -288,6 +508,7 @@ export const chatService = {
 
         if (attachmentPayload) {
             formData.append("attachment", attachmentPayload);
+            appendAttachmentMetadata(formData, attachment, messageType);
         }
 
         return apiClient.upload(
@@ -329,9 +550,57 @@ export const chatService = {
 
         if (attachmentPayload) {
             formData.append("attachment", attachmentPayload);
+            appendAttachmentMetadata(formData, attachment, messageType);
         }
 
         return apiClient.upload("/api/v1/messages/start-direct", formData);
+    },
+
+    async createQuote(conversationId, quote = {}) {
+        if (!conversationId) {
+            throw new Error("conversationId is required to create quote.");
+        }
+
+        const payload = buildQuotePayload(quote);
+
+        validateRequiredQuotePayload(payload);
+
+        return apiClient.post(
+            `/api/v1/conversations/${conversationId}/quotes`,
+            payload
+        );
+    },
+
+    async showQuote(quoteId) {
+        if (!quoteId) {
+            throw new Error("quoteId is required to show quote.");
+        }
+
+        return apiClient.get(`/api/v1/quotes/${quoteId}`);
+    },
+
+    async approveQuote(quoteId) {
+        if (!quoteId) {
+            throw new Error("quoteId is required to approve quote.");
+        }
+
+        return apiClient.patch(`/api/v1/quotes/${quoteId}/approve`);
+    },
+
+    async rejectQuote(quoteId) {
+        if (!quoteId) {
+            throw new Error("quoteId is required to reject quote.");
+        }
+
+        return apiClient.patch(`/api/v1/quotes/${quoteId}/reject`);
+    },
+
+    async cancelQuote(quoteId) {
+        if (!quoteId) {
+            throw new Error("quoteId is required to cancel quote.");
+        }
+
+        return apiClient.patch(`/api/v1/quotes/${quoteId}/cancel`);
     },
 
     async deleteMessage(messageId) {

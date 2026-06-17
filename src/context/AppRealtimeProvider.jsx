@@ -9,7 +9,12 @@ import React, {
 } from 'react';
 
 import { apiClient } from '../services/api/apiClient';
-import { disconnectEcho, initEcho } from '../services/realtime/echoClient';
+import { initEcho } from '../services/realtime/echoClient';
+import {
+    leaveLivePresenceChannel,
+    subscribeToLivePresenceChannel,
+    unsubscribeLivePresenceListener,
+} from '../services/realtime/livePresenceService';
 import {
     subscribeToUserChannel,
     unsubscribeUserChannelListener,
@@ -48,9 +53,73 @@ const prependLimited = (items, item) => {
     return [item, ...items].slice(0, MAX_STORED_EVENTS);
 };
 
+const normalizeRealtimeUserId = (value) => {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+
+    return String(value);
+};
+
+const getRealtimeUserId = (user) => {
+    return normalizeRealtimeUserId(
+        user?.id ||
+        user?.user_id ||
+        user?.userId ||
+        user?.member_id ||
+        user?.memberId ||
+        null
+    );
+};
+
+const normalizeRealtimeUser = (user) => {
+    if (!user || typeof user !== 'object') {
+        return null;
+    }
+
+    const id = getRealtimeUserId(user);
+
+    if (!id) {
+        return null;
+    }
+
+    return {
+        ...user,
+        id,
+        user_id: id,
+        userId: id,
+        full_name:
+            user.full_name ||
+            user.fullName ||
+            user.name ||
+            user.display_name ||
+            user.displayName ||
+            '',
+    };
+};
+
+const normalizeRealtimeUsers = (users = []) => {
+    if (!Array.isArray(users)) {
+        return [];
+    }
+
+    return users
+        .map(normalizeRealtimeUser)
+        .filter(Boolean);
+};
+
+const buildOnlineUserIds = (users = []) => {
+    return normalizeRealtimeUsers(users)
+        .map((user) => user.id)
+        .filter(Boolean);
+};
+
 const INITIAL_REALTIME_STATE = {
     isReady: false,
     currentUserId: null,
+
+    onlineUsers: [],
+    onlineUserIds: [],
 
     conversationEvents: [],
     notificationEvents: [],
@@ -66,12 +135,14 @@ const INITIAL_REALTIME_STATE = {
     conversationVersion: 0,
     notificationVersion: 0,
     callVersion: 0,
+    presenceVersion: 0,
 };
 
 export function AppRealtimeProvider({ children }) {
     const [state, setState] = useState(INITIAL_REALTIME_STATE);
 
     const listenerKeyRef = useRef(`app-realtime-${Date.now()}-${Math.random()}`);
+    const livePresenceListenerKeyRef = useRef(`live-presence-${Date.now()}-${Math.random()}`);
     const isMountedRef = useRef(false);
     const subscribedUserIdRef = useRef(null);
 
@@ -96,10 +167,18 @@ export function AppRealtimeProvider({ children }) {
 
         const initializeRealtime = async () => {
             try {
+                console.log('[REALTIME DEBUG 01] AppRealtimeProvider initializeRealtime STARTED');
                 const [token, deviceId] = await Promise.all([
                     apiClient.getToken(),
                     apiClient.getDeviceId(),
                 ]);
+
+                console.log('[REALTIME DEBUG 02] Token / DeviceId loaded:', {
+                    hasToken: Boolean(token),
+                    tokenLength: token ? String(token).length : 0,
+                    hasDeviceId: Boolean(deviceId),
+                    deviceId,
+                });
 
                 if (isCancelled) {
                     return;
@@ -113,7 +192,11 @@ export function AppRealtimeProvider({ children }) {
                     return;
                 }
 
+                console.log('[REALTIME DEBUG 03] Fetching profile before Echo init...');
+
                 const profileResponse = await apiClient.get('/api/v1/profile');
+
+                console.log('[REALTIME DEBUG 04] Profile response:', profileResponse);
 
                 if (isCancelled) {
                     return;
@@ -121,15 +204,29 @@ export function AppRealtimeProvider({ children }) {
 
                 const userId = getUserIdFromProfile(profileResponse);
 
+                console.log('[REALTIME DEBUG 05] Parsed current userId:', {
+                    userId,
+                    profilePayload: getProfilePayload(profileResponse),
+                });
+
                 if (!userId) {
                     console.log('[AppRealtime] Skipped: userId missing from profile.');
                     return;
                 }
 
-                initEcho({
+                console.log('[REALTIME DEBUG 06] Calling initEcho...');
+
+                const echo = initEcho({
                     token,
                     deviceId,
                     language: 'en',
+                });
+
+                console.log('[REALTIME DEBUG 07] Echo initialized:', {
+                    hasEcho: Boolean(echo),
+                    hasConnector: Boolean(echo?.connector),
+                    hasPusher: Boolean(echo?.connector?.pusher),
+                    socketId: echo?.socketId?.(),
                 });
 
                 const normalizedUserId = String(userId);
@@ -141,6 +238,133 @@ export function AppRealtimeProvider({ children }) {
                     isReady: true,
                     currentUserId: normalizedUserId,
                 }));
+
+                console.log('[REALTIME DEBUG 08] Subscribing to LIVE presence channel...', {
+                    listenerKey: livePresenceListenerKeyRef.current,
+                });
+
+                const livePresenceSubscription = subscribeToLivePresenceChannel({
+                    listenerKey: livePresenceListenerKeyRef.current,
+
+                    onHere: (users) => {
+                        console.log('[REALTIME DEBUG 09] LIVE .here raw users:', users);
+
+                        const normalizedUsers = normalizeRealtimeUsers(users);
+                        const nextOnlineUserIds = buildOnlineUserIds(normalizedUsers);
+
+                        console.log('[REALTIME DEBUG 10] LIVE .here normalized:', {
+                            normalizedUsers,
+                            nextOnlineUserIds,
+                        });
+
+                        console.log('[AppRealtime] Live presence here:', {
+                            count: normalizedUsers.length,
+                            onlineUserIds: nextOnlineUserIds,
+                        });
+
+                        updateState((currentState) => ({
+                            ...currentState,
+                            onlineUsers: normalizedUsers,
+                            onlineUserIds: nextOnlineUserIds,
+                            presenceVersion: currentState.presenceVersion + 1,
+                        }));
+                    },
+
+                    onJoining: (user) => {
+                        console.log('[REALTIME DEBUG 11] LIVE .joining raw user:', user);
+
+                        const normalizedUser = normalizeRealtimeUser(user);
+
+                        console.log('[REALTIME DEBUG 12] LIVE .joining normalized user:', normalizedUser);
+
+                        if (!normalizedUser) {
+                            return;
+                        }
+
+                        console.log('[AppRealtime] Live presence joining:', normalizedUser);
+
+                        updateState((currentState) => {
+                            const userIdValue = String(normalizedUser.id);
+                            const currentOnlineUserIds = currentState.onlineUserIds || [];
+                            const currentOnlineUsers = currentState.onlineUsers || [];
+
+                            const nextOnlineUserIds = currentOnlineUserIds.includes(userIdValue)
+                                ? currentOnlineUserIds
+                                : [...currentOnlineUserIds, userIdValue];
+
+                            const existingUserIndex = currentOnlineUsers.findIndex(
+                                (item) => String(item?.id) === userIdValue
+                            );
+
+                            const nextOnlineUsers = existingUserIndex === -1
+                                ? [...currentOnlineUsers, normalizedUser]
+                                : currentOnlineUsers.map((item, index) =>
+                                    index === existingUserIndex
+                                        ? {
+                                            ...item,
+                                            ...normalizedUser,
+                                        }
+                                        : item
+                                );
+
+                            return {
+                                ...currentState,
+                                onlineUsers: nextOnlineUsers,
+                                onlineUserIds: nextOnlineUserIds,
+                                presenceVersion: currentState.presenceVersion + 1,
+                            };
+                        });
+                    },
+
+                    onLeaving: (user) => {
+                        console.log('[REALTIME DEBUG 13] LIVE .leaving raw user:', user);
+
+                        const normalizedUser = normalizeRealtimeUser(user);
+
+                        console.log('[REALTIME DEBUG 14] LIVE .leaving normalized user:', normalizedUser);
+
+                        if (!normalizedUser) {
+                            return;
+                        }
+
+                        console.log('[AppRealtime] Live presence leaving:', normalizedUser);
+
+                        updateState((currentState) => {
+                            const userIdValue = String(normalizedUser.id);
+
+                            return {
+                                ...currentState,
+                                onlineUsers: (currentState.onlineUsers || []).filter(
+                                    (item) => String(item?.id) !== userIdValue
+                                ),
+                                onlineUserIds: (currentState.onlineUserIds || []).filter(
+                                    (id) => String(id) !== userIdValue
+                                ),
+                                presenceVersion: currentState.presenceVersion + 1,
+                            };
+                        });
+                    },
+
+                    onError: (error) => {
+                        console.log('[REALTIME DEBUG 15] LIVE presence error:', error);
+                        console.log('[AppRealtime] Live presence error:', error);
+                    },
+                });
+
+                console.log('[REALTIME DEBUG 16] Live presence subscription result:', {
+                    hasSubscription: Boolean(livePresenceSubscription),
+                    hasChannel: Boolean(livePresenceSubscription?.channel),
+                    listenerKey: livePresenceSubscription?.listenerKey,
+                });
+
+                if (livePresenceSubscription?.listenerKey) {
+                    livePresenceListenerKeyRef.current = livePresenceSubscription.listenerKey;
+                }
+
+                console.log('[REALTIME DEBUG 17] Subscribing to USER private channel...', {
+                    userId: normalizedUserId,
+                    listenerKey: listenerKeyRef.current,
+                });
 
                 const subscription = subscribeToUserChannel({
                     userId: normalizedUserId,
@@ -219,6 +443,12 @@ export function AppRealtimeProvider({ children }) {
                     },
                 });
 
+                console.log('[REALTIME DEBUG 18] User channel subscription result:', {
+                    hasSubscription: Boolean(subscription),
+                    hasChannel: Boolean(subscription?.channel),
+                    listenerKey: subscription?.listenerKey,
+                });
+
                 if (subscription?.listenerKey) {
                     listenerKeyRef.current = subscription.listenerKey;
                 }
@@ -243,6 +473,12 @@ export function AppRealtimeProvider({ children }) {
                 unsubscribeUserChannelListener(listenerKeyRef.current);
             }
 
+            if (livePresenceListenerKeyRef.current) {
+                unsubscribeLivePresenceListener(livePresenceListenerKeyRef.current);
+            }
+
+            leaveLivePresenceChannel();
+
             subscribedUserIdRef.current = null;
 
             updateState(() => INITIAL_REALTIME_STATE);
@@ -264,12 +500,38 @@ export function AppRealtimeProvider({ children }) {
         }));
     }, [updateState]);
 
+    const isUserOnline = useCallback(
+        (userId) => {
+            const normalizedUserId = normalizeRealtimeUserId(userId);
+
+            if (!normalizedUserId) {
+                console.log('[REALTIME DEBUG 19] isUserOnline called with empty userId:', userId);
+                return false;
+            }
+
+            const result = (state.onlineUserIds || []).some(
+                (onlineUserId) => String(onlineUserId) === normalizedUserId
+            );
+
+            console.log('[REALTIME DEBUG 20] isUserOnline check:', {
+                userId,
+                normalizedUserId,
+                onlineUserIds: state.onlineUserIds || [],
+                result,
+            });
+
+            return result;
+        },
+        [state.onlineUserIds]
+    );
+
     const value = useMemo(
         () => ({
             ...state,
+            isUserOnline,
             clearRealtimeEvents,
         }),
-        [clearRealtimeEvents, state]
+        [clearRealtimeEvents, isUserOnline, state]
     );
 
     return (
@@ -285,6 +547,7 @@ export function useAppRealtime() {
     if (!context) {
         return {
             ...INITIAL_REALTIME_STATE,
+            isUserOnline: () => false,
             clearRealtimeEvents: () => { },
         };
     }
