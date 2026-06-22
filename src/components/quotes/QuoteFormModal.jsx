@@ -8,7 +8,6 @@ import {
     ActivityIndicator,
     Alert,
     Keyboard,
-    KeyboardAvoidingView,
     Modal,
     Platform,
     Pressable,
@@ -594,24 +593,26 @@ export default function QuoteFormModal({
     const { height: windowHeight } = useWindowDimensions();
     const [form, setForm] = useState(DEFAULT_FORM_STATE);
     const [activeDateField, setActiveDateField] = useState(null);
-    const [keyboardFrame, setKeyboardFrame] = useState({ height: 0, screenY: 0 });
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-    const isAndroidKeyboardVisible = Platform.OS === "android" && keyboardFrame.height > 0;
-    const shouldLiftAndroidCard =
-        isAndroidKeyboardVisible &&
-        keyboardFrame.screenY > 0 &&
-        keyboardFrame.screenY < windowHeight - 24;
-    const androidKeyboardLift = shouldLiftAndroidCard
-        ? Math.max(windowHeight - keyboardFrame.screenY - insets.bottom, 0)
-        : 0;
-    const androidKeyboardMaxHeight = isAndroidKeyboardVisible
-        ? Math.max(
-            (shouldLiftAndroidCard ? keyboardFrame.screenY : windowHeight) -
-            Math.max(insets.top, 0) -
-            8,
-            320
-        )
-        : undefined;
+    const modalTopGap = Platform.OS === "ios"
+        ? Math.max(insets.top + 12, 64)
+        : Math.max(insets.top + 10, 34);
+
+    const modalBottomGap = keyboardHeight > 0
+        ? keyboardHeight + (Platform.OS === "ios" ? 8 : 10)
+        : Platform.OS === "ios"
+            ? Math.max(insets.bottom, 22)
+            : Math.max(insets.bottom, 14);
+
+    const modalMaxHeight = Math.max(
+        320,
+        windowHeight - modalTopGap - modalBottomGap
+    );
+
+    const footerBottomPadding = Platform.OS === "ios"
+        ? Math.max(insets.bottom, 14)
+        : 14;
 
     const theme = useMemo(
         () => ({
@@ -632,25 +633,27 @@ export default function QuoteFormModal({
     );
 
     useEffect(() => {
+        if (!visible) {
+            setKeyboardHeight(0);
+            return undefined;
+        }
+
         const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
         const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
         const showSubscription = Keyboard.addListener(showEvent, (event) => {
-            setKeyboardFrame({
-                height: event?.endCoordinates?.height || 0,
-                screenY: event?.endCoordinates?.screenY || 0,
-            });
+            setKeyboardHeight(event?.endCoordinates?.height || 0);
         });
 
         const hideSubscription = Keyboard.addListener(hideEvent, () => {
-            setKeyboardFrame({ height: 0, screenY: 0 });
+            setKeyboardHeight(0);
         });
 
         return () => {
             showSubscription.remove();
             hideSubscription.remove();
         };
-    }, []);
+    }, [visible]);
 
     const updateFormField = (key, value) => {
         setForm((currentForm) => ({
@@ -674,11 +677,19 @@ export default function QuoteFormModal({
         closeDatePicker();
     };
 
+    const resetForm = () => {
+        Keyboard.dismiss();
+        setForm(DEFAULT_FORM_STATE);
+        setActiveDateField(null);
+        setKeyboardHeight(0);
+    };
+
     const handleClose = () => {
         if (isSubmitting) {
             return;
         }
 
+        resetForm();
         onClose?.();
     };
 
@@ -697,7 +708,7 @@ export default function QuoteFormModal({
         const submitted = await onSubmit?.(payload);
 
         if (submitted !== false) {
-            setForm(DEFAULT_FORM_STATE);
+            resetForm();
         }
     };
 
@@ -715,383 +726,386 @@ export default function QuoteFormModal({
             navigationBarTranslucent
             presentationStyle="overFullScreen"
         >
-            <View style={[styles.overlay, { backgroundColor: theme.overlay }]}>
-                <KeyboardAvoidingView
-                    style={styles.keyboardView}
-                    behavior={Platform.OS === "ios" ? "padding" : undefined}
-                    keyboardVerticalOffset={0}
+            <View
+                style={[
+                    styles.overlay,
+                    {
+                        backgroundColor: theme.overlay,
+                        paddingTop: modalTopGap,
+                        paddingBottom: modalBottomGap,
+                    },
+                ]}
+            >
+                <View
+                    style={[
+                        styles.card,
+                        {
+                            backgroundColor: theme.card,
+                            borderColor: theme.border,
+                            maxHeight: modalMaxHeight,
+                        },
+                    ]}
                 >
+                    <View style={[styles.header, getRowDirectionStyle(isArabic)]}>
+                        <View style={styles.headerTitleWrapper}>
+                            <Text
+                                style={[
+                                    styles.title,
+                                    { color: theme.text },
+                                    getTextDirectionStyle(isArabic),
+                                ]}
+                            >
+                                {tr("createQuote", "Create Quote")}
+                            </Text>
+
+                            <Text
+                                style={[
+                                    styles.subtitle,
+                                    { color: theme.muted },
+                                    getTextDirectionStyle(isArabic),
+                                ]}
+                            >
+                                {tr(
+                                    "createQuoteSubtitle",
+                                    "Fill shipment pricing details and send the quote."
+                                )}
+                            </Text>
+                        </View>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.closeButton,
+                                {
+                                    backgroundColor: theme.cardSoft,
+                                    borderColor: theme.border,
+                                },
+                            ]}
+                            activeOpacity={0.8}
+                            onPress={handleClose}
+                            disabled={isSubmitting}
+                        >
+                            <Ionicons name="close" size={24} color={theme.text} />
+                        </TouchableOpacity>
+                    </View>
+
+                    <ScrollView
+                        style={styles.scroll}
+                        contentContainerStyle={styles.scrollContent}
+                        keyboardShouldPersistTaps="handled"
+                        keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+                        automaticallyAdjustKeyboardInsets={false}
+                        showsVerticalScrollIndicator={false}
+                    >
+                        <SectionTitle
+                            icon="map-marker-path"
+                            title={tr("routeDetails", "Route Details")}
+                            theme={theme}
+                            isArabic={isArabic}
+                        />
+
+                        <View style={styles.row}>
+                            <Field
+                                label={tr("originCity", "Origin City")}
+                                value={form.originCity}
+                                placeholder="Shanghai"
+                                onChangeText={(value) => updateFormField("originCity", value)}
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                editable={!isSubmitting}
+                            />
+
+                            <Field
+                                label={tr("originCountry", "Origin Country")}
+                                value={form.originCountry}
+                                placeholder="CN"
+                                onChangeText={(value) =>
+                                    updateFormField("originCountry", normalizeCountryCode(value))
+                                }
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.smallField}
+                                autoCapitalize="characters"
+                                editable={!isSubmitting}
+                            />
+                        </View>
+
+                        <View style={styles.row}>
+                            <Field
+                                label={tr("destinationCity", "Destination City")}
+                                value={form.destinationCity}
+                                placeholder="Dubai"
+                                onChangeText={(value) =>
+                                    updateFormField("destinationCity", value)
+                                }
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                editable={!isSubmitting}
+                            />
+
+                            <Field
+                                label={tr("destinationCountry", "Destination Country")}
+                                value={form.destinationCountry}
+                                placeholder="AE"
+                                onChangeText={(value) =>
+                                    updateFormField(
+                                        "destinationCountry",
+                                        normalizeCountryCode(value)
+                                    )
+                                }
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.smallField}
+                                autoCapitalize="characters"
+                                editable={!isSubmitting}
+                            />
+                        </View>
+
+                        <SectionTitle
+                            icon="package-variant-closed"
+                            title={tr("shipmentDetails", "Shipment Details")}
+                            theme={theme}
+                            isArabic={isArabic}
+                        />
+
+                        <Field
+                            label={tr("cargoType", "Cargo Type")}
+                            value={form.cargoType}
+                            placeholder={tr("cargoTypePlaceholder", "General Cargo")}
+                            onChangeText={(value) => updateFormField("cargoType", value)}
+                            theme={theme}
+                            isArabic={isArabic}
+                            editable={!isSubmitting}
+                        />
+
+                        <View style={styles.row}>
+                            <Field
+                                label={tr("container", "Container")}
+                                value={form.containerType}
+                                placeholder="20ft FCL"
+                                onChangeText={(value) =>
+                                    updateFormField("containerType", value)
+                                }
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                editable={!isSubmitting}
+                            />
+
+                            <RiskSelect
+                                label={tr("riskLevel", "Risk")}
+                                value={form.riskLevel}
+                                onChange={(value) => updateFormField("riskLevel", value)}
+                                theme={theme}
+                                tr={tr}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                disabled={isSubmitting}
+                            />
+                        </View>
+
+                        <View style={styles.row}>
+                            <Field
+                                label={tr("volumeCbm", "Volume CBM")}
+                                value={form.volumeCbm}
+                                placeholder="12"
+                                onChangeText={(value) =>
+                                    updateFormField("volumeCbm", normalizeNumberString(value))
+                                }
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                keyboardType="decimal-pad"
+                                editable={!isSubmitting}
+                            />
+
+                            <Field
+                                label={tr("weightKg", "Weight KG")}
+                                value={form.weightKg}
+                                placeholder="8000"
+                                onChangeText={(value) =>
+                                    updateFormField("weightKg", normalizeNumberString(value))
+                                }
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                keyboardType="decimal-pad"
+                                editable={!isSubmitting}
+                            />
+                        </View>
+
+                        <SectionTitle
+                            icon="calendar-clock"
+                            title={tr("scheduleDetails", "Schedule Details")}
+                            theme={theme}
+                            isArabic={isArabic}
+                        />
+
+                        <View style={styles.row}>
+                            <DatePickerField
+                                label="ETD"
+                                value={form.etdDate}
+                                placeholder={tr("selectDate", "Select date")}
+                                onPress={() => openDatePicker("etdDate")}
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                disabled={isSubmitting}
+                            />
+
+                            <DatePickerField
+                                label="ETA"
+                                value={form.etaDate}
+                                placeholder={tr("selectDate", "Select date")}
+                                onPress={() => openDatePicker("etaDate")}
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                disabled={isSubmitting}
+                            />
+                        </View>
+
+                        <SectionTitle
+                            icon="cash-multiple"
+                            title={tr("priceDetails", "Price Details")}
+                            theme={theme}
+                            isArabic={isArabic}
+                        />
+
+                        <View style={styles.row}>
+                            <CurrencySelect
+                                label={tr("currency", "Currency")}
+                                value={form.currency}
+                                placeholder="SYP / USD"
+                                onChange={(value) => updateFormField("currency", value)}
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.currencyField}
+                                disabled={isSubmitting}
+                            />
+
+                            <Field
+                                label={tr("totalPrice", "Total Price")}
+                                value={form.totalPrice}
+                                placeholder="1250"
+                                onChangeText={(value) =>
+                                    updateFormField("totalPrice", normalizeNumberString(value))
+                                }
+                                theme={theme}
+                                isArabic={isArabic}
+                                containerStyle={styles.flexField}
+                                keyboardType="decimal-pad"
+                                editable={!isSubmitting}
+                            />
+                        </View>
+
+                        <DatePickerField
+                            label={tr("validUntil", "Valid Until")}
+                            value={form.validUntil}
+                            placeholder={tr("selectDate", "Select date")}
+                            onPress={() => openDatePicker("validUntil")}
+                            theme={theme}
+                            isArabic={isArabic}
+                            disabled={isSubmitting}
+                        />
+
+                        <Field
+                            label={tr("includes", "Includes")}
+                            value={form.includes}
+                            placeholder={tr(
+                                "includesPlaceholder",
+                                "Ocean Freight\nTerminal Handling\nDocumentation"
+                            )}
+                            onChangeText={(value) => updateFormField("includes", value)}
+                            theme={theme}
+                            isArabic={isArabic}
+                            multiline
+                            inputStyle={styles.multilineInput}
+                            editable={!isSubmitting}
+                        />
+
+                        <Field
+                            label={tr("notes", "Notes")}
+                            value={form.notes}
+                            placeholder={tr(
+                                "notesPlaceholder",
+                                "Optional notes for the customer"
+                            )}
+                            onChangeText={(value) => updateFormField("notes", value)}
+                            theme={theme}
+                            isArabic={isArabic}
+                            multiline
+                            inputStyle={styles.multilineInput}
+                            editable={!isSubmitting}
+                        />
+                    </ScrollView>
+
                     <View
                         style={[
-                            styles.card,
+                            styles.footer,
                             {
-                                backgroundColor: theme.card,
-                                borderColor: theme.border,
-                                paddingBottom: isAndroidKeyboardVisible
-                                    ? Math.max(insets.bottom, 8)
-                                    : Math.max(insets.bottom, 14),
-                                marginBottom: androidKeyboardLift,
-                                maxHeight: isAndroidKeyboardVisible
-                                    ? androidKeyboardMaxHeight
-                                    : "84%",
+                                borderTopColor: theme.border,
+                                paddingBottom: footerBottomPadding,
                             },
                         ]}
                     >
-                        <View style={[styles.header, getRowDirectionStyle(isArabic)]}>
-                            <View style={styles.headerTitleWrapper}>
-                                <Text
-                                    style={[
-                                        styles.title,
-                                        { color: theme.text },
-                                        getTextDirectionStyle(isArabic),
-                                    ]}
-                                >
-                                    {tr("createQuote", "Create Quote")}
-                                </Text>
-
-                                <Text
-                                    style={[
-                                        styles.subtitle,
-                                        { color: theme.muted },
-                                        getTextDirectionStyle(isArabic),
-                                    ]}
-                                >
-                                    {tr(
-                                        "createQuoteSubtitle",
-                                        "Fill shipment pricing details and send the quote."
-                                    )}
-                                </Text>
-                            </View>
-
-                            <TouchableOpacity
-                                style={[
-                                    styles.closeButton,
-                                    {
-                                        backgroundColor: theme.cardSoft,
-                                        borderColor: theme.border,
-                                    },
-                                ]}
-                                activeOpacity={0.8}
-                                onPress={handleClose}
-                                disabled={isSubmitting}
-                            >
-                                <Ionicons name="close" size={24} color={theme.text} />
-                            </TouchableOpacity>
-                        </View>
-
-                        <ScrollView
-                            style={styles.scroll}
-                            contentContainerStyle={[
-                                styles.scrollContent,
-                                isAndroidKeyboardVisible && styles.scrollContentKeyboardOpen,
+                        <TouchableOpacity
+                            style={[
+                                styles.secondaryButton,
+                                {
+                                    backgroundColor: theme.cardSoft,
+                                    borderColor: theme.border,
+                                },
                             ]}
-                            keyboardShouldPersistTaps="handled"
-                            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
-                            showsVerticalScrollIndicator={false}
+                            activeOpacity={0.85}
+                            onPress={handleClose}
+                            disabled={isSubmitting}
                         >
-                            <SectionTitle
-                                icon="map-marker-path"
-                                title={tr("routeDetails", "Route Details")}
-                                theme={theme}
-                                isArabic={isArabic}
-                            />
-
-                            <View style={styles.row}>
-                                <Field
-                                    label={tr("originCity", "Origin City")}
-                                    value={form.originCity}
-                                    placeholder="Shanghai"
-                                    onChangeText={(value) => updateFormField("originCity", value)}
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    editable={!isSubmitting}
-                                />
-
-                                <Field
-                                    label={tr("originCountry", "Origin Country")}
-                                    value={form.originCountry}
-                                    placeholder="CN"
-                                    onChangeText={(value) =>
-                                        updateFormField("originCountry", normalizeCountryCode(value))
-                                    }
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.smallField}
-                                    autoCapitalize="characters"
-                                    editable={!isSubmitting}
-                                />
-                            </View>
-
-                            <View style={styles.row}>
-                                <Field
-                                    label={tr("destinationCity", "Destination City")}
-                                    value={form.destinationCity}
-                                    placeholder="Dubai"
-                                    onChangeText={(value) =>
-                                        updateFormField("destinationCity", value)
-                                    }
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    editable={!isSubmitting}
-                                />
-
-                                <Field
-                                    label={tr("destinationCountry", "Destination Country")}
-                                    value={form.destinationCountry}
-                                    placeholder="AE"
-                                    onChangeText={(value) =>
-                                        updateFormField(
-                                            "destinationCountry",
-                                            normalizeCountryCode(value)
-                                        )
-                                    }
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.smallField}
-                                    autoCapitalize="characters"
-                                    editable={!isSubmitting}
-                                />
-                            </View>
-
-                            <SectionTitle
-                                icon="package-variant-closed"
-                                title={tr("shipmentDetails", "Shipment Details")}
-                                theme={theme}
-                                isArabic={isArabic}
-                            />
-
-                            <Field
-                                label={tr("cargoType", "Cargo Type")}
-                                value={form.cargoType}
-                                placeholder={tr("cargoTypePlaceholder", "General Cargo")}
-                                onChangeText={(value) => updateFormField("cargoType", value)}
-                                theme={theme}
-                                isArabic={isArabic}
-                                editable={!isSubmitting}
-                            />
-
-                            <View style={styles.row}>
-                                <Field
-                                    label={tr("container", "Container")}
-                                    value={form.containerType}
-                                    placeholder="20ft FCL"
-                                    onChangeText={(value) =>
-                                        updateFormField("containerType", value)
-                                    }
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    editable={!isSubmitting}
-                                />
-
-                                <RiskSelect
-                                    label={tr("riskLevel", "Risk")}
-                                    value={form.riskLevel}
-                                    onChange={(value) => updateFormField("riskLevel", value)}
-                                    theme={theme}
-                                    tr={tr}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    disabled={isSubmitting}
-                                />
-                            </View>
-
-                            <View style={styles.row}>
-                                <Field
-                                    label={tr("volumeCbm", "Volume CBM")}
-                                    value={form.volumeCbm}
-                                    placeholder="12"
-                                    onChangeText={(value) =>
-                                        updateFormField("volumeCbm", normalizeNumberString(value))
-                                    }
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    keyboardType="decimal-pad"
-                                    editable={!isSubmitting}
-                                />
-
-                                <Field
-                                    label={tr("weightKg", "Weight KG")}
-                                    value={form.weightKg}
-                                    placeholder="8000"
-                                    onChangeText={(value) =>
-                                        updateFormField("weightKg", normalizeNumberString(value))
-                                    }
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    keyboardType="decimal-pad"
-                                    editable={!isSubmitting}
-                                />
-                            </View>
-
-                            <SectionTitle
-                                icon="calendar-clock"
-                                title={tr("scheduleDetails", "Schedule Details")}
-                                theme={theme}
-                                isArabic={isArabic}
-                            />
-
-                            <View style={styles.row}>
-                                <DatePickerField
-                                    label="ETD"
-                                    value={form.etdDate}
-                                    placeholder={tr("selectDate", "Select date")}
-                                    onPress={() => openDatePicker("etdDate")}
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    disabled={isSubmitting}
-                                />
-
-                                <DatePickerField
-                                    label="ETA"
-                                    value={form.etaDate}
-                                    placeholder={tr("selectDate", "Select date")}
-                                    onPress={() => openDatePicker("etaDate")}
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    disabled={isSubmitting}
-                                />
-                            </View>
-
-                            <SectionTitle
-                                icon="cash-multiple"
-                                title={tr("priceDetails", "Price Details")}
-                                theme={theme}
-                                isArabic={isArabic}
-                            />
-
-                            <View style={styles.row}>
-                                <CurrencySelect
-                                    label={tr("currency", "Currency")}
-                                    value={form.currency}
-                                    placeholder="SYP / USD"
-                                    onChange={(value) => updateFormField("currency", value)}
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.currencyField}
-                                    disabled={isSubmitting}
-                                />
-
-                                <Field
-                                    label={tr("totalPrice", "Total Price")}
-                                    value={form.totalPrice}
-                                    placeholder="1250"
-                                    onChangeText={(value) =>
-                                        updateFormField("totalPrice", normalizeNumberString(value))
-                                    }
-                                    theme={theme}
-                                    isArabic={isArabic}
-                                    containerStyle={styles.flexField}
-                                    keyboardType="decimal-pad"
-                                    editable={!isSubmitting}
-                                />
-                            </View>
-
-                            <DatePickerField
-                                label={tr("validUntil", "Valid Until")}
-                                value={form.validUntil}
-                                placeholder={tr("selectDate", "Select date")}
-                                onPress={() => openDatePicker("validUntil")}
-                                theme={theme}
-                                isArabic={isArabic}
-                                disabled={isSubmitting}
-                            />
-
-                            <Field
-                                label={tr("includes", "Includes")}
-                                value={form.includes}
-                                placeholder={tr(
-                                    "includesPlaceholder",
-                                    "Ocean Freight\nTerminal Handling\nDocumentation"
-                                )}
-                                onChangeText={(value) => updateFormField("includes", value)}
-                                theme={theme}
-                                isArabic={isArabic}
-                                multiline
-                                inputStyle={styles.multilineInput}
-                                editable={!isSubmitting}
-                            />
-
-                            <Field
-                                label={tr("notes", "Notes")}
-                                value={form.notes}
-                                placeholder={tr(
-                                    "notesPlaceholder",
-                                    "Optional notes for the customer"
-                                )}
-                                onChangeText={(value) => updateFormField("notes", value)}
-                                theme={theme}
-                                isArabic={isArabic}
-                                multiline
-                                inputStyle={styles.multilineInput}
-                                editable={!isSubmitting}
-                            />
-                        </ScrollView>
-
-                        <View style={[styles.footer, { borderTopColor: theme.border }]}>
-                            <TouchableOpacity
+                            <Text
                                 style={[
-                                    styles.secondaryButton,
-                                    {
-                                        backgroundColor: theme.cardSoft,
-                                        borderColor: theme.border,
-                                    },
+                                    styles.secondaryButtonText,
+                                    { color: theme.text },
                                 ]}
-                                activeOpacity={0.85}
-                                onPress={handleClose}
-                                disabled={isSubmitting}
                             >
-                                <Text
-                                    style={[
-                                        styles.secondaryButtonText,
-                                        { color: theme.text },
-                                    ]}
-                                >
-                                    {tr("cancel", "Cancel")}
-                                </Text>
-                            </TouchableOpacity>
+                                {tr("cancel", "Cancel")}
+                            </Text>
+                        </TouchableOpacity>
 
-                            <TouchableOpacity
-                                style={[
-                                    styles.primaryButton,
-                                    { backgroundColor: theme.primary },
-                                    isSubmitting && styles.disabledButton,
-                                ]}
-                                activeOpacity={0.85}
-                                onPress={handleSubmit}
-                                disabled={isSubmitting}
-                            >
-                                {isSubmitting ? (
-                                    <ActivityIndicator size="small" color="#FFFFFF" />
-                                ) : (
-                                    <>
-                                        <Ionicons name="send" size={18} color="#FFFFFF" />
-                                        <Text style={styles.primaryButtonText}>
-                                            {tr("sendQuote", "Send Quote")}
-                                        </Text>
-                                    </>
-                                )}
-                            </TouchableOpacity>
-                        </View>
+                        <TouchableOpacity
+                            style={[
+                                styles.primaryButton,
+                                { backgroundColor: theme.primary },
+                                isSubmitting && styles.disabledButton,
+                            ]}
+                            activeOpacity={0.85}
+                            onPress={handleSubmit}
+                            disabled={isSubmitting}
+                        >
+                            {isSubmitting ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                                <>
+                                    <Ionicons name="send" size={18} color="#FFFFFF" />
+                                    <Text style={styles.primaryButtonText}>
+                                        {tr("sendQuote", "Send Quote")}
+                                    </Text>
+                                </>
+                            )}
+                        </TouchableOpacity>
                     </View>
+                </View>
 
-                    <QuoteDatePickerModal
-                        visible={!!activeDateField}
-                        value={activeDateField ? form[activeDateField] : ""}
-                        title={activeDateField ? DATE_FIELD_LABELS[activeDateField] || tr("selectDate", "Select date") : tr("selectDate", "Select date")}
-                        theme={theme}
-                        tr={tr}
-                        isArabic={isArabic}
-                        onClose={closeDatePicker}
-                        onSelect={handleSelectDate}
-                    />
-                </KeyboardAvoidingView>
+                <QuoteDatePickerModal
+                    visible={!!activeDateField}
+                    value={activeDateField ? form[activeDateField] : ""}
+                    title={activeDateField ? DATE_FIELD_LABELS[activeDateField] || tr("selectDate", "Select date") : tr("selectDate", "Select date")}
+                    theme={theme}
+                    tr={tr}
+                    isArabic={isArabic}
+                    onClose={closeDatePicker}
+                    onSelect={handleSelectDate}
+                />
             </View>
         </Modal>
     );
@@ -1729,11 +1743,6 @@ const styles = StyleSheet.create({
         justifyContent: "flex-end",
     },
 
-    keyboardView: {
-        flex: 1,
-        justifyContent: "flex-end",
-    },
-
     card: {
         width: "100%",
         borderTopLeftRadius: 28,
@@ -1782,7 +1791,6 @@ const styles = StyleSheet.create({
     },
 
     scroll: {
-        flexGrow: 0,
         flexShrink: 1,
     },
 
@@ -1790,10 +1798,6 @@ const styles = StyleSheet.create({
         paddingHorizontal: 18,
         paddingTop: 4,
         paddingBottom: 14,
-    },
-
-    scrollContentKeyboardOpen: {
-        paddingBottom: 30,
     },
 
     sectionTitleRow: {

@@ -2277,13 +2277,36 @@ const formatLastSeenText = (lastSeenAt, isArabic) => {
         : `Last seen ${dateText} ${timeText}`;
 };
 
-const formatPresenceText = ({ isBlocked, isTyping, isOnline, lastSeenAt, isArabic, tr }) => {
+const formatPresenceText = ({
+    isBlocked,
+    isTyping,
+    isRecording,
+    isOnline,
+    lastSeenAt,
+    personName = "",
+    isGroup = false,
+    isArabic,
+    tr,
+}) => {
     if (isBlocked) {
         return tr("blocked", "Blocked");
     }
 
-    if (isTyping) {
-        return tr("typingNow", isArabic ? "يكتب الآن..." : "Typing...");
+    const activityText = getActivityText({
+        isRecording,
+        isTyping,
+        personName,
+        isGroup,
+        isArabic,
+        tr,
+    });
+
+    if (activityText) {
+        return activityText;
+    }
+
+    if (isGroup) {
+        return "";
     }
 
     if (isOnline) {
@@ -2556,6 +2579,88 @@ const getChatProfileInfoFromSources = (...sources) => {
     };
 };
 
+
+const getGroupParticipantCandidates = (source) => {
+    if (!source || typeof source !== "object") {
+        return [];
+    }
+
+    const candidates = [
+        source?.participants,
+        source?.members,
+        source?.users,
+        source?.conversation_participants,
+        source?.conversationParticipants,
+        source?.data?.participants,
+        source?.data?.members,
+        source?.data?.users,
+        source?.conversation?.participants,
+        source?.conversation?.members,
+        source?.conversation?.users,
+    ];
+
+    return candidates.filter(Array.isArray).flat();
+};
+
+const getGroupParticipantId = (participant) => {
+    if (!participant || typeof participant !== "object") {
+        return null;
+    }
+
+    return getNormalizedChatValue(
+        participant?.user_id ||
+        participant?.userId ||
+        participant?.user?.id ||
+        participant?.profile?.user_id ||
+        participant?.profile?.id ||
+        participant?.id ||
+        null
+    );
+};
+
+const getGroupParticipantsCountFromSources = (...sources) => {
+    const participants = sources
+        .filter(Boolean)
+        .flatMap((source) => getGroupParticipantCandidates(source));
+
+    if (!participants.length) {
+        const directCount = sources
+            .map((source) => (
+                source?.participants_count ||
+                source?.participantsCount ||
+                source?.members_count ||
+                source?.membersCount ||
+                source?.users_count ||
+                source?.usersCount ||
+                source?.conversation?.participants_count ||
+                source?.conversation?.participantsCount ||
+                null
+            ))
+            .find((value) => Number(value) > 0);
+
+        const numericDirectCount = Number(directCount || 0);
+        return Number.isFinite(numericDirectCount) && numericDirectCount > 0
+            ? Math.floor(numericDirectCount)
+            : 0;
+    }
+
+    const seenIds = new Set();
+    let anonymousCount = 0;
+
+    participants.forEach((participant) => {
+        const participantId = getGroupParticipantId(participant);
+
+        if (!participantId) {
+            anonymousCount += 1;
+            return;
+        }
+
+        seenIds.add(String(participantId));
+    });
+
+    return seenIds.size + anonymousCount;
+};
+
 const mergeChatProfileInfo = (currentInfo = {}, nextInfo = {}) => ({
     name: nextInfo.name || currentInfo.name || "",
     department: nextInfo.department || currentInfo.department || null,
@@ -2577,6 +2682,79 @@ const getInitialsFromName = (name = "") => {
         .toUpperCase();
 
     return initials || "MO";
+};
+
+const getRealtimeActivityUserName = (event, fallback = "") => {
+    const candidates = [
+        event?.user_name,
+        event?.userName,
+        event?.name,
+        event?.display_name,
+        event?.displayName,
+        event?.sender?.name,
+        event?.sender?.full_name,
+        event?.sender?.display_name,
+        event?.user?.name,
+        event?.user?.full_name,
+        event?.user?.display_name,
+        event?.data?.user_name,
+        event?.data?.userName,
+        event?.data?.name,
+        event?.data?.user?.name,
+        fallback,
+    ];
+
+    const name = candidates.find((value) => {
+        const cleanValue = String(value || "").trim();
+        return cleanValue.length > 0 && cleanValue !== "undefined" && cleanValue !== "null";
+    });
+
+    return name ? String(name).trim() : "";
+};
+
+const getActivityText = ({
+    isRecording,
+    isTyping,
+    personName,
+    isGroup,
+    isArabic,
+    tr,
+}) => {
+    const cleanName = String(personName || "").trim();
+
+    if (isRecording) {
+        if (isArabic) {
+            return cleanName
+                ? `${cleanName} عم يسجل رسالة صوتية...`
+                : isGroup
+                    ? "أحد الأعضاء عم يسجل رسالة صوتية..."
+                    : "عم يسجل رسالة صوتية...";
+        }
+
+        return cleanName
+            ? `${cleanName} is recording...`
+            : isGroup
+                ? "Someone is recording..."
+                : tr("recordingNow", "Recording...");
+    }
+
+    if (isTyping) {
+        if (isArabic) {
+            return cleanName
+                ? `${cleanName} عم يكتب...`
+                : isGroup
+                    ? "أحد الأعضاء عم يكتب..."
+                    : "عم يكتب...";
+        }
+
+        return cleanName
+            ? `${cleanName} is typing...`
+            : isGroup
+                ? "Someone is typing..."
+                : tr("typingNow", "Typing...");
+    }
+
+    return "";
 };
 
 export default function IndividualChatScreen({ navigation, route }) {
@@ -2670,8 +2848,12 @@ export default function IndividualChatScreen({ navigation, route }) {
     const [copyToastVisible, setCopyToastVisible] = useState(false);
     const copyToastTimerRef = useRef(null);
     const [isTargetTyping, setIsTargetTyping] = useState(false);
+    const [isTargetRecordingVoice, setIsTargetRecordingVoice] = useState(false);
+    const [targetActivityName, setTargetActivityName] = useState("");
     const typingTimeoutRef = useRef(null);
+    const recordingTimeoutRef = useRef(null);
     const typingStopTimeoutRef = useRef(null);
+    const recordingWhisperIntervalRef = useRef(null);
     const lastTypingWhisperAtRef = useRef(0);
     const [targetLastSeenAt, setTargetLastSeenAt] = useState(() =>
         getLastSeenAtFromSources(employee, conversation, route?.params?.customer)
@@ -2691,6 +2873,15 @@ export default function IndividualChatScreen({ navigation, route }) {
     const [canCreateQuote, setCanCreateQuote] = useState(false);
     const [currentUserRole, setCurrentUserRole] = useState(null);
     const [currentProfileUserId, setCurrentProfileUserId] = useState(null);
+    const [currentProfileDisplayName, setCurrentProfileDisplayName] = useState("");
+    const [groupParticipantsCount, setGroupParticipantsCount] = useState(() =>
+        getGroupParticipantsCountFromSources(
+            conversation,
+            employee,
+            route?.params?.conversation,
+            route?.params
+        )
+    );
     const [canSendMessage, setCanSendMessage] = useState(() => {
         const initialCanSend = getConversationCanSendMessageFromSources(
             conversation,
@@ -2713,6 +2904,21 @@ export default function IndividualChatScreen({ navigation, route }) {
 
     const language = i18n.language?.startsWith("ar") ? "ar" : "en";
     const isArabic = language === "ar";
+    const groupHeaderSubtitle = useMemo(() => {
+        if (!isGroupConversation) {
+            return "";
+        }
+
+        const count = Number(groupParticipantsCount || 0);
+
+        if (Number.isFinite(count) && count > 0) {
+            return isArabic
+                ? `${count} أعضاء`
+                : `${count} members`;
+        }
+
+        return tr("groupChat", isArabic ? "محادثة جماعية" : "Group chat");
+    }, [groupParticipantsCount, isArabic, isGroupConversation]);
     const hasMessage = messageText.trim().length > 0;
     const isRecordingVoice = !!recorderState?.isRecording;
     const recordingDurationText = formatAudioDuration(recorderState?.durationMillis || 0);
@@ -2793,9 +2999,27 @@ export default function IndividualChatScreen({ navigation, route }) {
 
                 const profileRole = getProfileRoleValue(profile);
                 const profileUserId = getCurrentUserIdFromProfile(profile);
+                const profileDisplayName = getProfileTextFromSources([profile], [
+                    "full_name",
+                    "fullName",
+                    "display_name",
+                    "displayName",
+                    "name",
+                    "user.full_name",
+                    "user.fullName",
+                    "user.display_name",
+                    "user.displayName",
+                    "user.name",
+                    "profile.full_name",
+                    "profile.fullName",
+                    "profile.display_name",
+                    "profile.displayName",
+                    "profile.name",
+                ]);
 
                 setCurrentUserRole(profileRole);
                 setCurrentProfileUserId(profileUserId);
+                setCurrentProfileDisplayName(profileDisplayName);
                 const initialCanBlockValue = getConversationCanBlockFromSources(
                     conversation,
                     employee,
@@ -2839,12 +3063,17 @@ export default function IndividualChatScreen({ navigation, route }) {
     }, []);
 
     const targetOnline = !isGroupConversation && !!targetUserId && isUserOnline?.(targetUserId);
-    const targetTyping = !isGroupConversation && targetOnline && isTargetTyping;
+    const targetTyping = isTargetTyping === true;
+    const targetRecording = isTargetRecordingVoice === true;
+    const headerActivityName = targetActivityName || (!isGroupConversation ? employeeName : "");
     const headerPresenceText = formatPresenceText({
         isBlocked,
         isTyping: targetTyping,
+        isRecording: targetRecording,
         isOnline: targetOnline,
         lastSeenAt: targetLastSeenAt,
+        personName: headerActivityName,
+        isGroup: isGroupConversation,
         isArabic,
         tr,
     });
@@ -2904,8 +3133,17 @@ export default function IndividualChatScreen({ navigation, route }) {
                 clearTimeout(typingTimeoutRef.current);
             }
 
+            if (recordingTimeoutRef.current) {
+                clearTimeout(recordingTimeoutRef.current);
+            }
+
             if (typingStopTimeoutRef.current) {
                 clearTimeout(typingStopTimeoutRef.current);
+            }
+
+            if (recordingWhisperIntervalRef.current) {
+                clearInterval(recordingWhisperIntervalRef.current);
+                recordingWhisperIntervalRef.current = null;
             }
         };
     }, []);
@@ -3294,7 +3532,15 @@ export default function IndividualChatScreen({ navigation, route }) {
                 );
                 const normalizedCurrentUserId = getNormalizedChatValue(currentUserId);
                 const normalizedTargetUserId = getNormalizedChatValue(targetUserId);
-                const isTypingNow = typingEvent?.is_typing !== false && typingEvent?.isTyping !== false;
+                const isRecordingNow =
+                    typingEvent?.is_recording === true ||
+                    typingEvent?.isRecording === true ||
+                    String(typingEvent?.activity || "").toLowerCase() === "recording";
+                const isTypingNow =
+                    !isRecordingNow &&
+                    typingEvent?.is_typing !== false &&
+                    typingEvent?.isTyping !== false &&
+                    String(typingEvent?.activity || "typing").toLowerCase() !== "idle";
 
                 if (
                     typingConversationId &&
@@ -3312,6 +3558,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                 }
 
                 if (
+                    !isGroupConversation &&
                     typingUserId &&
                     normalizedTargetUserId &&
                     typingUserId !== normalizedTargetUserId
@@ -3319,20 +3566,49 @@ export default function IndividualChatScreen({ navigation, route }) {
                     return;
                 }
 
+                const nextActivityName = getRealtimeActivityUserName(
+                    typingEvent,
+                    isGroupConversation ? "" : employeeName
+                );
+
                 if (typingTimeoutRef.current) {
                     clearTimeout(typingTimeoutRef.current);
                     typingTimeoutRef.current = null;
                 }
 
-                if (!isTypingNow) {
+                if (recordingTimeoutRef.current) {
+                    clearTimeout(recordingTimeoutRef.current);
+                    recordingTimeoutRef.current = null;
+                }
+
+                if (!isTypingNow && !isRecordingNow) {
                     setIsTargetTyping(false);
+                    setIsTargetRecordingVoice(false);
+                    setTargetActivityName("");
                     return;
                 }
 
+                setTargetActivityName(nextActivityName);
+
+                if (isRecordingNow) {
+                    setIsTargetTyping(false);
+                    setIsTargetRecordingVoice(true);
+
+                    recordingTimeoutRef.current = setTimeout(() => {
+                        setIsTargetRecordingVoice(false);
+                        setTargetActivityName("");
+                        recordingTimeoutRef.current = null;
+                    }, 4200);
+
+                    return;
+                }
+
+                setIsTargetRecordingVoice(false);
                 setIsTargetTyping(true);
 
                 typingTimeoutRef.current = setTimeout(() => {
                     setIsTargetTyping(false);
+                    setTargetActivityName("");
                     typingTimeoutRef.current = null;
                 }, 2800);
             },
@@ -3341,7 +3617,7 @@ export default function IndividualChatScreen({ navigation, route }) {
         return () => {
             leaveConversationChannel(normalizedConversationId);
         };
-    }, [conversationId, currentUserId, isArabic, targetUserId]);
+    }, [conversationId, currentUserId, employeeName, isArabic, isGroupConversation, targetUserId]);
 
 
     useEffect(() => {
@@ -3395,6 +3671,30 @@ export default function IndividualChatScreen({ navigation, route }) {
                 setChatProfileInfo((currentInfo) =>
                     mergeChatProfileInfo(currentInfo, nextChatProfileInfo)
                 );
+
+                const nextConversationId =
+                    getConversationIdFromShowConversationObject(showConversationObject) ||
+                    normalizedConversationId;
+                const nextIsGroup = getIsGroupFromConversationObject(
+                    showConversationObject,
+                    isGroupConversation
+                );
+                const nextTargetUserId = nextIsGroup
+                    ? null
+                    : getTargetUserIdFromShowConversationObject(
+                        showConversationObject,
+                        targetUserId
+                    );
+                const nextGroupParticipantsCount = getGroupParticipantsCountFromSources(
+                    showConversationObject,
+                    showConversationObject?.raw,
+                    showConversationObject?.meta,
+                    conversation,
+                    employee,
+                    route?.params
+                );
+
+                setGroupParticipantsCount(nextGroupParticipantsCount);
 
                 const nextCanSendValue = getConversationCanSendMessageFromSources(
                     showConversationObject,
@@ -3458,20 +3758,6 @@ export default function IndividualChatScreen({ navigation, route }) {
                         )
                     );
                 });
-
-                const nextConversationId =
-                    getConversationIdFromShowConversationObject(showConversationObject) ||
-                    normalizedConversationId;
-                const nextIsGroup = getIsGroupFromConversationObject(
-                    showConversationObject,
-                    isGroupConversation
-                );
-                const nextTargetUserId = nextIsGroup
-                    ? null
-                    : getTargetUserIdFromShowConversationObject(
-                        showConversationObject,
-                        targetUserId
-                    );
 
                 setResolvedChatConfig({
                     conversationId: nextConversationId,
@@ -3969,19 +4255,26 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
     };
 
-    const sendTypingWhisper = (isTyping) => {
+    const sendTypingWhisper = (isTyping, options = {}) => {
         const normalizedConversationId = getNormalizedChatValue(conversationId);
 
-        if (!normalizedConversationId || isGroupConversation) {
+        if (!normalizedConversationId) {
             return;
         }
+
+        const isRecording = options?.isRecording === true;
 
         sendConversationTypingWhisper({
             conversationId: normalizedConversationId,
             userId: currentUserId,
-            userName: "",
-            targetUserId,
-            isTyping,
+            userName: currentProfileDisplayName || "",
+            user_name: currentProfileDisplayName || "",
+            targetUserId: isGroupConversation ? null : targetUserId,
+            isTyping: isRecording ? false : isTyping === true,
+            is_typing: isRecording ? false : isTyping === true,
+            isRecording,
+            is_recording: isRecording,
+            activity: isRecording ? "recording" : isTyping ? "typing" : "idle",
         });
     };
 
@@ -4020,6 +4313,34 @@ export default function IndividualChatScreen({ navigation, route }) {
             lastTypingWhisperAtRef.current = 0;
         }, 1800);
     };
+
+
+    useEffect(() => {
+        if (recordingWhisperIntervalRef.current) {
+            clearInterval(recordingWhisperIntervalRef.current);
+            recordingWhisperIntervalRef.current = null;
+        }
+
+        if (!isRecordingVoice || cannotSendBecauseBlocked) {
+            sendTypingWhisper(false);
+            return;
+        }
+
+        sendTypingWhisper(false, { isRecording: true });
+
+        recordingWhisperIntervalRef.current = setInterval(() => {
+            sendTypingWhisper(false, { isRecording: true });
+        }, 2200);
+
+        return () => {
+            if (recordingWhisperIntervalRef.current) {
+                clearInterval(recordingWhisperIntervalRef.current);
+                recordingWhisperIntervalRef.current = null;
+            }
+
+            sendTypingWhisper(false);
+        };
+    }, [cannotSendBecauseBlocked, conversationId, currentProfileDisplayName, currentUserId, isGroupConversation, isRecordingVoice, targetUserId]);
 
     const handleSend = () => {
         if (cannotSendBecauseBlocked) {
@@ -5106,6 +5427,9 @@ export default function IndividualChatScreen({ navigation, route }) {
                         employeeName={employeeName}
                         employeeDepartment={employeeDepartment}
                         employeeAvatar={employeeAvatar}
+                        isGroup={isGroupConversation}
+                        groupParticipantsCount={groupParticipantsCount}
+                        groupSubtitle={groupHeaderSubtitle}
                         isBlocked={isBlocked}
                         tr={tr}
                         isCompactScreen={isCompactScreen}
@@ -5120,6 +5444,8 @@ export default function IndividualChatScreen({ navigation, route }) {
                         employeeLocation={chatProfileInfo.location || employee?.location}   // أضفتها
                         isOnline={targetOnline}
                         isTyping={targetTyping}
+                        isRecordingVoice={targetRecording}
+                        activityName={headerActivityName}
                         lastSeenAt={targetLastSeenAt}
                         presenceText={headerPresenceText}
                     />

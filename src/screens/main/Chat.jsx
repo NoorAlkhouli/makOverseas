@@ -1,4 +1,5 @@
 import MainNavBar from "@/src/components/MainNavBar";
+import CreateGroupChatModal from "@/src/components/CreateGroupChatModal";
 import { BOTTOM_TAB_BADGE_EVENTS } from "@/src/components/BottomTabBar";
 import { appImages } from "@/src/constants/images";
 import { useAppRealtime } from "@/src/context/AppRealtimeProvider";
@@ -450,6 +451,12 @@ const canUserSearchCustomers = (response) => {
     return role === 2 || role === 3;
 };
 
+const canUserCreateGroups = (response) => {
+    const role = getUserRoleFromProfile(response);
+
+    return role === 2 || role === 3;
+};
+
 const getEmployeeItems = (response) => {
     const data =
         response?.data?.data ||
@@ -609,6 +616,71 @@ const normalizeEmployee = (employee, isArabic) => {
         isEmployee: true,
         raw: employee,
     };
+};
+
+
+const getConversationChatByTargetUserId = (conversationChats = []) => {
+    const conversationsByTargetUserId = new Map();
+
+    conversationChats.forEach((chat) => {
+        const targetUserId = normalizeId(chat?.targetUserId);
+
+        if (!targetUserId || chat?.isGroup) {
+            return;
+        }
+
+        if (!conversationsByTargetUserId.has(targetUserId)) {
+            conversationsByTargetUserId.set(targetUserId, chat);
+        }
+    });
+
+    return conversationsByTargetUserId;
+};
+
+const mergeEmployeeWithConversationChat = (employeeChat, conversationChat = null) => {
+    if (!conversationChat) {
+        return employeeChat;
+    }
+
+    return {
+        ...employeeChat,
+        conversationId: conversationChat.conversationId,
+        message: conversationChat.message || employeeChat.message,
+        time: conversationChat.time || employeeChat.time,
+        unread: conversationChat.unread || 0,
+        status: conversationChat.status || employeeChat.status,
+        isOnline: conversationChat.isOnline || employeeChat.isOnline,
+        lastSeenAt: conversationChat.lastSeenAt || employeeChat.lastSeenAt,
+        isBlocked: conversationChat.isBlocked === true,
+        canSendMessage: conversationChat.canSendMessage !== false,
+        isEmployee: true,
+        isEmployeeDirectory: true,
+        isEmployeeConversation: true,
+        matchedConversation: conversationChat,
+        raw: conversationChat.raw || employeeChat.raw,
+        employeeRaw: employeeChat.raw,
+    };
+};
+
+const buildEmployeeDirectoryChats = ({
+    employeesResponse,
+    conversationsResponse,
+    isArabic,
+}) => {
+    const conversationChats = getConversationItems(conversationsResponse).map((conversation) =>
+        normalizeConversation(conversation, isArabic)
+    );
+    const conversationsByTargetUserId = getConversationChatByTargetUserId(conversationChats);
+
+    return getEmployeeItems(employeesResponse).map((employee) => {
+        const employeeChat = normalizeEmployee(employee, isArabic);
+        const targetUserId = normalizeId(employeeChat.targetUserId);
+        const matchedConversation = targetUserId
+            ? conversationsByTargetUserId.get(targetUserId)
+            : null;
+
+        return mergeEmployeeWithConversationChat(employeeChat, matchedConversation);
+    });
 };
 
 const normalizeCustomer = (customer, isArabic) => {
@@ -1510,11 +1582,13 @@ export default function Chat({ navigation }) {
     const [currentPage, setCurrentPage] = useState(1);
     const [errorMessage, setErrorMessage] = useState("");
     const [canSearchCustomers, setCanSearchCustomers] = useState(false);
+    const [canCreateGroups, setCanCreateGroups] = useState(false);
     const [customerSearchResults, setCustomerSearchResults] = useState([]);
     const [isSearchingCustomers, setIsSearchingCustomers] = useState(false);
     const [customerSearchError, setCustomerSearchError] = useState("");
     const [isSearchFocused, setIsSearchFocused] = useState(false);
     const [keyboardHeight, setKeyboardHeight] = useState(0);
+    const [createGroupVisible, setCreateGroupVisible] = useState(false);
 
     const imageSource = isDark ? appImages.splashDark : appImages.splashLight;
     const filtersScrollRef = useRef(null);
@@ -1567,11 +1641,13 @@ export default function Chat({ navigation }) {
                 }
 
                 setCanSearchCustomers(canUserSearchCustomers(response));
+                setCanCreateGroups(canUserCreateGroups(response));
             } catch (error) {
                 console.log("Load profile permissions error:", error?.raw || error);
 
                 if (isMounted) {
                     setCanSearchCustomers(false);
+                    setCanCreateGroups(false);
                 }
             }
         };
@@ -1582,6 +1658,12 @@ export default function Chat({ navigation }) {
             isMounted = false;
         };
     }, []);
+
+    useEffect(() => {
+        if (!canCreateGroups && createGroupVisible) {
+            setCreateGroupVisible(false);
+        }
+    }, [canCreateGroups, createGroupVisible]);
 
     useEffect(() => {
         let isCancelled = false;
@@ -1674,10 +1756,20 @@ export default function Chat({ navigation }) {
                 let preparedChats = [];
 
                 if (activeFilter === "employees") {
-                    const employeesResponse = await employeeService.listEmployees();
-                    preparedChats = getEmployeeItems(employeesResponse).map((employee) =>
-                        normalizeEmployee(employee, isArabic)
-                    );
+                    const [conversationsResponse, employeesResponse] = await Promise.all([
+                        chatService.listConversations({
+                            page: 1,
+                            perPage: CHAT_LIST_PER_PAGE,
+                        }),
+                        employeeService.listEmployees(),
+                    ]);
+
+                    preparedChats = buildEmployeeDirectoryChats({
+                        employeesResponse,
+                        conversationsResponse,
+                        isArabic,
+                    });
+
                     setPaginationMeta(null);
                 } else {
                     const response = await chatService.listConversations({
@@ -2323,6 +2415,60 @@ export default function Chat({ navigation }) {
         });
     };
 
+    const getCreatedGroupConversation = (response) => {
+        return (
+            response?.data?.conversation ||
+            response?.data?.data?.conversation ||
+            response?.data?.item ||
+            response?.data?.data ||
+            response?.conversation ||
+            response?.item ||
+            response?.data ||
+            response ||
+            null
+        );
+    };
+
+    const handleGroupCreated = async (response) => {
+        const createdConversation = getCreatedGroupConversation(response);
+        const createdConversationId = normalizeId(
+            createdConversation?.id ||
+            createdConversation?.conversation_id ||
+            createdConversation?.conversationId
+        );
+
+        setCreateGroupVisible(false);
+
+        await fetchConversations({
+            page: 1,
+            refreshLoading: false,
+        });
+
+        if (!createdConversationId) {
+            setActiveFilter("groups");
+            return;
+        }
+
+        navigation.navigate("IndividualChat", {
+            conversationId: createdConversationId,
+            conversation: createdConversation,
+            isGroup: true,
+            is_group: true,
+            employee: {
+                id: createdConversationId,
+                name:
+                    createdConversation?.display_name ||
+                    createdConversation?.title ||
+                    createdConversation?.name ||
+                    (isArabic ? "مجموعة" : "Group"),
+                department: isArabic ? "مجموعة" : "Group",
+                conversation_id: createdConversationId,
+                is_group: true,
+                isGroup: true,
+            },
+        });
+    };
+
     const chatMenuItems = [
         {
             key: "selectChats",
@@ -2648,8 +2794,23 @@ export default function Chat({ navigation }) {
                         showTitle={showNavTitle}
                         notificationCount={unreadTotal}
                         onToggleLanguage={toggleLanguage}
+                        onCreateGroupPress={
+                            canCreateGroups
+                                ? () => setCreateGroupVisible(true)
+                                : null
+                        }
                         menuItems={chatMenuItems}
                     />
+
+                    {canCreateGroups && (
+                        <CreateGroupChatModal
+                            visible={createGroupVisible}
+                            colors={colors}
+                            isArabic={isArabic}
+                            onClose={() => setCreateGroupVisible(false)}
+                            onCreated={handleGroupCreated}
+                        />
+                    )}
 
                     <View style={styles.content}>
                         <View style={styles.headerBox}>

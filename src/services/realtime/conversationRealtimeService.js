@@ -78,48 +78,84 @@ const normalizeTypingEvent = (event = {}, conversationId = null) => {
     const userId = getTypingUserId(event);
     const now = new Date().toISOString();
 
+    const isTyping =
+        event?.is_typing !== undefined
+            ? event.is_typing
+            : event?.isTyping !== undefined
+                ? event.isTyping
+                : true;
+
+    const isRecording =
+        event?.is_recording !== undefined
+            ? event.is_recording
+            : event?.isRecording !== undefined
+                ? event.isRecording
+                : event?.recording !== undefined
+                    ? event.recording
+                    : false;
+
+    const userName =
+        event?.user_name ||
+        event?.userName ||
+        event?.name ||
+        event?.user?.name ||
+        event?.user?.full_name ||
+        '';
+
+    const activityType =
+        event?.activity_type ||
+        event?.activityType ||
+        (isRecording ? 'recording' : isTyping ? 'typing' : 'idle');
+
     return {
         ...event,
+
         conversation_id:
             event?.conversation_id ||
             event?.conversationId ||
             conversationId ||
             null,
+
         conversationId:
             event?.conversationId ||
             event?.conversation_id ||
             conversationId ||
             null,
+
         user_id: userId,
         userId,
+
+        user_name: userName,
+        userName,
+
         target_user_id:
             event?.target_user_id ||
             event?.targetUserId ||
             event?.receiver_id ||
             event?.receiverId ||
             null,
+
         targetUserId:
             event?.targetUserId ||
             event?.target_user_id ||
             event?.receiverId ||
             event?.receiver_id ||
             null,
-        is_typing:
-            event?.is_typing !== undefined
-                ? event.is_typing
-                : event?.isTyping !== undefined
-                    ? event.isTyping
-                    : true,
-        isTyping:
-            event?.isTyping !== undefined
-                ? event.isTyping
-                : event?.is_typing !== undefined
-                    ? event.is_typing
-                    : true,
+
+        is_typing: !!isTyping,
+        isTyping: !!isTyping,
+
+        is_recording: !!isRecording,
+        isRecording: !!isRecording,
+
+        activity_type: activityType,
+        activityType,
+
         typed_at:
             event?.typed_at ||
             event?.typedAt ||
             now,
+
         typedAt:
             event?.typedAt ||
             event?.typed_at ||
@@ -210,7 +246,11 @@ export function subscribeToConversationChannel({
 
         console.log(
             '[Conversation Realtime] Already subscribed to conversation channel, handlers updated:',
-            normalizedConversationId
+            {
+                conversationId: normalizedConversationId,
+                isSubscribed: existingChannelState.isSubscribed === true,
+                hasSubscriptionError: existingChannelState.hasSubscriptionError === true,
+            }
         );
 
         return existingChannelState.channel;
@@ -221,9 +261,13 @@ export function subscribeToConversationChannel({
     console.log('[Conversation Realtime] Subscribing to:', channelName);
 
     const channel = echo.private(channelName);
+
     const channelState = {
         channel,
+        channelName,
         conversationId: normalizedConversationId,
+        isSubscribed: false,
+        hasSubscriptionError: false,
         handlers: {
             onMessageSent,
             onMessageUpdated,
@@ -231,11 +275,22 @@ export function subscribeToConversationChannel({
         },
     };
 
+    conversationChannels.set(normalizedConversationId, channelState);
+
     channel
         .subscribed(() => {
-            console.log('[Conversation Realtime] Subscribed successfully ✅', channelName);
+            channelState.isSubscribed = true;
+            channelState.hasSubscriptionError = false;
+
+            console.log(
+                '[Conversation Realtime] Subscribed successfully ✅',
+                channelName
+            );
         })
         .error((error) => {
+            channelState.isSubscribed = false;
+            channelState.hasSubscriptionError = true;
+
             console.log('[Conversation Realtime] Subscription error ❌', {
                 channel: channelName,
                 error,
@@ -254,8 +309,6 @@ export function subscribeToConversationChannel({
 
     bindTypingWhisperEvent(channelState);
 
-    conversationChannels.set(normalizedConversationId, channelState);
-
     return channel;
 }
 
@@ -265,9 +318,13 @@ export function sendConversationTypingWhisper({
     userName,
     targetUserId,
     isTyping = true,
+    isRecording = false,
+    activityType,
 } = {}) {
     if (!conversationId) {
-        console.log('[Conversation Realtime] Cannot send typing whisper: conversationId is missing.');
+        console.log(
+            '[Conversation Realtime] Cannot send typing whisper: conversationId is missing.'
+        );
         return false;
     }
 
@@ -283,33 +340,77 @@ export function sendConversationTypingWhisper({
         return false;
     }
 
+    if (channelState?.isSubscribed !== true) {
+        console.log(
+            '[Conversation Realtime] Cannot send typing whisper yet: channel auth/subscription is not ready.',
+            {
+                conversationId: normalizedConversationId,
+                isSubscribed: channelState?.isSubscribed === true,
+                hasSubscriptionError: channelState?.hasSubscriptionError === true,
+            }
+        );
+        return false;
+    }
+
     if (typeof channel.whisper !== 'function') {
-        console.log('[Conversation Realtime] Cannot send typing whisper: whisper is not available.');
+        console.log(
+            '[Conversation Realtime] Cannot send typing whisper: whisper is not available.'
+        );
         return false;
     }
 
     const now = new Date().toISOString();
+    const normalizedIsTyping = !!isTyping;
+    const normalizedIsRecording = !!isRecording;
+
+    const normalizedActivityType =
+        activityType ||
+        (normalizedIsRecording
+            ? 'recording'
+            : normalizedIsTyping
+                ? 'typing'
+                : 'idle');
 
     const payload = {
         conversation_id: normalizedConversationId,
         conversationId: normalizedConversationId,
+
         user_id: userId ? String(userId) : null,
         userId: userId ? String(userId) : null,
+
         user_name: userName || '',
         userName: userName || '',
+
         target_user_id: targetUserId ? String(targetUserId) : null,
         targetUserId: targetUserId ? String(targetUserId) : null,
-        is_typing: !!isTyping,
-        isTyping: !!isTyping,
+
+        is_typing: normalizedIsTyping,
+        isTyping: normalizedIsTyping,
+
+        is_recording: normalizedIsRecording,
+        isRecording: normalizedIsRecording,
+
+        activity_type: normalizedActivityType,
+        activityType: normalizedActivityType,
+
         typed_at: now,
         typedAt: now,
     };
 
-    console.log('[Conversation Realtime] Sending typing whisper:', payload);
+    try {
+        console.log('[Conversation Realtime] Sending typing whisper:', payload);
 
-    channel.whisper('typing', payload);
+        channel.whisper('typing', payload);
 
-    return true;
+        return true;
+    } catch (error) {
+        console.log('[Conversation Realtime] Failed to send typing whisper:', {
+            conversationId: normalizedConversationId,
+            error,
+        });
+
+        return false;
+    }
 }
 
 export function getConversationChannel(conversationId) {

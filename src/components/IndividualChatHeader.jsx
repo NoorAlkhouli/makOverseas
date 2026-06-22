@@ -2,19 +2,87 @@ import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect } from "react";
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
+const getFirstName = (value = "") => {
+    const cleanValue = String(value || "").trim();
+
+    if (!cleanValue) {
+        return "";
+    }
+
+    return cleanValue.split(/\s+/).filter(Boolean)[0] || "";
+};
+
+const getActivityPresenceText = ({
+    presenceText,
+    activityName,
+    isRecordingVoice,
+    isTyping,
+    tr,
+}) => {
+    const cleanPresenceText = String(presenceText || "").trim();
+    const cleanActivityName = String(activityName || "").trim();
+    const firstName = getFirstName(cleanActivityName);
+
+    if (cleanPresenceText && cleanActivityName && firstName) {
+        return cleanPresenceText.replace(cleanActivityName, firstName);
+    }
+
+    if (cleanPresenceText) {
+        return cleanPresenceText;
+    }
+
+    if (firstName && isRecordingVoice) {
+        return `${firstName} ${tr("recordingNow", "Recording...")}`;
+    }
+
+    if (firstName && isTyping) {
+        return `${firstName} ${tr("typingNow", "Typing...")}`;
+    }
+
+    return "";
+};
+
 const getStatusLabel = ({
+    isGroup,
+    groupSubtitle,
     isBlocked,
     isTyping,
+    isRecordingVoice,
     isOnline,
     presenceText,
+    activityName,
     tr,
 }) => {
     if (isBlocked) {
         return tr("blocked", "Blocked");
     }
 
+    const activityPresenceText = getActivityPresenceText({
+        presenceText,
+        activityName,
+        isRecordingVoice,
+        isTyping,
+        tr,
+    });
+
+    if (isRecordingVoice && activityPresenceText) {
+        return activityPresenceText;
+    }
+
+    if (isRecordingVoice) {
+        return tr("recordingNow", "Recording...");
+    }
+
+    if (isTyping && activityPresenceText) {
+        return activityPresenceText;
+    }
+
     if (isTyping) {
         return tr("typingNow", "Typing...");
+    }
+
+    if (isGroup) {
+        return groupSubtitle || tr("groupChat", "Group chat");
     }
 
     if (presenceText) {
@@ -30,16 +98,22 @@ const getStatusLabel = ({
 
 const getStatusColor = ({
     colors,
+    isGroup,
     isBlocked,
     isTyping,
+    isRecordingVoice,
     isOnline,
 }) => {
     if (isBlocked) {
         return colors.danger || colors.text;
     }
 
-    if (isTyping || isOnline) {
+    if (isTyping || isRecordingVoice || isOnline) {
         return colors.primary;
+    }
+
+    if (isGroup) {
+        return colors.blue || colors.primary || colors.text;
     }
 
     return colors.textMuted || colors.muted || colors.text;
@@ -47,16 +121,22 @@ const getStatusColor = ({
 
 const getStatusDotColor = ({
     colors,
+    isGroup,
     isBlocked,
     isTyping,
+    isRecordingVoice,
     isOnline,
 }) => {
     if (isBlocked) {
         return colors.danger || colors.text;
     }
 
-    if (isTyping || isOnline) {
+    if (isTyping || isRecordingVoice || isOnline) {
         return colors.primary;
+    }
+
+    if (isGroup) {
+        return colors.blue || colors.primary || colors.text;
     }
 
     return colors.textMuted || colors.muted || colors.border;
@@ -69,9 +149,14 @@ export default function IndividualChatHeader({
     employeeName,
     employeeDepartment,
     employeeAvatar,
+    isGroup = false,
+    groupParticipantsCount = 0,
+    groupSubtitle = "",
     isBlocked,
     isOnline = false,
     isTyping = false,
+    isRecordingVoice = false,
+    activityName = "",
     lastSeenAt,
     presenceText,
     tr,
@@ -86,19 +171,33 @@ export default function IndividualChatHeader({
     employeeEmail,
     employeeLocation,
 }) {
-    const normalizedIsOnline = isOnline === true;
-    const normalizedIsTyping = isTyping === true && !isBlocked;
+    const normalizedIsGroup = isGroup === true;
+    const normalizedIsOnline = !normalizedIsGroup && isOnline === true;
+    const normalizedIsRecordingVoice = isRecordingVoice === true && !isBlocked;
+    const normalizedIsTyping = isTyping === true && !isBlocked && !normalizedIsRecordingVoice;
+    const normalizedGroupSubtitle = normalizedIsGroup
+        ? groupSubtitle || tr("groupChat", "Group chat")
+        : "";
+    const displayDepartment = normalizedIsGroup
+        ? tr("groupChat", "Group chat")
+        : employeeDepartment || tr("department", "Sales Department");
 
     useEffect(() => {
         console.log("[HEADER ONLINE DEBUG] Presence props received:", {
             conversationId,
             targetUserId,
             employeeName,
+            isGroup: normalizedIsGroup,
+            groupParticipantsCount,
+            groupSubtitle: normalizedGroupSubtitle,
             isBlocked,
             isOnline,
             normalizedIsOnline,
             isTyping,
             normalizedIsTyping,
+            isRecordingVoice,
+            normalizedIsRecordingVoice,
+            activityName,
             lastSeenAt,
             presenceText,
         });
@@ -106,34 +205,48 @@ export default function IndividualChatHeader({
         conversationId,
         targetUserId,
         employeeName,
+        normalizedIsGroup,
+        groupParticipantsCount,
+        normalizedGroupSubtitle,
         isBlocked,
         isOnline,
         normalizedIsOnline,
         isTyping,
         normalizedIsTyping,
+        isRecordingVoice,
+        normalizedIsRecordingVoice,
+        activityName,
         lastSeenAt,
         presenceText,
     ]);
 
     const statusLabel = getStatusLabel({
+        isGroup: normalizedIsGroup,
+        groupSubtitle: normalizedGroupSubtitle,
         isBlocked,
         isTyping: normalizedIsTyping,
+        isRecordingVoice: normalizedIsRecordingVoice,
         isOnline: normalizedIsOnline,
         presenceText,
+        activityName,
         tr,
     });
 
     const statusColor = getStatusColor({
         colors,
+        isGroup: normalizedIsGroup,
         isBlocked,
         isTyping: normalizedIsTyping,
+        isRecordingVoice: normalizedIsRecordingVoice,
         isOnline: normalizedIsOnline,
     });
 
     const statusDotColor = getStatusDotColor({
         colors,
+        isGroup: normalizedIsGroup,
         isBlocked,
         isTyping: normalizedIsTyping,
+        isRecordingVoice: normalizedIsRecordingVoice,
         isOnline: normalizedIsOnline,
     });
 
@@ -142,21 +255,29 @@ export default function IndividualChatHeader({
             conversationId,
             targetUserId,
             employeeName,
+            isGroup: normalizedIsGroup,
+            groupParticipantsCount,
             statusLabel,
             statusColor,
             statusDotColor,
             normalizedIsOnline,
             normalizedIsTyping,
+            normalizedIsRecordingVoice,
+            activityName,
         });
     }, [
         conversationId,
         targetUserId,
         employeeName,
+        normalizedIsGroup,
+        groupParticipantsCount,
         statusLabel,
         statusColor,
         statusDotColor,
         normalizedIsOnline,
         normalizedIsTyping,
+        normalizedIsRecordingVoice,
+        activityName,
     ]);
 
     const openChatProfile = () => {
@@ -166,17 +287,21 @@ export default function IndividualChatHeader({
             profile: {
                 initials: employeeInitials,
                 name: employeeName,
-                department: employeeDepartment || tr("department", "Sales Department"),
+                department: displayDepartment,
                 avatar: employeeAvatar || null,
+                isGroup: normalizedIsGroup,
+                participantCount: groupParticipantsCount,
                 isBlocked,
                 isOnline: normalizedIsOnline,
                 isTyping: normalizedIsTyping,
+                isRecordingVoice: normalizedIsRecordingVoice,
+                activityName,
                 lastSeenAt,
                 presenceText: statusLabel,
-                phone: employeePhone || "+963 947 156 953",
-                username: employeeUsername || "@makoverseas_sales",
-                email: employeeEmail || "sales@mak-overseas.com",
-                location: employeeLocation || "Damascus, Syria",
+                phone: normalizedIsGroup ? "" : employeePhone || "+963 947 156 953",
+                username: normalizedIsGroup ? "" : employeeUsername || "@makoverseas_sales",
+                email: normalizedIsGroup ? "" : employeeEmail || "sales@mak-overseas.com",
+                location: normalizedIsGroup ? "" : employeeLocation || "Damascus, Syria",
             },
         });
     };
@@ -222,6 +347,12 @@ export default function IndividualChatHeader({
                                 source={{ uri: employeeAvatar }}
                                 style={styles.avatarImage}
                             />
+                        ) : normalizedIsGroup ? (
+                            <Ionicons
+                                name="people"
+                                size={isCompactScreen ? 22 : 26}
+                                color={colors.text}
+                            />
                         ) : (
                             <Text
                                 style={[
@@ -260,7 +391,7 @@ export default function IndividualChatHeader({
                         numberOfLines={1}
                         ellipsizeMode="tail"
                     >
-                        {employeeDepartment || tr("department", "Sales Department")}
+                        {displayDepartment}
                     </Text>
 
                     <View style={styles.statusRow}>
@@ -270,7 +401,7 @@ export default function IndividualChatHeader({
                                 {
                                     backgroundColor: statusDotColor,
                                     borderColor:
-                                        normalizedIsOnline || normalizedIsTyping || isBlocked
+                                        normalizedIsGroup || normalizedIsOnline || normalizedIsTyping || normalizedIsRecordingVoice || isBlocked
                                             ? statusDotColor
                                             : colors.border,
                                 },

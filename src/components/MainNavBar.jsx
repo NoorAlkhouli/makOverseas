@@ -23,6 +23,7 @@ export default function MainNavBar({
     showTitle = false,
     notificationCount = 0,
     onToggleLanguage,
+    onCreateGroupPress = null,
     menuItems = [],
 }) {
     const { t, i18n } = useTranslation();
@@ -152,6 +153,24 @@ export default function MainNavBar({
                             </View>
                         )}
                     </TouchableOpacity>
+
+                    {!!onCreateGroupPress && (
+                        <TouchableOpacity
+                            activeOpacity={0.85}
+                            style={styles.createGroupButton}
+                            onPress={onCreateGroupPress}
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                                isArabic ? "إنشاء مجموعة" : "Create group"
+                            }
+                        >
+                            <Feather
+                                name="users"
+                                size={22}
+                                color={colors.textPrimary}
+                            />
+                        </TouchableOpacity>
+                    )}
 
                     <View style={styles.menuWrapper}>
                         <TouchableOpacity
@@ -301,6 +320,17 @@ const createStyles = (colors) =>
             color: colors.darkText || colors.background,
             fontSize: 9,
             fontWeight: "900",
+        },
+
+        createGroupButton: {
+            width: 46,
+            height: 46,
+            borderRadius: 18,
+            backgroundColor: colors.cardSoft,
+            borderWidth: 1,
+            borderColor: colors.border,
+            alignItems: "center",
+            justifyContent: "center",
         },
 
         menuWrapper: {
