@@ -2090,6 +2090,292 @@ const formatPresenceText = ({ isBlocked, isTyping, isOnline, lastSeenAt, isArabi
     return formatLastSeenText(lastSeenAt, isArabic);
 };
 
+
+const getProfileTextFromSources = (sources = [], paths = []) => {
+    for (const source of sources) {
+        if (!source || typeof source !== "object") {
+            continue;
+        }
+
+        for (const path of paths) {
+            const value = String(path)
+                .split(".")
+                .reduce((current, key) => current?.[key], source);
+
+            if (value !== undefined && value !== null && value !== "" && typeof value !== "object") {
+                const cleanValue = String(value).trim();
+
+                if (cleanValue) {
+                    return cleanValue;
+                }
+            }
+        }
+    }
+
+    return "";
+};
+
+const getProfileAvatarFromSources = (sources = []) => {
+    const avatarPaths = [
+        "avatar",
+        "avatar_url",
+        "avatarUrl",
+        "image",
+        "photo",
+        "profile_photo",
+        "profilePhoto",
+        "target_user.avatar",
+        "target_user.avatar_url",
+        "target_user.avatarUrl",
+        "targetUser.avatar",
+        "targetUser.avatar_url",
+        "targetUser.avatarUrl",
+        "other_participant.avatar",
+        "other_participant.avatar_url",
+        "other_participant.avatarUrl",
+        "other_participant.user.avatar",
+        "other_participant.user.avatar_url",
+        "other_participant.user.avatarUrl",
+        "participant.avatar",
+        "participant.avatar_url",
+        "participant.avatarUrl",
+        "participant.user.avatar",
+        "participant.user.avatar_url",
+        "participant.user.avatarUrl",
+        "employee.avatar",
+        "employee.avatar_url",
+        "employee.avatarUrl",
+        "employee.user.avatar",
+        "employee.user.avatar_url",
+        "employee.user.avatarUrl",
+        "customer.avatar",
+        "customer.avatar_url",
+        "customer.avatarUrl",
+        "customer.user.avatar",
+        "customer.user.avatar_url",
+        "customer.user.avatarUrl",
+        "user.avatar",
+        "user.avatar_url",
+        "user.avatarUrl",
+    ];
+
+    for (const source of sources) {
+        if (!source || typeof source !== "object") {
+            continue;
+        }
+
+        for (const path of avatarPaths) {
+            const value = String(path)
+                .split(".")
+                .reduce((current, key) => current?.[key], source);
+            const avatarValue = value && typeof value === "object"
+                ? value.url ||
+                value.full_url ||
+                value.fullUrl ||
+                value.path ||
+                value.src ||
+                value.preview_url ||
+                value.previewUrl ||
+                null
+                : value;
+            const avatar = normalizeRemoteAttachmentUri(avatarValue);
+
+            if (avatar) {
+                return avatar;
+            }
+        }
+    }
+
+    return null;
+};
+
+const getChatProfileInfoFromSources = (...sources) => {
+    const validSources = sources.filter(Boolean);
+
+    const name = getProfileTextFromSources(validSources, [
+        "display_name",
+        "full_name",
+        "fullName",
+        "name",
+        "title",
+        "target_user.full_name",
+        "target_user.fullName",
+        "target_user.name",
+        "target_user.display_name",
+        "targetUser.full_name",
+        "targetUser.fullName",
+        "targetUser.name",
+        "targetUser.display_name",
+        "other_participant.full_name",
+        "other_participant.fullName",
+        "other_participant.name",
+        "other_participant.display_name",
+        "other_participant.user.full_name",
+        "other_participant.user.fullName",
+        "other_participant.user.name",
+        "participant.full_name",
+        "participant.fullName",
+        "participant.name",
+        "participant.display_name",
+        "participant.user.full_name",
+        "participant.user.fullName",
+        "participant.user.name",
+        "employee.full_name",
+        "employee.fullName",
+        "employee.name",
+        "employee.display_name",
+        "employee.user.full_name",
+        "employee.user.fullName",
+        "employee.user.name",
+        "customer.full_name",
+        "customer.fullName",
+        "customer.name",
+        "customer.display_name",
+        "customer.user.full_name",
+        "customer.user.fullName",
+        "customer.user.name",
+        "user.full_name",
+        "user.fullName",
+        "user.name",
+    ]);
+
+    const department = getProfileTextFromSources(validSources, [
+        "department.name",
+        "department.title",
+        "department_name",
+        "department",
+        "target_user.department.name",
+        "target_user.department.title",
+        "target_user.department_name",
+        "targetUser.department.name",
+        "targetUser.department.title",
+        "targetUser.department_name",
+        "other_participant.department.name",
+        "other_participant.department.title",
+        "other_participant.department_name",
+        "other_participant.user.department.name",
+        "other_participant.user.department.title",
+        "participant.department.name",
+        "participant.department.title",
+        "participant.department_name",
+        "employee.department.name",
+        "employee.department.title",
+        "employee.department_name",
+        "employee.user.department.name",
+        "employee.user.department.title",
+        "customer.department.name",
+        "customer.department.title",
+        "customer.department_name",
+        "user.department.name",
+        "user.department.title",
+    ]);
+
+    const phone = getProfileTextFromSources(validSources, [
+        "phone",
+        "phone_e164",
+        "phoneE164",
+        "mobile",
+        "target_user.phone",
+        "target_user.phone_e164",
+        "targetUser.phone",
+        "other_participant.phone",
+        "other_participant.phone_e164",
+        "other_participant.user.phone",
+        "participant.phone",
+        "participant.user.phone",
+        "employee.phone",
+        "employee.phone_e164",
+        "employee.user.phone",
+        "customer.phone",
+        "customer.phone_e164",
+        "customer.user.phone",
+        "user.phone",
+        "user.phone_e164",
+    ]);
+
+    const username = getProfileTextFromSources(validSources, [
+        "username",
+        "user_name",
+        "target_user.username",
+        "targetUser.username",
+        "other_participant.username",
+        "other_participant.user.username",
+        "participant.username",
+        "participant.user.username",
+        "employee.username",
+        "employee.user.username",
+        "customer.username",
+        "customer.user.username",
+        "user.username",
+    ]);
+
+    const email = getProfileTextFromSources(validSources, [
+        "email",
+        "target_user.email",
+        "targetUser.email",
+        "other_participant.email",
+        "other_participant.user.email",
+        "participant.email",
+        "participant.user.email",
+        "employee.email",
+        "employee.user.email",
+        "customer.email",
+        "customer.user.email",
+        "user.email",
+    ]);
+
+    const location = getProfileTextFromSources(validSources, [
+        "location",
+        "address",
+        "city",
+        "country",
+        "target_user.location",
+        "targetUser.location",
+        "other_participant.location",
+        "other_participant.user.location",
+        "participant.location",
+        "participant.user.location",
+        "employee.location",
+        "employee.user.location",
+        "customer.location",
+        "customer.user.location",
+        "user.location",
+    ]);
+
+    return {
+        name,
+        department,
+        avatar: getProfileAvatarFromSources(validSources),
+        phone,
+        username,
+        email,
+        location,
+    };
+};
+
+const mergeChatProfileInfo = (currentInfo = {}, nextInfo = {}) => ({
+    name: nextInfo.name || currentInfo.name || "",
+    department: nextInfo.department || currentInfo.department || null,
+    avatar: nextInfo.avatar || currentInfo.avatar || null,
+    phone: nextInfo.phone || currentInfo.phone || "",
+    username: nextInfo.username || currentInfo.username || "",
+    email: nextInfo.email || currentInfo.email || "",
+    location: nextInfo.location || currentInfo.location || "",
+});
+
+const getInitialsFromName = (name = "") => {
+    const initials = String(name || "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((part) => part[0])
+        .join("")
+        .slice(0, 2)
+        .toUpperCase();
+
+    return initials || "MO";
+};
+
 export default function IndividualChatScreen({ navigation, route }) {
     const { t, i18n } = useTranslation();
     const insets = useSafeAreaInsets();
@@ -2127,7 +2413,17 @@ export default function IndividualChatScreen({ navigation, route }) {
     const conversationId = resolvedChatConfig.conversationId || activeConversationId;
     const isGroupConversation = resolvedChatConfig.isGroup === true;
     const targetUserId = resolvedChatConfig.targetUserId || initialTargetUserId;
+    const [chatProfileInfo, setChatProfileInfo] = useState(() =>
+        getChatProfileInfoFromSources(
+            employee,
+            conversation,
+            route?.params?.customer,
+            route?.params
+        )
+    );
+
     const employeeName =
+        chatProfileInfo.name ||
         employee?.name ||
         conversation?.display_name ||
         conversation?.title ||
@@ -2138,6 +2434,7 @@ export default function IndividualChatScreen({ navigation, route }) {
         conversation?.other_participant?.name ||
         "";
     const employeeDepartment =
+        chatProfileInfo.department ||
         employee?.department ||
         employee?.department_name ||
         conversation?.department?.name ||
@@ -2147,13 +2444,8 @@ export default function IndividualChatScreen({ navigation, route }) {
         conversation?.employee?.department?.title ||
         conversation?.employee?.department_name ||
         null;
-
-    const employeeInitials = employeeName
-        .split(" ")
-        .map((part) => part[0])
-        .join("")
-        .slice(0, 2)
-        .toUpperCase();
+    const employeeAvatar = chatProfileInfo.avatar || null;
+    const employeeInitials = getInitialsFromName(employeeName);
 
     const [menuVisible, setMenuVisible] = useState(false);
     const [attachMenuVisible, setAttachMenuVisible] = useState(false);
@@ -2762,6 +3054,24 @@ export default function IndividualChatScreen({ navigation, route }) {
                 }
 
                 const showConversationObject = getShowConversationObject(response);
+                const nextChatProfileInfo = getChatProfileInfoFromSources(
+                    showConversationObject,
+                    showConversationObject?.target_user,
+                    showConversationObject?.targetUser,
+                    showConversationObject?.other_participant,
+                    showConversationObject?.participant,
+                    showConversationObject?.employee,
+                    showConversationObject?.customer,
+                    showConversationObject?.user,
+                    employee,
+                    conversation,
+                    route?.params?.customer,
+                    route?.params
+                );
+
+                setChatProfileInfo((currentInfo) =>
+                    mergeChatProfileInfo(currentInfo, nextChatProfileInfo)
+                );
 
                 setCanCreateQuote((currentValue) => {
                     if (canRoleCreateQuotes(currentUserRole)) {
@@ -4370,6 +4680,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                         employeeInitials={employeeInitials}
                         employeeName={employeeName}
                         employeeDepartment={employeeDepartment}
+                        employeeAvatar={employeeAvatar}
                         isBlocked={isBlocked}
                         tr={tr}
                         isCompactScreen={isCompactScreen}
@@ -4378,10 +4689,10 @@ export default function IndividualChatScreen({ navigation, route }) {
                         onOpenMenu={openChatMenu}
                         conversationId={conversationId}         // أضفتها
                         targetUserId={targetUserId}             // أضفتها
-                        employeePhone={employee?.phone}         // أضفتها
-                        employeeUsername={employee?.username}   // أضفتها
-                        employeeEmail={employee?.email}         // أضفتها
-                        employeeLocation={employee?.location}   // أضفتها
+                        employeePhone={chatProfileInfo.phone || employee?.phone}         // أضفتها
+                        employeeUsername={chatProfileInfo.username || employee?.username}   // أضفتها
+                        employeeEmail={chatProfileInfo.email || employee?.email}         // أضفتها
+                        employeeLocation={chatProfileInfo.location || employee?.location}   // أضفتها
                         isOnline={targetOnline}
                         isTyping={targetTyping}
                         lastSeenAt={targetLastSeenAt}

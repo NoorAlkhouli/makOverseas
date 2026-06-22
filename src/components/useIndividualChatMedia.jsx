@@ -4,6 +4,7 @@ import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo
 import * as ImagePicker from "expo-image-picker";
 import * as MediaLibrary from "expo-media-library";
 import * as FileSystem from "expo-file-system/legacy";
+import * as VideoThumbnails from "expo-video-thumbnails";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useRef, useState } from "react";
@@ -275,6 +276,30 @@ const getVideoSource = (mediaItem, video) => {
     });
 
     return resolvedSource;
+};
+
+const getVideoThumbnailCandidate = (source = {}) => {
+    const candidates = [
+        source?.thumbnail,
+        source?.thumbnail_uri,
+        source?.thumbnailUri,
+        source?.thumbnail_url,
+        source?.thumbnailUrl,
+        source?.poster,
+        source?.poster_uri,
+        source?.posterUri,
+        source?.poster_url,
+        source?.posterUrl,
+        source?.preview,
+        source?.preview_uri,
+        source?.previewUri,
+        source?.preview_url,
+        source?.previewUrl,
+        source?.image?.uri,
+        source?.image?.url,
+    ];
+
+    return candidates.find((candidate) => !!String(candidate || "").trim()) || null;
 };
 
 const formatVideoTime = (seconds = 0) => {
@@ -1062,13 +1087,72 @@ function VideoLayer({ source, previewMode, colors }) {
     const sourceUri = source?.uri || "";
     const [playableSource, setPlayableSource] = useState(null);
     const [isPreparingVideo, setIsPreparingVideo] = useState(false);
+    const [isReplacingSource, setIsReplacingSource] = useState(false);
     const [videoPrepareFailed, setVideoPrepareFailed] = useState(false);
+    const [loadedDuration, setLoadedDuration] = useState(0);
+    const [controlsVisible, setControlsVisible] = useState(true);
+    const [thumbnailUri, setThumbnailUri] = useState(() => getVideoThumbnailCandidate(source));
+    const hideControlsTimeoutRef = useRef(null);
 
     const player = useVideoPlayer(null, (playerInstance) => {
         playerInstance.loop = false;
         playerInstance.muted = false;
         playerInstance.timeUpdateEventInterval = 0.25;
     });
+
+    const replacePlayerSource = async (nextSource) => {
+        if (typeof player.replaceAsync === "function") {
+            await player.replaceAsync(nextSource);
+            return;
+        }
+
+        if (typeof player.replace === "function") {
+            player.replace(nextSource, true);
+        }
+    };
+
+    const clearHideControlsTimeout = () => {
+        if (hideControlsTimeoutRef.current) {
+            clearTimeout(hideControlsTimeoutRef.current);
+            hideControlsTimeoutRef.current = null;
+        }
+    };
+
+    const scheduleHideControls = () => {
+        clearHideControlsTimeout();
+
+        if (!player.playing) {
+            return;
+        }
+
+        hideControlsTimeoutRef.current = setTimeout(() => {
+            setControlsVisible(false);
+        }, 2200);
+    };
+
+    useEffect(() => {
+        return () => {
+            clearHideControlsTimeout();
+
+            try {
+                player.pause();
+
+                const cleanupResult = typeof player.replaceAsync === "function"
+                    ? player.replaceAsync(null)
+                    : typeof player.replace === "function"
+                        ? player.replace(null, true)
+                        : null;
+
+                if (cleanupResult && typeof cleanupResult.catch === "function") {
+                    cleanupResult.catch((error) => {
+                        console.log("Video player cleanup error:", error);
+                    });
+                }
+            } catch (error) {
+                console.log("Video player cleanup error:", error);
+            }
+        };
+    }, [player]);
 
     useEffect(() => {
         let isMounted = true;
@@ -1078,12 +1162,17 @@ function VideoLayer({ source, previewMode, colors }) {
                 setPlayableSource(null);
                 setIsPreparingVideo(false);
                 setVideoPrepareFailed(false);
+                setLoadedDuration(0);
+                setThumbnailUri(null);
                 return;
             }
 
             setIsPreparingVideo(true);
             setVideoPrepareFailed(false);
             setPlayableSource(null);
+            setLoadedDuration(0);
+            setControlsVisible(true);
+            setThumbnailUri(getVideoThumbnailCandidate(source));
 
             videoDebugLog("VideoLayerPrepareSourceStart", {
                 sourceUriInfo: getUriInfo(sourceUri),
@@ -1102,6 +1191,7 @@ function VideoLayer({ source, previewMode, colors }) {
                     ? {
                         ...(source || {}),
                         uri: playableUri,
+                        contentType: "auto",
                     }
                     : source;
 
@@ -1134,22 +1224,110 @@ function VideoLayer({ source, previewMode, colors }) {
     }, [sourceUri, previewMode]);
 
     useEffect(() => {
-        if (!playableSource?.uri) {
-            return;
-        }
+        let isMounted = true;
 
-        videoDebugLog("VideoLayerReplaceSource", {
-            playableSourceUriInfo: getUriInfo(playableSource.uri),
-            originalSourceUriInfo: getUriInfo(source?.uri),
-        });
+        const prepareThumbnail = async () => {
+            const explicitThumbnail = getVideoThumbnailCandidate(playableSource || source);
 
-        try {
-            if (typeof player.replace === "function") {
-                player.replace(playableSource);
+            if (explicitThumbnail) {
+                setThumbnailUri(explicitThumbnail);
+                return;
             }
-        } catch (error) {
-            console.log("Video player replace source error:", error);
-        }
+
+            if (!playableSource?.uri || typeof VideoThumbnails?.getThumbnailAsync !== "function") {
+                return;
+            }
+
+            try {
+                const thumbnail = await VideoThumbnails.getThumbnailAsync(playableSource.uri, {
+                    time: 1000,
+                    quality: 0.72,
+                });
+
+                if (isMounted && thumbnail?.uri) {
+                    videoDebugLog("VideoLayerThumbnailReady", {
+                        videoUriInfo: getUriInfo(playableSource.uri),
+                        thumbnailUriInfo: getUriInfo(thumbnail.uri),
+                    });
+
+                    setThumbnailUri(thumbnail.uri);
+                }
+            } catch (error) {
+                videoDebugLog("VideoLayerThumbnailFailed", {
+                    videoUriInfo: getUriInfo(playableSource?.uri),
+                    message: error?.message,
+                });
+            }
+        };
+
+        prepareThumbnail();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [playableSource?.uri, sourceUri]);
+
+    useEffect(() => {
+        let isMounted = true;
+
+        const loadSourceIntoPlayer = async () => {
+            try {
+                player.pause();
+                setLoadedDuration(0);
+
+                if (!playableSource?.uri) {
+                    setIsReplacingSource(false);
+                    await replacePlayerSource(null);
+                    return;
+                }
+
+                setIsReplacingSource(true);
+                setVideoPrepareFailed(false);
+
+                videoDebugLog("VideoLayerReplaceSourceStart", {
+                    playableSourceUriInfo: getUriInfo(playableSource.uri),
+                    originalSourceUriInfo: getUriInfo(source?.uri),
+                    playerStatus: player.status,
+                    usingReplaceAsync: typeof player.replaceAsync === "function",
+                });
+
+                await replacePlayerSource(playableSource);
+
+                if (!isMounted) {
+                    return;
+                }
+
+                try {
+                    player.currentTime = 0;
+                } catch (seekError) {
+                    console.log("Video player reset time error:", seekError);
+                }
+
+                videoDebugLog("VideoLayerReplaceSourceDone", {
+                    playableSourceUriInfo: getUriInfo(playableSource.uri),
+                    originalSourceUriInfo: getUriInfo(source?.uri),
+                    playerStatus: player.status,
+                    playerDuration: player.duration,
+                    playerCurrentTime: player.currentTime,
+                });
+            } catch (error) {
+                console.log("Video player replace source error:", error);
+
+                if (isMounted) {
+                    setVideoPrepareFailed(true);
+                }
+            } finally {
+                if (isMounted) {
+                    setIsReplacingSource(false);
+                }
+            }
+        };
+
+        loadSourceIntoPlayer();
+
+        return () => {
+            isMounted = false;
+        };
     }, [player, playableSource?.uri]);
 
     const { isPlaying } = useEvent(player, "playingChange", {
@@ -1160,21 +1338,81 @@ function VideoLayer({ source, previewMode, colors }) {
         currentTime: player.currentTime || 0,
     });
 
-    const duration = Number(player.duration || 0);
+    const sourceLoadEvent = useEvent(player, "sourceLoad", {
+        duration: player.duration || 0,
+        videoSource: null,
+    });
+
+    const statusEvent = useEvent(player, "statusChange", {
+        status: player.status || "idle",
+        error: null,
+    });
+
+    useEffect(() => {
+        const nextDuration = Number(sourceLoadEvent?.duration || player.duration || 0);
+
+        if (nextDuration > 0) {
+            setLoadedDuration(nextDuration);
+        }
+
+        if (sourceLoadEvent?.videoSource) {
+            videoDebugLog("VideoLayerSourceLoaded", {
+                sourceUriInfo: getUriInfo(playableSource?.uri),
+                eventSourceUriInfo: getUriInfo(sourceLoadEvent.videoSource?.uri || sourceLoadEvent.videoSource),
+                duration: nextDuration,
+                playerStatus: player.status,
+            });
+        }
+    }, [sourceLoadEvent?.duration, sourceLoadEvent?.videoSource, playableSource?.uri]);
+
+    useEffect(() => {
+        if (statusEvent?.status === "error") {
+            setVideoPrepareFailed(true);
+            setControlsVisible(true);
+            clearHideControlsTimeout();
+
+            videoDebugLog("VideoLayerStatusError", {
+                sourceUriInfo: getUriInfo(playableSource?.uri),
+                originalSourceUriInfo: getUriInfo(source?.uri),
+                error: statusEvent?.error,
+            });
+        }
+    }, [statusEvent?.status, statusEvent?.error, playableSource?.uri, source?.uri]);
+
+    const duration = Number(loadedDuration || sourceLoadEvent?.duration || player.duration || 0);
     const progress = duration > 0 ? Math.min((currentTime || 0) / duration, 1) : 0;
+    const isVideoBusy = isPreparingVideo || isReplacingSource || statusEvent?.status === "loading";
+    const shouldShowThumbnail = !!thumbnailUri && !isPlaying && Number(currentTime || 0) <= 0.25;
+
+    useEffect(() => {
+        if (!isPlaying) {
+            setControlsVisible(true);
+            clearHideControlsTimeout();
+            return;
+        }
+
+        if (controlsVisible) {
+            scheduleHideControls();
+        }
+    }, [isPlaying, controlsVisible]);
 
     useEffect(() => {
         videoDebugLog("VideoLayerMountedOrSourceChanged", {
             sourceUriInfo: getUriInfo(playableSource?.uri),
             originalSourceUriInfo: getUriInfo(source?.uri),
+            thumbnailUriInfo: getUriInfo(thumbnailUri),
             previewMode,
             isPreparingVideo,
+            isReplacingSource,
             videoPrepareFailed,
+            playerStatus: player.status,
+            statusEvent: statusEvent?.status,
             playerDuration: player.duration,
+            loadedDuration,
             playerCurrentTime: player.currentTime,
             playerPlaying: player.playing,
         });
-    }, [source?.uri, playableSource?.uri, previewMode, isPreparingVideo, videoPrepareFailed]);
+    }, [source?.uri, playableSource?.uri, thumbnailUri, previewMode, isPreparingVideo, isReplacingSource, videoPrepareFailed, statusEvent?.status, loadedDuration]);
 
     useEffect(() => {
         if (duration > 0 || currentTime > 0 || isPlaying) {
@@ -1185,62 +1423,114 @@ function VideoLayer({ source, previewMode, colors }) {
                 currentTime,
                 duration,
                 progress,
+                playerStatus: player.status,
+                statusEvent: statusEvent?.status,
             });
         }
-    }, [isPlaying, duration]);
+    }, [isPlaying, currentTime, duration, statusEvent?.status]);
 
-    const togglePlayback = () => {
+    const handleVideoSurfacePress = () => {
+        if (videoPrepareFailed) {
+            return;
+        }
+
+        setControlsVisible((currentValue) => {
+            const nextValue = !currentValue;
+
+            if (nextValue && player.playing) {
+                setTimeout(scheduleHideControls, 0);
+            }
+
+            return nextValue;
+        });
+    };
+
+    const togglePlayback = async () => {
         videoDebugLog("VideoLayerTogglePlayback", {
             sourceUriInfo: getUriInfo(playableSource?.uri),
             originalSourceUriInfo: getUriInfo(source?.uri),
             isPreparingVideo,
+            isReplacingSource,
             videoPrepareFailed,
             isPlaying,
             currentTime: player.currentTime,
-            duration: player.duration,
+            duration,
+            playerStatus: player.status,
+            statusEvent: statusEvent?.status,
         });
 
-        if (!playableSource?.uri || isPreparingVideo) {
+        if (!playableSource?.uri || isVideoBusy) {
             return;
         }
 
         if (isPlaying) {
             player.pause();
+            setControlsVisible(true);
+            clearHideControlsTimeout();
+            return;
+        }
+
+        if (statusEvent?.status === "error" || player.status === "error") {
+            setVideoPrepareFailed(true);
+            setControlsVisible(true);
             return;
         }
 
         const current = Number(player.currentTime || 0);
-        const total = Number(player.duration || 0);
-        const isAtEnd = total > 0 && current >= total - 0.25;
+        const isAtEnd = duration > 0 && current >= duration - 0.25;
 
         if (isAtEnd) {
-            player.currentTime = 0;
+            try {
+                if (typeof player.replay === "function") {
+                    player.replay();
+                    setControlsVisible(false);
+                    return;
+                }
+
+                player.currentTime = 0;
+            } catch (error) {
+                console.log("Video replay error:", error);
+            }
         }
 
-        player.play();
+        try {
+            player.play();
+            setControlsVisible(false);
+            clearHideControlsTimeout();
+        } catch (error) {
+            console.log("Video play error:", error);
+            setVideoPrepareFailed(true);
+            setControlsVisible(true);
+        }
     };
 
     const seekBy = (offsetSeconds) => {
-        if (!playableSource?.uri || isPreparingVideo) {
+        if (!playableSource?.uri || isVideoBusy) {
             return;
         }
 
-        if (typeof player.seekBy === "function") {
-            player.seekBy(offsetSeconds);
-            return;
+        try {
+            if (typeof player.seekBy === "function") {
+                player.seekBy(offsetSeconds);
+            } else {
+                const nextPosition = Math.max(
+                    0,
+                    Math.min((player.currentTime || 0) + offsetSeconds, duration || player.currentTime || 0)
+                );
+
+                player.currentTime = nextPosition;
+            }
+
+            setControlsVisible(true);
+            scheduleHideControls();
+        } catch (error) {
+            console.log("Video seek error:", error);
         }
-
-        const nextPosition = Math.max(
-            0,
-            Math.min((player.currentTime || 0) + offsetSeconds, player.duration || player.currentTime || 0)
-        );
-
-        player.currentTime = nextPosition;
     };
 
     return (
         <View style={styles.videoLayer}>
-            {isPreparingVideo && !playableSource?.uri ? (
+            {isVideoBusy && !playableSource?.uri ? (
                 <ActivityIndicator color={themeColors.text} />
             ) : (
                 <VideoView
@@ -1255,78 +1545,105 @@ function VideoLayer({ source, previewMode, colors }) {
                 />
             )}
 
-            <View style={styles.videoControlsCenter} pointerEvents="box-none">
-                <TouchableOpacity
-                    style={[
-                        styles.seekButton,
-                        previewMode && styles.seekButtonPreview,
-                        { backgroundColor: themeColors.overlayButton },
-                    ]}
-                    activeOpacity={0.85}
-                    onPress={() => seekBy(-10)}
-                >
-                    <MaterialCommunityIcons name="rewind-10" size={34} color={themeColors.text} />
-                </TouchableOpacity>
+            {shouldShowThumbnail && (
+                <Image
+                    source={{ uri: thumbnailUri }}
+                    style={[styles.fullMedia, styles.videoThumbnailOverlay]}
+                    resizeMode="contain"
+                />
+            )}
 
-                <TouchableOpacity
-                    style={[
-                        styles.playButton,
-                        previewMode && styles.playButtonPreview,
-                        { backgroundColor: themeColors.overlayButton },
-                    ]}
-                    activeOpacity={0.9}
-                    onPress={togglePlayback}
-                >
-                    {isPreparingVideo && !playableSource?.uri ? (
-                        <ActivityIndicator color={themeColors.text} />
-                    ) : (
-                        <Ionicons
-                            name={isPlaying ? "pause" : "play"}
-                            size={previewMode ? 34 : 42}
-                            color={themeColors.text}
-                            style={!isPlaying && styles.playIconOffset}
-                        />
-                    )}
-                </TouchableOpacity>
+            <TouchableOpacity
+                activeOpacity={1}
+                style={styles.videoTapLayer}
+                onPress={handleVideoSurfacePress}
+            />
 
-                <TouchableOpacity
-                    style={[
-                        styles.seekButton,
-                        previewMode && styles.seekButtonPreview,
-                        { backgroundColor: themeColors.overlayButton },
-                    ]}
-                    activeOpacity={0.85}
-                    onPress={() => seekBy(10)}
-                >
-                    <MaterialCommunityIcons name="fast-forward-10" size={34} color={themeColors.text} />
-                </TouchableOpacity>
-            </View>
+            {controlsVisible && (
+                <>
+                    <View style={styles.videoControlsCenter} pointerEvents="box-none">
+                        <TouchableOpacity
+                            style={[
+                                styles.seekButton,
+                                previewMode && styles.seekButtonPreview,
+                                { backgroundColor: themeColors.overlayButton },
+                            ]}
+                            activeOpacity={0.85}
+                            disabled={isVideoBusy || videoPrepareFailed}
+                            onPress={() => seekBy(-10)}
+                        >
+                            <MaterialCommunityIcons name="rewind-10" size={34} color={themeColors.text} />
+                        </TouchableOpacity>
 
-            {duration > 0 && (
-                <View
-                    style={[
-                        styles.videoProgressPill,
-                        { backgroundColor: themeColors.cardBackground },
-                    ]}
-                >
-                    <Text style={[styles.videoProgressText, { color: themeColors.muted }]}>
-                        {formatVideoTime(currentTime)}
-                    </Text>
-                    <View style={[styles.progressTrack, { backgroundColor: themeColors.progressTrack }]}>
+                        <TouchableOpacity
+                            style={[
+                                styles.playButton,
+                                previewMode && styles.playButtonPreview,
+                                { backgroundColor: themeColors.overlayButton },
+                            ]}
+                            activeOpacity={0.9}
+                            onPress={togglePlayback}
+                            disabled={isVideoBusy || videoPrepareFailed}
+                        >
+                            {isVideoBusy ? (
+                                <ActivityIndicator color={themeColors.text} />
+                            ) : videoPrepareFailed ? (
+                                <Ionicons
+                                    name="alert-circle-outline"
+                                    size={previewMode ? 34 : 42}
+                                    color={themeColors.text}
+                                />
+                            ) : (
+                                <Ionicons
+                                    name={isPlaying ? "pause" : "play"}
+                                    size={previewMode ? 34 : 42}
+                                    color={themeColors.text}
+                                    style={!isPlaying && styles.playIconOffset}
+                                />
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.seekButton,
+                                previewMode && styles.seekButtonPreview,
+                                { backgroundColor: themeColors.overlayButton },
+                            ]}
+                            activeOpacity={0.85}
+                            disabled={isVideoBusy || videoPrepareFailed}
+                            onPress={() => seekBy(10)}
+                        >
+                            <MaterialCommunityIcons name="fast-forward-10" size={34} color={themeColors.text} />
+                        </TouchableOpacity>
+                    </View>
+
+                    {duration > 0 && (
                         <View
                             style={[
-                                styles.progressFill,
-                                {
-                                    width: `${progress * 100}%`,
-                                    backgroundColor: themeColors.progressFill,
-                                },
+                                styles.videoProgressPill,
+                                { backgroundColor: themeColors.cardBackground },
                             ]}
-                        />
-                    </View>
-                    <Text style={[styles.videoProgressText, { color: themeColors.muted }]}>
-                        -{formatVideoTime(Math.max(0, duration - currentTime))}
-                    </Text>
-                </View>
+                        >
+                            <Text style={[styles.videoProgressText, { color: themeColors.muted }]}>
+                                {formatVideoTime(currentTime)}
+                            </Text>
+                            <View style={[styles.progressTrack, { backgroundColor: themeColors.progressTrack }]}>
+                                <View
+                                    style={[
+                                        styles.progressFill,
+                                        {
+                                            width: `${progress * 100}%`,
+                                            backgroundColor: themeColors.progressFill,
+                                        },
+                                    ]}
+                                />
+                            </View>
+                            <Text style={[styles.videoProgressText, { color: themeColors.muted }]}>
+                                -{formatVideoTime(Math.max(0, duration - currentTime))}
+                            </Text>
+                        </View>
+                    )}
+                </>
             )}
         </View>
     );
@@ -2025,12 +2342,27 @@ const styles = StyleSheet.create({
         justifyContent: "center",
     },
 
+    videoThumbnailOverlay: {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        zIndex: 2,
+    },
+
+    videoTapLayer: {
+        ...StyleSheet.absoluteFillObject,
+        zIndex: 4,
+    },
+
     videoControlsCenter: {
         position: "absolute",
         left: 0,
         right: 0,
         top: 0,
         bottom: 0,
+        zIndex: 8,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
@@ -2075,6 +2407,7 @@ const styles = StyleSheet.create({
         left: 24,
         right: 24,
         bottom: 16,
+        zIndex: 8,
         minHeight: 38,
         borderRadius: 19,
         paddingHorizontal: 12,

@@ -3,18 +3,21 @@ import {
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    Keyboard,
     KeyboardAvoidingView,
     Modal,
     Platform,
+    Pressable,
     ScrollView,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
+    useWindowDimensions,
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -37,6 +40,27 @@ const DEFAULT_FORM_STATE = {
     includes: "",
     notes: "",
 };
+
+const QUOTE_RISK_OPTIONS = [
+    { value: "1", translationKey: "riskLow", fallback: "Low", arabicFallback: "منخفض" },
+    { value: "2", translationKey: "riskMedium", fallback: "Medium", arabicFallback: "متوسط" },
+    { value: "3", translationKey: "riskHigh", fallback: "High", arabicFallback: "مرتفع" },
+    { value: "4", translationKey: "riskCritical", fallback: "Critical", arabicFallback: "حرج" },
+];
+const CURRENCY_OPTIONS = [
+    { value: "SYP", label: "SYP" },
+    { value: "USD", label: "USD" },
+    { value: "AED", label: "AED" },
+    { value: "EGP", label: "EGP" },
+    { value: "LBP", label: "LBP" },
+];
+
+const DATE_FIELD_LABELS = {
+    etdDate: "ETD",
+    etaDate: "ETA",
+    validUntil: "Valid Until",
+};
+
 
 const getThemeColor = (colors = {}, key, fallbackKey, fallbackValue = "") => {
     return colors?.[key] || colors?.[fallbackKey] || fallbackValue;
@@ -222,6 +246,10 @@ const isValidDateParts = (parts) => {
 };
 
 const toApiDateString = (value = "") => {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+        return `${value.getFullYear()}-${padDatePart(value.getMonth() + 1)}-${padDatePart(value.getDate())}`;
+    }
+
     const parts = getDatePartsFromValue(normalizeDateString(value));
 
     if (!isValidDateParts(parts)) {
@@ -231,6 +259,113 @@ const toApiDateString = (value = "") => {
     return `${parts.year}-${padDatePart(parts.month)}-${padDatePart(parts.day)}`;
 };
 
+
+const getDateOnly = (date = new Date()) => {
+    const nextDate = date instanceof Date ? date : new Date(date);
+
+    if (Number.isNaN(nextDate.getTime())) {
+        return new Date();
+    }
+
+    return new Date(
+        nextDate.getFullYear(),
+        nextDate.getMonth(),
+        nextDate.getDate()
+    );
+};
+
+const addYears = (date, years = 1) => {
+    const baseDate = getDateOnly(date);
+    return new Date(
+        baseDate.getFullYear() + years,
+        baseDate.getMonth(),
+        baseDate.getDate()
+    );
+};
+
+const addMonths = (date, months = 1) => {
+    const baseDate = getDateOnly(date);
+    return new Date(
+        baseDate.getFullYear(),
+        baseDate.getMonth() + months,
+        1
+    );
+};
+
+const isSameDate = (firstDate, secondDate) => {
+    if (!firstDate || !secondDate) return false;
+
+    return (
+        firstDate.getFullYear() === secondDate.getFullYear() &&
+        firstDate.getMonth() === secondDate.getMonth() &&
+        firstDate.getDate() === secondDate.getDate()
+    );
+};
+
+const isBeforeDate = (firstDate, secondDate) => {
+    if (!firstDate || !secondDate) return false;
+    return getDateOnly(firstDate).getTime() < getDateOnly(secondDate).getTime();
+};
+
+const isAfterDate = (firstDate, secondDate) => {
+    if (!firstDate || !secondDate) return false;
+    return getDateOnly(firstDate).getTime() > getDateOnly(secondDate).getTime();
+};
+
+const getDateFromApiValue = (value = "") => {
+    const apiDate = toApiDateString(value);
+
+    if (!apiDate) return null;
+
+    const [year, month, day] = apiDate.split("-").map(Number);
+    const date = new Date(year, month - 1, day);
+
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getDatePickerRange = () => {
+    const today = getDateOnly(new Date());
+    const minDate = new Date(1900, 0, 1);
+    const maxDate = new Date(2200, 11, 31);
+
+    return { minDate, maxDate, today };
+};
+
+const getDatePickerInitialMonth = (value = "") => {
+    const { minDate, maxDate, today } = getDatePickerRange();
+    const selectedDate = getDateFromApiValue(value);
+
+    if (selectedDate && !isBeforeDate(selectedDate, minDate) && !isAfterDate(selectedDate, maxDate)) {
+        return new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+    }
+
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+};
+
+const formatDateForDisplay = (value = "", isArabic = false) => {
+    const date = getDateFromApiValue(value);
+
+    if (!date) return "";
+
+    return date.toLocaleDateString(isArabic ? "ar" : "en", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+    });
+};
+
+const getCalendarDays = (displayMonth) => {
+    const monthStart = new Date(displayMonth.getFullYear(), displayMonth.getMonth(), 1);
+    const startOffset = monthStart.getDay();
+    const gridStart = new Date(monthStart);
+    gridStart.setDate(monthStart.getDate() - startOffset);
+
+    return Array.from({ length: 42 }).map((_, index) => {
+        const nextDate = new Date(gridStart);
+        nextDate.setDate(gridStart.getDate() + index);
+        return nextDate;
+    });
+};
 
 const normalizeIncludesArray = (value = "") => {
     return String(value || "")
@@ -363,17 +498,17 @@ const validateQuoteForm = ({ form, tr }) => {
             isValid: false,
             message: tr(
                 "invalidCurrency",
-                "Currency must be a valid code like USD, AED, SYP, EGP, LBP, or ALL."
+                "Currency must be a valid code like USD, AED, SYP, EGP, LBP."
             ),
         };
     }
 
     const riskLevel = Number(form.riskLevel || 1);
 
-    if (!Number.isInteger(riskLevel) || riskLevel < 1 || riskLevel > 5) {
+    if (!Number.isInteger(riskLevel) || riskLevel < 1 || riskLevel > 4) {
         return {
             isValid: false,
-            message: tr("invalidRiskLevel", "Risk level must be between 1 and 5."),
+            message: tr("invalidRiskLevel", "Risk level must be one of Low, Medium, High, or Critical."),
         };
     }
 
@@ -409,21 +544,34 @@ const validateQuoteForm = ({ form, tr }) => {
     if (!isValidDateValue(form.etdDate)) {
         return {
             isValid: false,
-            message: tr("invalidEtdDateDayFirst", "ETD date must be DD-MM-YYYY."),
+            message: tr("invalidEtdDateDayFirst", "ETD date must be selected from the calendar."),
         };
     }
 
     if (!isValidDateValue(form.etaDate)) {
         return {
             isValid: false,
-            message: tr("invalidEtaDateDayFirst", "ETA date must be DD-MM-YYYY."),
+            message: tr("invalidEtaDateDayFirst", "ETA date must be selected from the calendar."),
         };
     }
 
     if (!isValidDateValue(form.validUntil)) {
         return {
             isValid: false,
-            message: tr("invalidValidUntilDayFirst", "Valid until date must be DD-MM-YYYY."),
+            message: tr("invalidValidUntilDayFirst", "Valid until date must be selected from the calendar."),
+        };
+    }
+
+    const etdApiDate = toApiDateString(form.etdDate);
+    const etaApiDate = toApiDateString(form.etaDate);
+
+    if (etdApiDate && etaApiDate && etaApiDate < etdApiDate) {
+        return {
+            isValid: false,
+            message: tr(
+                "invalidEtaBeforeEtd",
+                "ETA date must be after or equal to ETD date."
+            ),
         };
     }
 
@@ -443,7 +591,27 @@ export default function QuoteFormModal({
     onSubmit,
 }) {
     const insets = useSafeAreaInsets();
+    const { height: windowHeight } = useWindowDimensions();
     const [form, setForm] = useState(DEFAULT_FORM_STATE);
+    const [activeDateField, setActiveDateField] = useState(null);
+    const [keyboardFrame, setKeyboardFrame] = useState({ height: 0, screenY: 0 });
+
+    const isAndroidKeyboardVisible = Platform.OS === "android" && keyboardFrame.height > 0;
+    const shouldLiftAndroidCard =
+        isAndroidKeyboardVisible &&
+        keyboardFrame.screenY > 0 &&
+        keyboardFrame.screenY < windowHeight - 24;
+    const androidKeyboardLift = shouldLiftAndroidCard
+        ? Math.max(windowHeight - keyboardFrame.screenY - insets.bottom, 0)
+        : 0;
+    const androidKeyboardMaxHeight = isAndroidKeyboardVisible
+        ? Math.max(
+            (shouldLiftAndroidCard ? keyboardFrame.screenY : windowHeight) -
+            Math.max(insets.top, 0) -
+            8,
+            320
+        )
+        : undefined;
 
     const theme = useMemo(
         () => ({
@@ -463,6 +631,27 @@ export default function QuoteFormModal({
         [colors]
     );
 
+    useEffect(() => {
+        const showEvent = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+        const hideEvent = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+        const showSubscription = Keyboard.addListener(showEvent, (event) => {
+            setKeyboardFrame({
+                height: event?.endCoordinates?.height || 0,
+                screenY: event?.endCoordinates?.screenY || 0,
+            });
+        });
+
+        const hideSubscription = Keyboard.addListener(hideEvent, () => {
+            setKeyboardFrame({ height: 0, screenY: 0 });
+        });
+
+        return () => {
+            showSubscription.remove();
+            hideSubscription.remove();
+        };
+    }, []);
+
     const updateFormField = (key, value) => {
         setForm((currentForm) => ({
             ...currentForm,
@@ -470,8 +659,19 @@ export default function QuoteFormModal({
         }));
     };
 
-    const updateDateFormField = (key, value) => {
-        updateFormField(key, normalizeDateString(value));
+    const openDatePicker = (key) => {
+        if (isSubmitting) return;
+        setActiveDateField(key);
+    };
+
+    const closeDatePicker = () => {
+        setActiveDateField(null);
+    };
+
+    const handleSelectDate = (date) => {
+        if (!activeDateField || !date) return;
+        updateFormField(activeDateField, toApiDateString(date));
+        closeDatePicker();
     };
 
     const handleClose = () => {
@@ -519,6 +719,7 @@ export default function QuoteFormModal({
                 <KeyboardAvoidingView
                     style={styles.keyboardView}
                     behavior={Platform.OS === "ios" ? "padding" : undefined}
+                    keyboardVerticalOffset={0}
                 >
                     <View
                         style={[
@@ -526,7 +727,13 @@ export default function QuoteFormModal({
                             {
                                 backgroundColor: theme.card,
                                 borderColor: theme.border,
-                                paddingBottom: Math.max(insets.bottom, 14),
+                                paddingBottom: isAndroidKeyboardVisible
+                                    ? Math.max(insets.bottom, 8)
+                                    : Math.max(insets.bottom, 14),
+                                marginBottom: androidKeyboardLift,
+                                maxHeight: isAndroidKeyboardVisible
+                                    ? androidKeyboardMaxHeight
+                                    : "84%",
                             },
                         ]}
                     >
@@ -551,7 +758,7 @@ export default function QuoteFormModal({
                                 >
                                     {tr(
                                         "createQuoteSubtitle",
-                                        "Fill shipment pricing details and send it to the customer."
+                                        "Fill shipment pricing details and send the quote."
                                     )}
                                 </Text>
                             </View>
@@ -574,8 +781,12 @@ export default function QuoteFormModal({
 
                         <ScrollView
                             style={styles.scroll}
-                            contentContainerStyle={styles.scrollContent}
+                            contentContainerStyle={[
+                                styles.scrollContent,
+                                isAndroidKeyboardVisible && styles.scrollContentKeyboardOpen,
+                            ]}
                             keyboardShouldPersistTaps="handled"
+                            keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
                             showsVerticalScrollIndicator={false}
                         >
                             <SectionTitle
@@ -675,21 +886,15 @@ export default function QuoteFormModal({
                                     editable={!isSubmitting}
                                 />
 
-                                <Field
+                                <RiskSelect
                                     label={tr("riskLevel", "Risk")}
                                     value={form.riskLevel}
-                                    placeholder="1"
-                                    onChangeText={(value) =>
-                                        updateFormField(
-                                            "riskLevel",
-                                            value.replace(/[^0-9]/g, "").slice(0, 1)
-                                        )
-                                    }
+                                    onChange={(value) => updateFormField("riskLevel", value)}
                                     theme={theme}
+                                    tr={tr}
                                     isArabic={isArabic}
-                                    containerStyle={styles.smallField}
-                                    keyboardType="numbers-and-punctuation"
-                                    editable={!isSubmitting}
+                                    containerStyle={styles.flexField}
+                                    disabled={isSubmitting}
                                 />
                             </View>
 
@@ -731,28 +936,26 @@ export default function QuoteFormModal({
                             />
 
                             <View style={styles.row}>
-                                <Field
+                                <DatePickerField
                                     label="ETD"
                                     value={form.etdDate}
-                                    placeholder="20-10-2026"
-                                    onChangeText={(value) => updateDateFormField("etdDate", value)}
+                                    placeholder={tr("selectDate", "Select date")}
+                                    onPress={() => openDatePicker("etdDate")}
                                     theme={theme}
                                     isArabic={isArabic}
                                     containerStyle={styles.flexField}
-                                    keyboardType="numbers-and-punctuation"
-                                    editable={!isSubmitting}
+                                    disabled={isSubmitting}
                                 />
 
-                                <Field
+                                <DatePickerField
                                     label="ETA"
                                     value={form.etaDate}
-                                    placeholder="30-10-2026"
-                                    onChangeText={(value) => updateDateFormField("etaDate", value)}
+                                    placeholder={tr("selectDate", "Select date")}
+                                    onPress={() => openDatePicker("etaDate")}
                                     theme={theme}
                                     isArabic={isArabic}
                                     containerStyle={styles.flexField}
-                                    keyboardType="numbers-and-punctuation"
-                                    editable={!isSubmitting}
+                                    disabled={isSubmitting}
                                 />
                             </View>
 
@@ -764,18 +967,15 @@ export default function QuoteFormModal({
                             />
 
                             <View style={styles.row}>
-                                <Field
+                                <CurrencySelect
                                     label={tr("currency", "Currency")}
                                     value={form.currency}
-                                    placeholder="USD / AED / SYP"
-                                    onChangeText={(value) =>
-                                        updateFormField("currency", normalizeCurrencyCode(value))
-                                    }
+                                    placeholder="SYP / USD"
+                                    onChange={(value) => updateFormField("currency", value)}
                                     theme={theme}
                                     isArabic={isArabic}
                                     containerStyle={styles.currencyField}
-                                    autoCapitalize="characters"
-                                    editable={!isSubmitting}
+                                    disabled={isSubmitting}
                                 />
 
                                 <Field
@@ -793,15 +993,14 @@ export default function QuoteFormModal({
                                 />
                             </View>
 
-                            <Field
+                            <DatePickerField
                                 label={tr("validUntil", "Valid Until")}
                                 value={form.validUntil}
-                                placeholder="09-01-2027"
-                                onChangeText={(value) => updateDateFormField("validUntil", value)}
+                                placeholder={tr("selectDate", "Select date")}
+                                onPress={() => openDatePicker("validUntil")}
                                 theme={theme}
                                 isArabic={isArabic}
-                                keyboardType="numbers-and-punctuation"
-                                editable={!isSubmitting}
+                                disabled={isSubmitting}
                             />
 
                             <Field
@@ -881,6 +1080,17 @@ export default function QuoteFormModal({
                             </TouchableOpacity>
                         </View>
                     </View>
+
+                    <QuoteDatePickerModal
+                        visible={!!activeDateField}
+                        value={activeDateField ? form[activeDateField] : ""}
+                        title={activeDateField ? DATE_FIELD_LABELS[activeDateField] || tr("selectDate", "Select date") : tr("selectDate", "Select date")}
+                        theme={theme}
+                        tr={tr}
+                        isArabic={isArabic}
+                        onClose={closeDatePicker}
+                        onSelect={handleSelectDate}
+                    />
                 </KeyboardAvoidingView>
             </View>
         </Modal>
@@ -902,6 +1112,560 @@ function SectionTitle({ icon, title, theme, isArabic }) {
                 {title}
             </Text>
         </View>
+    );
+}
+
+function RiskSelect({
+    label,
+    value,
+    onChange,
+    theme,
+    tr,
+    isArabic,
+    containerStyle,
+    disabled = false,
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+    const selectedOption = QUOTE_RISK_OPTIONS.find(
+        (option) => String(option.value) === String(value)
+    ) || QUOTE_RISK_OPTIONS[0];
+    const selectedLabel = tr(
+        selectedOption.translationKey,
+        isArabic ? selectedOption.arabicFallback : selectedOption.fallback
+    );
+
+    const handleToggle = () => {
+        if (disabled) return;
+        setIsOpen((currentValue) => !currentValue);
+    };
+
+    const handleSelect = (nextValue) => {
+        onChange?.(nextValue);
+        setIsOpen(false);
+    };
+
+    return (
+        <View style={[styles.field, containerStyle]}>
+            <Text
+                style={[
+                    styles.fieldLabel,
+                    { color: theme.muted },
+                    getTextDirectionStyle(isArabic),
+                ]}
+                numberOfLines={1}
+            >
+                {label}
+            </Text>
+
+            <TouchableOpacity
+                style={[
+                    styles.selectButton,
+                    {
+                        backgroundColor: theme.input,
+                        borderColor: isOpen ? theme.primary : theme.inputBorder,
+                        opacity: disabled ? 0.7 : 1,
+                    },
+                    getRowDirectionStyle(isArabic),
+                ]}
+                activeOpacity={0.85}
+                onPress={handleToggle}
+                disabled={disabled}
+            >
+                <Text
+                    style={[
+                        styles.selectButtonText,
+                        { color: theme.text },
+                        getTextDirectionStyle(isArabic),
+                    ]}
+                    numberOfLines={1}
+                >
+                    {selectedLabel}
+                </Text>
+
+                <Ionicons
+                    name={isOpen ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={theme.muted}
+                />
+            </TouchableOpacity>
+
+            {isOpen && (
+                <View
+                    style={[
+                        styles.selectDropdown,
+                        {
+                            backgroundColor: theme.card,
+                            borderColor: theme.border,
+                        },
+                    ]}
+                >
+                    {QUOTE_RISK_OPTIONS.map((option) => {
+                        const isSelected = String(value) === String(option.value);
+                        const optionLabel = tr(
+                            option.translationKey,
+                            isArabic ? option.arabicFallback : option.fallback
+                        );
+
+                        return (
+                            <TouchableOpacity
+                                key={option.value}
+                                style={[
+                                    styles.selectOption,
+                                    getRowDirectionStyle(isArabic),
+                                    isSelected && { backgroundColor: theme.cardSoft },
+                                ]}
+                                activeOpacity={0.85}
+                                onPress={() => handleSelect(option.value)}
+                            >
+                                <View
+                                    style={[
+                                        styles.selectOptionIcon,
+                                        {
+                                            borderColor: isSelected ? theme.primary : theme.border,
+                                            backgroundColor: isSelected ? theme.primary : theme.input,
+                                        },
+                                    ]}
+                                >
+                                    {isSelected && (
+                                        <Ionicons name="checkmark" size={13} color="#FFFFFF" />
+                                    )}
+                                </View>
+
+                                <Text
+                                    style={[
+                                        styles.selectOptionText,
+                                        { color: isSelected ? theme.primary : theme.text },
+                                        getTextDirectionStyle(isArabic),
+                                    ]}
+                                    numberOfLines={1}
+                                >
+                                    {optionLabel}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </View>
+            )}
+        </View>
+    );
+}
+
+function CurrencySelect({
+    label,
+    value,
+    placeholder,
+    onChange,
+    theme,
+    isArabic,
+    containerStyle,
+    disabled = false,
+}) {
+    const [isOpen, setIsOpen] = useState(false);
+
+    const selectedOption = CURRENCY_OPTIONS.find(
+        (option) => String(option.value) === String(value)
+    );
+
+    const handleToggle = () => {
+        if (disabled) return;
+        setIsOpen((currentValue) => !currentValue);
+    };
+
+    const handleSelect = (nextValue) => {
+        onChange?.(nextValue);
+        setIsOpen(false);
+    };
+
+    return (
+        <View style={[styles.field, containerStyle]}>
+            <Text
+                style={[
+                    styles.fieldLabel,
+                    { color: theme.muted },
+                    getTextDirectionStyle(isArabic),
+                ]}
+                numberOfLines={1}
+            >
+                {label}
+            </Text>
+
+            <TouchableOpacity
+                style={[
+                    styles.selectButton,
+                    {
+                        backgroundColor: theme.input,
+                        borderColor: isOpen ? theme.primary : theme.inputBorder,
+                        opacity: disabled ? 0.7 : 1,
+                    },
+                    getRowDirectionStyle(isArabic),
+                ]}
+                activeOpacity={0.85}
+                onPress={handleToggle}
+                disabled={disabled}
+            >
+                <Text
+                    style={[
+                        styles.selectButtonText,
+                        { color: selectedOption ? theme.text : theme.muted },
+                        getTextDirectionStyle(isArabic),
+                    ]}
+                    numberOfLines={1}
+                >
+                    {selectedOption?.label || placeholder}
+                </Text>
+
+                <Ionicons
+                    name={isOpen ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={theme.muted}
+                />
+            </TouchableOpacity>
+
+            {isOpen && (
+                <View
+                    style={[
+                        styles.selectDropdown,
+                        {
+                            backgroundColor: theme.card,
+                            borderColor: theme.border,
+                        },
+                    ]}
+                >
+                    {CURRENCY_OPTIONS.map((option) => {
+                        const isSelected = String(value) === String(option.value);
+
+                        return (
+                            <TouchableOpacity
+                                key={option.value}
+                                style={[
+                                    styles.selectOption,
+                                    getRowDirectionStyle(isArabic),
+                                    isSelected && { backgroundColor: theme.cardSoft },
+                                ]}
+                                activeOpacity={0.85}
+                                onPress={() => handleSelect(option.value)}
+                            >
+                                <View
+                                    style={[
+                                        styles.selectOptionIcon,
+                                        {
+                                            borderColor: isSelected ? theme.primary : theme.border,
+                                            backgroundColor: isSelected ? theme.primary : theme.input,
+                                        },
+                                    ]}
+                                >
+                                    {isSelected && (
+                                        <Ionicons name="checkmark" size={13} color="#FFFFFF" />
+                                    )}
+                                </View>
+
+                                <Text
+                                    style={[
+                                        styles.selectOptionText,
+                                        { color: isSelected ? theme.primary : theme.text },
+                                        getTextDirectionStyle(isArabic),
+                                    ]}
+                                    numberOfLines={1}
+                                >
+                                    {option.label}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </View>
+            )}
+        </View>
+    );
+}
+
+function DatePickerField({
+    label,
+    value,
+    placeholder,
+    onPress,
+    theme,
+    isArabic,
+    containerStyle,
+    disabled = false,
+}) {
+    const displayValue = formatDateForDisplay(value, isArabic);
+
+    return (
+        <View style={[styles.field, containerStyle]}>
+            <Text
+                style={[
+                    styles.fieldLabel,
+                    { color: theme.muted },
+                    getTextDirectionStyle(isArabic),
+                ]}
+                numberOfLines={1}
+            >
+                {label}
+            </Text>
+
+            <TouchableOpacity
+                style={[
+                    styles.datePickerButton,
+                    {
+                        backgroundColor: theme.input,
+                        borderColor: theme.inputBorder,
+                        opacity: disabled ? 0.7 : 1,
+                    },
+                    getRowDirectionStyle(isArabic),
+                ]}
+                activeOpacity={0.85}
+                onPress={onPress}
+                disabled={disabled}
+            >
+                <Text
+                    style={[
+                        styles.datePickerText,
+                        { color: displayValue ? theme.text : theme.muted },
+                        getTextDirectionStyle(isArabic),
+                    ]}
+                    numberOfLines={1}
+                >
+                    {displayValue || placeholder}
+                </Text>
+
+                <Ionicons name="calendar-outline" size={20} color={theme.primary} />
+            </TouchableOpacity>
+        </View>
+    );
+}
+
+function QuoteDatePickerModal({
+    visible,
+    value,
+    title,
+    theme,
+    tr,
+    isArabic,
+    onClose,
+    onSelect,
+}) {
+    const [displayMonth, setDisplayMonth] = useState(() =>
+        getDatePickerInitialMonth(value)
+    );
+
+    const { minDate, maxDate } = getDatePickerRange();
+    const selectedDate = getDateFromApiValue(value);
+
+    React.useEffect(() => {
+        if (visible) {
+            setDisplayMonth(getDatePickerInitialMonth(value));
+        }
+    }, [visible, value]);
+
+    if (!visible) {
+        return null;
+    }
+
+    const calendarDays = getCalendarDays(displayMonth);
+    const monthLabel = displayMonth.toLocaleDateString(isArabic ? "ar" : "en", {
+        month: "long",
+        year: "numeric",
+    });
+    const minMonth = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    const maxMonth = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1);
+    const canGoPrevious = !isBeforeDate(addMonths(displayMonth, -1), minMonth);
+    const canGoNext = !isAfterDate(addMonths(displayMonth, 1), maxMonth);
+    const canGoPreviousYear = !isBeforeDate(addMonths(displayMonth, -12), minMonth);
+    const canGoNextYear = !isAfterDate(addMonths(displayMonth, 12), maxMonth);
+    const weekDays = isArabic
+        ? ["أحد", "إثن", "ثلا", "أرب", "خمي", "جمع", "سبت"]
+        : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+    return (
+        <Modal
+            visible={visible}
+            transparent
+            animationType="fade"
+            onRequestClose={onClose}
+            statusBarTranslucent
+            navigationBarTranslucent
+            presentationStyle="overFullScreen"
+        >
+            <Pressable
+                style={[styles.dateModalOverlay, { backgroundColor: theme.overlay }]}
+                onPress={onClose}
+            >
+                <Pressable
+                    style={[
+                        styles.dateModalCard,
+                        {
+                            backgroundColor: theme.card,
+                            borderColor: theme.border,
+                        },
+                    ]}
+                    onPress={(event) => event.stopPropagation()}
+                >
+                    <View style={[styles.dateModalHeader, getRowDirectionStyle(isArabic)]}>
+                        <Text
+                            style={[
+                                styles.dateModalTitle,
+                                { color: theme.text },
+                                getTextDirectionStyle(isArabic),
+                            ]}
+                        >
+                            {title}
+                        </Text>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.dateModalCloseButton,
+                                { backgroundColor: theme.cardSoft, borderColor: theme.border },
+                            ]}
+                            activeOpacity={0.85}
+                            onPress={onClose}
+                        >
+                            <Ionicons name="close" size={22} color={theme.text} />
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={[styles.monthSwitcher, getRowDirectionStyle(isArabic)]}>
+                        <TouchableOpacity
+                            style={[
+                                styles.monthButton,
+                                { backgroundColor: theme.cardSoft, borderColor: theme.border },
+                                !canGoPrevious && styles.disabledButton,
+                            ]}
+                            activeOpacity={0.85}
+                            disabled={!canGoPrevious}
+                            onPress={() => setDisplayMonth((currentDate) => addMonths(currentDate, -1))}
+                        >
+                            <Ionicons
+                                name={isArabic ? "chevron-forward" : "chevron-back"}
+                                size={20}
+                                color={theme.text}
+                            />
+                        </TouchableOpacity>
+
+                        <Text
+                            style={[
+                                styles.monthLabel,
+                                { color: theme.primary },
+                                getTextDirectionStyle(isArabic),
+                            ]}
+                            numberOfLines={1}
+                        >
+                            {monthLabel}
+                        </Text>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.monthButton,
+                                { backgroundColor: theme.cardSoft, borderColor: theme.border },
+                                !canGoNext && styles.disabledButton,
+                            ]}
+                            activeOpacity={0.85}
+                            disabled={!canGoNext}
+                            onPress={() => setDisplayMonth((currentDate) => addMonths(currentDate, 1))}
+                        >
+                            <Ionicons
+                                name={isArabic ? "chevron-back" : "chevron-forward"}
+                                size={20}
+                                color={theme.text}
+                            />
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={[styles.yearSwitcher, getRowDirectionStyle(isArabic)]}>
+                        <TouchableOpacity
+                            style={[
+                                styles.yearButton,
+                                { backgroundColor: theme.cardSoft, borderColor: theme.border },
+                                !canGoPreviousYear && styles.disabledButton,
+                            ]}
+                            activeOpacity={0.85}
+                            disabled={!canGoPreviousYear}
+                            onPress={() => setDisplayMonth((currentDate) => addMonths(currentDate, -12))}
+                        >
+                            <Text style={[styles.yearButtonText, { color: theme.text }]}>
+                                {isArabic ? "- سنة" : "-1 year"}
+                            </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[
+                                styles.yearButton,
+                                { backgroundColor: theme.cardSoft, borderColor: theme.border },
+                                !canGoNextYear && styles.disabledButton,
+                            ]}
+                            activeOpacity={0.85}
+                            disabled={!canGoNextYear}
+                            onPress={() => setDisplayMonth((currentDate) => addMonths(currentDate, 12))}
+                        >
+                            <Text style={[styles.yearButtonText, { color: theme.text }]}>
+                                {isArabic ? "+ سنة" : "+1 year"}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.weekDaysGrid}>
+                        {weekDays.map((weekDay) => (
+                            <Text
+                                key={weekDay}
+                                style={[styles.weekDayText, { color: theme.muted }]}
+                                numberOfLines={1}
+                            >
+                                {weekDay}
+                            </Text>
+                        ))}
+                    </View>
+
+                    <View style={styles.daysGrid}>
+                        {calendarDays.map((day) => {
+                            const isCurrentMonth = day.getMonth() === displayMonth.getMonth();
+                            const isDisabled =
+                                !isCurrentMonth ||
+                                isBeforeDate(day, minDate) ||
+                                isAfterDate(day, maxDate);
+                            const isSelected = selectedDate && isSameDate(day, selectedDate);
+
+                            return (
+                                <TouchableOpacity
+                                    key={day.toISOString()}
+                                    style={[
+                                        styles.dayButton,
+                                        {
+                                            backgroundColor: isSelected ? theme.primary : theme.cardSoft,
+                                            borderColor: isSelected ? theme.primary : theme.border,
+                                            opacity: isDisabled ? 0.35 : 1,
+                                        },
+                                    ]}
+                                    activeOpacity={0.85}
+                                    disabled={isDisabled}
+                                    onPress={() => onSelect?.(day)}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.dayButtonText,
+                                            { color: isSelected ? "#FFFFFF" : theme.text },
+                                        ]}
+                                    >
+                                        {String(day.getDate())}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+
+                    <Text
+                        style={[
+                            styles.dateModalHint,
+                            { color: theme.muted },
+                            getTextDirectionStyle(isArabic),
+                        ]}
+                    >
+                        {tr(
+                            "datePickerAllYearsHint",
+                            "You can choose any valid date from previous years or future years."
+                        )}
+                    </Text>
+                </Pressable>
+            </Pressable>
+        </Modal>
     );
 }
 
@@ -972,11 +1736,11 @@ const styles = StyleSheet.create({
 
     card: {
         width: "100%",
-        maxHeight: "92%",
         borderTopLeftRadius: 28,
         borderTopRightRadius: 28,
         borderWidth: 1,
         overflow: "hidden",
+        flexShrink: 1,
     },
 
     header: {
@@ -996,13 +1760,13 @@ const styles = StyleSheet.create({
     },
 
     title: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: "900",
     },
 
     subtitle: {
         marginTop: 4,
-        fontSize: 12.5,
+        fontSize: 12,
         fontWeight: "700",
         lineHeight: 18,
     },
@@ -1019,12 +1783,17 @@ const styles = StyleSheet.create({
 
     scroll: {
         flexGrow: 0,
+        flexShrink: 1,
     },
 
     scrollContent: {
         paddingHorizontal: 18,
         paddingTop: 4,
         paddingBottom: 14,
+    },
+
+    scrollContentKeyboardOpen: {
+        paddingBottom: 30,
     },
 
     sectionTitleRow: {
@@ -1049,6 +1818,76 @@ const styles = StyleSheet.create({
 
     field: {
         marginBottom: 12,
+    },
+
+    selectButton: {
+        minHeight: 48,
+        borderWidth: 1,
+        borderRadius: 15,
+        paddingHorizontal: 13,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 8,
+    },
+
+    selectButtonText: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 14.5,
+        fontWeight: "800",
+    },
+
+    selectDropdown: {
+        marginTop: 7,
+        borderWidth: 1,
+        borderRadius: 16,
+        overflow: "hidden",
+    },
+
+    selectOption: {
+        minHeight: 46,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 9,
+        paddingHorizontal: 12,
+        borderBottomWidth: StyleSheet.hairlineWidth,
+        borderBottomColor: "rgba(100, 116, 139, 0.18)",
+    },
+
+    selectOptionIcon: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+    },
+
+    selectOptionText: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 14,
+        fontWeight: "900",
+    },
+
+    datePickerButton: {
+        minHeight: 48,
+        borderWidth: 1,
+        borderRadius: 15,
+        paddingHorizontal: 13,
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 8,
+    },
+
+    datePickerText: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 14.5,
+        fontWeight: "800",
     },
 
     flexField: {
@@ -1090,6 +1929,135 @@ const styles = StyleSheet.create({
 
     multilineInput: {
         lineHeight: 20,
+    },
+
+    dateModalOverlay: {
+        flex: 1,
+        justifyContent: "center",
+        alignItems: "center",
+        paddingHorizontal: 18,
+    },
+
+    dateModalCard: {
+        width: "100%",
+        maxWidth: 390,
+        borderWidth: 1,
+        borderRadius: 24,
+        padding: 16,
+    },
+
+    dateModalHeader: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: 12,
+        marginBottom: 14,
+    },
+
+    dateModalTitle: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 16,
+        fontWeight: "900",
+    },
+
+    dateModalCloseButton: {
+        width: 38,
+        height: 38,
+        borderRadius: 19,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+    },
+
+    monthSwitcher: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        marginBottom: 8,
+    },
+
+    yearSwitcher: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 10,
+        marginBottom: 12,
+    },
+
+    yearButton: {
+        flex: 1,
+        minHeight: 36,
+        borderRadius: 18,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 10,
+    },
+
+    yearButtonText: {
+        fontSize: 12,
+        fontWeight: "900",
+    },
+
+    monthButton: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+    },
+
+    monthLabel: {
+        flex: 1,
+        minWidth: 0,
+        textAlign: "center",
+        fontSize: 16,
+        fontWeight: "900",
+    },
+
+    weekDaysGrid: {
+        flexDirection: "row",
+        marginBottom: 8,
+    },
+
+    weekDayText: {
+        width: `${100 / 7}%`,
+        textAlign: "center",
+        fontSize: 11,
+        fontWeight: "900",
+    },
+
+    daysGrid: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        rowGap: 7,
+    },
+
+    dayButton: {
+        width: `${100 / 7}%`,
+        aspectRatio: 1,
+        borderRadius: 12,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        transform: [{ scale: 0.9 }],
+    },
+
+    dayButtonText: {
+        fontSize: 13,
+        fontWeight: "900",
+    },
+
+    dateModalHint: {
+        marginTop: 12,
+        fontSize: 12,
+        fontWeight: "700",
+        lineHeight: 17,
     },
 
     footer: {

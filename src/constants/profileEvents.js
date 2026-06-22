@@ -1,0 +1,3 @@
+export const PROFILE_EVENTS = {
+    UPDATED: "MAK_PROFILE_UPDATED",
+};

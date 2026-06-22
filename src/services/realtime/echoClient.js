@@ -239,8 +239,12 @@ export function leaveChannel(channelName) {
         return;
     }
 
-    logRealtime('Leaving channel:', channelName);
-    echoInstance.leave(channelName);
+    try {
+        logRealtime('Leaving channel:', channelName);
+        echoInstance.leave(channelName);
+    } catch (error) {
+        warnRealtime('Leaving channel failed and was ignored:', channelName, error);
+    }
 }
 
 export function disconnectEcho() {
@@ -250,8 +254,12 @@ export function disconnectEcho() {
 
     logRealtime('Disconnecting Echo...');
 
-    echoInstance.disconnect();
-    echoInstance = null;
-
-    logRealtime('Echo disconnected and cleared.');
+    try {
+        echoInstance.disconnect?.();
+    } catch (error) {
+        warnRealtime('Echo disconnect failed and was ignored:', error);
+    } finally {
+        echoInstance = null;
+        logRealtime('Echo disconnected and cleared.');
+    }
 }

@@ -51,6 +51,7 @@ function AuthenticatedAppNavigator() {
 export default function AuthNavigator() {
     return (
         <RootStack.Navigator
+            id="RootStack"
             initialRouteName="Splash"
             screenOptions={{
                 headerShown: false,

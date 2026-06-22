@@ -61,52 +61,48 @@ const normalizeLowerString = (value = "") => {
     return normalizeString(value).toLowerCase().replace(/[\s-]+/g, "_");
 };
 
-const getThemeColor = (colors = {}, key, fallbackKey, fallbackValue = "") => {
-    return colors?.[key] || colors?.[fallbackKey] || fallbackValue;
-};
-
 const getTextColor = (colors = {}) => {
-    return getThemeColor(colors, "text", "textPrimary", "#061526");
+    return colors.text || colors.textPrimary || "#061526";
 };
 
 const getMutedColor = (colors = {}) => {
-    return getThemeColor(colors, "muted", "textMuted", "#64748b");
+    return colors.muted || colors.textMuted || "#64748b";
 };
 
 const getCardColor = (colors = {}) => {
-    return getThemeColor(colors, "card", "cardStrong", "#ffffff");
+    return colors.card || colors.cardStrong || "#ffffff";
 };
 
 const getModalCardColor = (colors = {}) => {
-    return getThemeColor(colors, "modalCard", "cardStrong", "#ffffff");
+    return colors.modalCard || colors.cardStrong || colors.card || "#ffffff";
 };
 
 const getCardSoftColor = (colors = {}) => {
-    return getThemeColor(colors, "cardSoft", "buttonSoft", "rgba(6, 21, 38, 0.06)");
+    return colors.cardSoft || colors.buttonSoft || "rgba(6, 21, 38, 0.06)";
 };
 
 const getOverlayColor = (colors = {}) => {
-    return getThemeColor(colors, "modalOverlay", "overlay", "rgba(0, 0, 0, 0.55)");
+    return colors.modalOverlay || colors.overlay || "rgba(0, 0, 0, 0.55)";
 };
 
 const getBorderColor = (colors = {}) => {
-    return getThemeColor(colors, "border", "borderSoft", "rgba(6, 21, 38, 0.14)");
+    return colors.border || colors.borderSoft || "rgba(6, 21, 38, 0.14)";
 };
 
 const getPrimaryColor = (colors = {}) => {
-    return getThemeColor(colors, "primary", "blue", "#51a234");
+    return colors.primary || "#51a234";
 };
 
 const getBlueColor = (colors = {}) => {
-    return getThemeColor(colors, "blue", "primary", "#087BFF");
+    return colors.blue || "#087BFF";
 };
 
 const getSuccessColor = (colors = {}) => {
-    return getThemeColor(colors, "success", "primary", "#2FAE24");
+    return colors.success || "#2FAE24";
 };
 
 const getDangerColor = (colors = {}) => {
-    return getThemeColor(colors, "danger", "warning", "#E3342F");
+    return colors.danger || "#E3342F";
 };
 
 const getNestedValue = (source, paths = []) => {
@@ -307,20 +303,24 @@ const getStatusIcon = (statusValue) => {
     return "hourglass-outline";
 };
 
-const getStatusColor = (statusValue, colors) => {
+const getStatusColor = (statusValue, colors = {}) => {
     if (statusValue === QUOTE_STATUS.APPROVED) {
-        return getSuccessColor(colors);
+        return colors.quoteApproved || getSuccessColor(colors);
     }
 
-    if (
-        statusValue === QUOTE_STATUS.REJECTED ||
-        statusValue === QUOTE_STATUS.CANCELLED ||
-        statusValue === QUOTE_STATUS.EXPIRED
-    ) {
-        return getDangerColor(colors);
+    if (statusValue === QUOTE_STATUS.REJECTED) {
+        return colors.quoteRejected || getDangerColor(colors);
     }
 
-    return getBlueColor(colors) || getPrimaryColor(colors);
+    if (statusValue === QUOTE_STATUS.CANCELLED) {
+        return colors.quoteCancelled || getDangerColor(colors);
+    }
+
+    if (statusValue === QUOTE_STATUS.EXPIRED) {
+        return colors.quoteExpired || getDangerColor(colors);
+    }
+
+    return colors.quotePending || getBlueColor(colors) || getPrimaryColor(colors);
 };
 
 const normalizeDateForParsing = (value) => {

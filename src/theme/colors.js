@@ -4,12 +4,14 @@ export const darkColors = {
     overlay: "rgba(0, 8, 22, 0.35)",
     homeOverlay: "rgba(0, 8, 22, 0.28)",
     authOverlay: "rgba(0, 8, 22, 0.18)",
+    modalOverlay: "rgba(0, 8, 22, 0.72)",
 
     navScrolled: "rgba(2, 11, 24, 0.88)",
 
     card: "rgba(5, 18, 38, 0.74)",
     cardSoft: "rgba(5, 18, 38, 0.68)",
     cardStrong: "rgba(5, 18, 38, 0.97)",
+    modalCard: "rgba(5, 18, 38, 0.97)",
 
     inputBackground: "rgba(5, 18, 38, 0.67)",
     inputBorder: "rgba(205, 222, 255, 0.65)",
@@ -17,6 +19,8 @@ export const darkColors = {
     textPrimary: "#ffffff",
     textSecondary: "#d8deea",
     textMuted: "#a9b1c2",
+    text: "#ffffff",
+    muted: "#a9b1c2",
     darkText: "#03101f",
 
     border: "rgba(205, 222, 255, 0.35)",
@@ -40,6 +44,12 @@ export const darkColors = {
     success: "#2FAE24",
     danger: "#E3342F",
 
+    quotePending: "#39BDFF",
+    quoteApproved: "#2FAE24",
+    quoteRejected: "#E3342F",
+    quoteExpired: "#E3342F",
+    quoteCancelled: "#E3342F",
+
     notificationMessage: "#2F8BFF",
     notificationCompanyNews: "#7C5CFF",
     notificationExchangeRates: "#18B6A7",
@@ -53,12 +63,14 @@ export const lightColors = {
     overlay: "rgba(255, 255, 255, 0.72)",
     homeOverlay: "rgba(255, 255, 255, 0.72)",
     authOverlay: "rgba(255, 255, 255, 0.76)",
+    modalOverlay: "rgba(6, 21, 38, 0.38)",
 
     navScrolled: "rgba(255, 255, 255, 0.94)",
 
     card: "rgba(255, 255, 255, 0.92)",
     cardSoft: "rgba(255, 255, 255, 0.82)",
     cardStrong: "#ffffff",
+    modalCard: "#ffffff",
 
     inputBackground: "rgba(255, 255, 255, 0.92)",
     inputBorder: "rgba(6, 21, 38, 0.18)",
@@ -66,6 +78,8 @@ export const lightColors = {
     textPrimary: "#061526",
     textSecondary: "#334155",
     textMuted: "#64748b",
+    text: "#061526",
+    muted: "#64748b",
     darkText: "#03101f",
 
     border: "rgba(6, 21, 38, 0.14)",
@@ -88,6 +102,13 @@ export const lightColors = {
     warning: "#ffc533",
     success: "#2FAE24",
     danger: "#E3342F",
+
+    quotePending: "#087BFF",
+    quoteApproved: "#2FAE24",
+    quoteRejected: "#E3342F",
+    quoteExpired: "#E3342F",
+    quoteCancelled: "#E3342F",
+
     notificationMessage: "#2F8BFF",
     notificationCompanyNews: "#7C5CFF",
     notificationExchangeRates: "#18B6A7",

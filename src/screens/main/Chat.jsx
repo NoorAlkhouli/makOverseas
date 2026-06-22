@@ -19,6 +19,7 @@ import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
     DeviceEventEmitter,
+    Image,
     ImageBackground,
     Keyboard,
     Platform,
@@ -145,12 +146,57 @@ const getSafeText = (value, fallback = "") => {
     }
 
     if (typeof value === "object") {
-        return String(value?.name || value?.title || value?.full_name || value?.description || fallback || "");
+        return String(
+            value?.name ||
+            value?.title ||
+            value?.full_name ||
+            value?.description ||
+            fallback ||
+            ""
+        );
     }
 
     return String(value);
 };
 
+const normalizeAvatarUrl = (value) => {
+    if (!value) return null;
+
+    if (typeof value === "string") {
+        const cleanValue = value.trim();
+        return cleanValue.length > 0 ? cleanValue : null;
+    }
+
+    if (typeof value === "object") {
+        return normalizeAvatarUrl(
+            value.url ||
+            value.path ||
+            value.src ||
+            value.full_url ||
+            value.fullUrl ||
+            value.preview_url ||
+            value.previewUrl
+        );
+    }
+
+    return null;
+};
+
+const getAvatarFromPaths = (source, paths) => {
+    for (const path of paths) {
+        const value = String(path)
+            .split(".")
+            .reduce((current, key) => current?.[key], source);
+
+        const avatar = normalizeAvatarUrl(value);
+
+        if (avatar) {
+            return avatar;
+        }
+    }
+
+    return null;
+};
 
 const normalizePresenceBoolean = (value) => {
     if (value === true || value === 1) return true;
@@ -421,6 +467,28 @@ const normalizeEmployee = (employee, isArabic) => {
 
     const department = getEmployeeDepartmentText(employee);
 
+    const avatar = getAvatarFromPaths(employee, [
+        "avatar",
+        "image",
+        "photo",
+        "profile_photo",
+        "profilePhoto",
+        "avatar_url",
+        "avatarUrl",
+        "user.avatar",
+        "user.image",
+        "user.photo",
+        "user.profile_photo",
+        "user.profilePhoto",
+        "user.avatar_url",
+        "user.avatarUrl",
+        "profile.avatar",
+        "profile.image",
+        "profile.photo",
+        "profile.avatar_url",
+        "profile.avatarUrl",
+    ]);
+
     const isOnline = getPresenceBooleanFromPaths(employee, [
         "online_status",
         "onlineStatus",
@@ -444,6 +512,7 @@ const normalizeEmployee = (employee, isArabic) => {
         "profile.status",
         "profile.presence",
     ]);
+
     const lastSeenAt = getEmployeeLastSeenValue(employee);
 
     return {
@@ -452,6 +521,7 @@ const normalizeEmployee = (employee, isArabic) => {
         targetUserId,
         name,
         department,
+        avatar,
         message: isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation",
         time: "",
         unread: 0,
@@ -501,12 +571,35 @@ const normalizeCustomer = (customer, isArabic) => {
         ])
     );
 
+    const avatar = getAvatarFromPaths(customer, [
+        "avatar",
+        "image",
+        "photo",
+        "profile_photo",
+        "profilePhoto",
+        "avatar_url",
+        "avatarUrl",
+        "user.avatar",
+        "user.image",
+        "user.photo",
+        "user.profile_photo",
+        "user.profilePhoto",
+        "user.avatar_url",
+        "user.avatarUrl",
+        "profile.avatar",
+        "profile.image",
+        "profile.photo",
+        "profile.avatar_url",
+        "profile.avatarUrl",
+    ]);
+
     return {
         id: `customer-search-${String(targetUserId || customer?.uuid || Date.now())}`,
         conversationId: null,
         targetUserId,
         name,
         department: isArabic ? "عميل" : "Customer",
+        avatar,
         message: phone || (isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation"),
         time: "",
         unread: 0,
@@ -998,6 +1091,7 @@ const normalizeConversation = (conversation, isArabic) => {
         "user.status",
         "user.presence",
     ]);
+
     const lastSeenAt = getConversationLastSeenValue(conversation);
 
     const conversationType = String(
@@ -1014,12 +1108,107 @@ const normalizeConversation = (conversation, isArabic) => {
 
     const targetUserId = isGroup ? null : getDirectTargetUserId(conversation);
 
+    const avatar = getAvatarFromPaths(conversation, [
+        "avatar",
+        "image",
+        "photo",
+        "profile_photo",
+        "profilePhoto",
+        "avatar_url",
+        "avatarUrl",
+
+        "target_user.avatar",
+        "target_user.image",
+        "target_user.photo",
+        "target_user.profile_photo",
+        "target_user.profilePhoto",
+        "target_user.avatar_url",
+        "target_user.avatarUrl",
+
+        "targetUser.avatar",
+        "targetUser.image",
+        "targetUser.photo",
+        "targetUser.profile_photo",
+        "targetUser.profilePhoto",
+        "targetUser.avatar_url",
+        "targetUser.avatarUrl",
+
+        "other_participant.avatar",
+        "other_participant.image",
+        "other_participant.photo",
+        "other_participant.profile_photo",
+        "other_participant.profilePhoto",
+        "other_participant.avatar_url",
+        "other_participant.avatarUrl",
+        "other_participant.user.avatar",
+        "other_participant.user.image",
+        "other_participant.user.photo",
+        "other_participant.user.profile_photo",
+        "other_participant.user.profilePhoto",
+        "other_participant.user.avatar_url",
+        "other_participant.user.avatarUrl",
+
+        "participant.avatar",
+        "participant.image",
+        "participant.photo",
+        "participant.profile_photo",
+        "participant.profilePhoto",
+        "participant.avatar_url",
+        "participant.avatarUrl",
+        "participant.user.avatar",
+        "participant.user.image",
+        "participant.user.photo",
+        "participant.user.profile_photo",
+        "participant.user.profilePhoto",
+        "participant.user.avatar_url",
+        "participant.user.avatarUrl",
+
+        "employee.avatar",
+        "employee.image",
+        "employee.photo",
+        "employee.profile_photo",
+        "employee.profilePhoto",
+        "employee.avatar_url",
+        "employee.avatarUrl",
+        "employee.user.avatar",
+        "employee.user.image",
+        "employee.user.photo",
+        "employee.user.profile_photo",
+        "employee.user.profilePhoto",
+        "employee.user.avatar_url",
+        "employee.user.avatarUrl",
+
+        "customer.avatar",
+        "customer.image",
+        "customer.photo",
+        "customer.profile_photo",
+        "customer.profilePhoto",
+        "customer.avatar_url",
+        "customer.avatarUrl",
+        "customer.user.avatar",
+        "customer.user.image",
+        "customer.user.photo",
+        "customer.user.profile_photo",
+        "customer.user.profilePhoto",
+        "customer.user.avatar_url",
+        "customer.user.avatarUrl",
+
+        "user.avatar",
+        "user.image",
+        "user.photo",
+        "user.profile_photo",
+        "user.profilePhoto",
+        "user.avatar_url",
+        "user.avatarUrl",
+    ]);
+
     return {
         id: String(id || conversation?.uuid || conversation?.key || Date.now()),
         conversationId: id,
         targetUserId,
         name: String(name || (isArabic ? "محادثة" : "Conversation")),
         department: getDepartmentText(conversation),
+        avatar,
         message: String(message || ""),
         time: formatConversationTime(time, isArabic),
         unread: Number.isFinite(unread) ? unread : 0,
@@ -1179,6 +1368,7 @@ const mergeChatKeepingNewestTime = (existingChat, nextChat, isArabic) => {
 
     return {
         ...nextChat,
+        avatar: nextChat.avatar || existingChat.avatar || null,
         message: shouldKeepExistingLatestData
             ? existingChat.message
             : nextChat.message,
@@ -1186,6 +1376,8 @@ const mergeChatKeepingNewestTime = (existingChat, nextChat, isArabic) => {
         raw: mergedRaw,
     };
 };
+
+
 
 const mergePreparedChatsWithCurrent = (currentChats, preparedChats, isArabic) => {
     return preparedChats.map((preparedChat) => {
@@ -1216,7 +1408,11 @@ export default function Chat({ navigation }) {
 
     const { colors, isDark, setThemeMode, changeTheme, toggleTheme } = useAppTheme();
     const [currentIsDark, setCurrentIsDark] = useState(isDark);
-    useEffect(() => { setCurrentIsDark(isDark); }, [isDark]);
+
+    useEffect(() => {
+        setCurrentIsDark(isDark);
+    }, [isDark]);
+
     const styles = useMemo(() => createStyles(colors), [colors]);
 
     const [chats, setChats] = useState([]);
@@ -1417,6 +1613,7 @@ export default function Chat({ navigation }) {
                     id: chat.id,
                     conversationId: chat.conversationId,
                     targetUserId: chat.targetUserId,
+                    avatar: chat.avatar,
                     isGroup: chat.isGroup,
                     isEmployee: chat.isEmployee,
                     apiIsOnline: chat.isOnline,
@@ -1427,7 +1624,7 @@ export default function Chat({ navigation }) {
 
                 setChats((currentChats) => {
                     if (page === 1) {
-                        return preparedChats;
+                        return mergePreparedChatsWithCurrent(currentChats, preparedChats, isArabic);
                     }
 
                     const existingIds = new Set(currentChats.map((chat) => String(chat.id)));
@@ -1546,6 +1743,10 @@ export default function Chat({ navigation }) {
                 existingChat?.targetUserId &&
                 !normalizedConversation.targetUserId;
 
+            const shouldKeepExistingAvatar =
+                existingChat?.avatar &&
+                !normalizedConversation.avatar;
+
             const shouldKeepExistingRawLatestMessage =
                 existingChat?.raw?.latest_message &&
                 !conversationPayload?.latest_message &&
@@ -1589,6 +1790,10 @@ export default function Chat({ navigation }) {
                 targetUserId: shouldKeepExistingTargetUserId
                     ? existingChat.targetUserId
                     : normalizedConversation.targetUserId,
+
+                avatar: shouldKeepExistingAvatar
+                    ? existingChat.avatar
+                    : normalizedConversation.avatar,
 
                 unread: Number.isFinite(nextUnread) ? nextUnread : previousUnread,
                 time: formatConversationTime(newestTimeValue, isArabic),
@@ -1687,6 +1892,7 @@ export default function Chat({ navigation }) {
                     message: matchedChat.message,
                     time: matchedChat.time,
                     department: matchedChat.department || customerResult.department,
+                    avatar: matchedChat.avatar || customerResult.avatar,
                     status: matchedChat.status,
                     isOnline: matchedChat.isOnline || customerResult.isOnline,
                     lastSeenAt: matchedChat.lastSeenAt || customerResult.lastSeenAt,
@@ -1702,6 +1908,7 @@ export default function Chat({ navigation }) {
             id: chat.id,
             conversationId: chat.conversationId,
             targetUserId: chat.targetUserId,
+            avatar: chat.avatar,
             isGroup: chat.isGroup,
             isEmployee: chat.isEmployee,
             isOnline: chat.isOnline,
@@ -1829,8 +2036,10 @@ export default function Chat({ navigation }) {
         if (selectMode) {
             return;
         }
+
         Keyboard.dismiss();
         setIsSearchFocused(false);
+
         setChats((currentChats) =>
             currentChats.map((chat) =>
                 chat.id === selectedChat.id
@@ -1863,12 +2072,28 @@ export default function Chat({ navigation }) {
             (!selectedChatTargetUserId && selectedChat.isOnline === true)
         );
 
+        const selectedChatAvatar =
+            selectedChat.avatar ||
+            selectedChat.raw?.avatar ||
+            selectedChat.raw?.target_user?.avatar ||
+            selectedChat.raw?.targetUser?.avatar ||
+            selectedChat.raw?.other_participant?.avatar ||
+            selectedChat.raw?.other_participant?.user?.avatar ||
+            selectedChat.raw?.participant?.avatar ||
+            selectedChat.raw?.participant?.user?.avatar ||
+            selectedChat.raw?.employee?.avatar ||
+            selectedChat.raw?.employee?.user?.avatar ||
+            selectedChat.raw?.customer?.avatar ||
+            selectedChat.raw?.customer?.user?.avatar ||
+            null;
+
         console.log("[CHAT ONLINE DEBUG] Open chat press:", {
             name: selectedChat.name,
             id: selectedChat.id,
             conversationId: selectedChat.conversationId,
             targetUserId: selectedChat.targetUserId,
             selectedChatTargetUserId,
+            avatar: selectedChatAvatar,
             isGroup: selectedChat.isGroup,
             apiIsOnline: selectedChat.isOnline,
             selectedChatLiveIsOnline,
@@ -1890,7 +2115,7 @@ export default function Chat({ navigation }) {
                     target_user_id: selectedChat.targetUserId,
                     name: selectedChat.name,
                     full_name: selectedChat.name,
-                    avatar: selectedChat.raw?.avatar,
+                    avatar: selectedChatAvatar,
                 }
                 : undefined,
             employee: {
@@ -1899,6 +2124,7 @@ export default function Chat({ navigation }) {
                 target_user_id: selectedChat.targetUserId,
                 name: selectedChat.name,
                 department: selectedChat.department,
+                avatar: selectedChatAvatar,
                 status: selectedChatIsOnline ? "online" : "offline",
                 is_online: selectedChatIsOnline,
                 isOnline: selectedChatIsOnline,
@@ -2067,6 +2293,7 @@ export default function Chat({ navigation }) {
                         conversationId: chat.conversationId,
                         targetUserId: chat.targetUserId,
                         normalizedTargetUserId,
+                        avatar: chat.avatar,
                         isGroup: chat.isGroup,
                         apiIsOnline: chat.isOnline,
                         rawOnlineStatus: chat.raw?.online_status,
@@ -2076,26 +2303,6 @@ export default function Chat({ navigation }) {
                         onlineUserIds,
                         status: chat.status,
                         statusText,
-                        rawTargetCandidates: {
-                            target_user_id: chat.raw?.target_user_id,
-                            targetUserId: chat.raw?.targetUserId,
-                            target_user_id_nested: chat.raw?.target_user?.id,
-                            target_user_user_id: chat.raw?.target_user?.user_id,
-                            targetUser_id_nested: chat.raw?.targetUser?.id,
-                            targetUser_user_id: chat.raw?.targetUser?.user_id,
-                            other_participant_user_id: chat.raw?.other_participant?.user_id,
-                            other_participant_userId: chat.raw?.other_participant?.userId,
-                            other_participant_user_id_nested: chat.raw?.other_participant?.user?.id,
-                            participant_user_id: chat.raw?.participant?.user_id,
-                            participant_userId: chat.raw?.participant?.userId,
-                            participant_user_id_nested: chat.raw?.participant?.user?.id,
-                            employee_user_id: chat.raw?.employee?.user_id,
-                            employee_userId: chat.raw?.employee?.userId,
-                            customer_user_id: chat.raw?.customer?.user_id,
-                            customer_userId: chat.raw?.customer?.userId,
-                            user_id: chat.raw?.user_id,
-                            user_id_nested: chat.raw?.user?.id,
-                        },
                     });
 
                     return (
@@ -2117,11 +2324,18 @@ export default function Chat({ navigation }) {
 
                             <View style={styles.avatarBox}>
                                 <View style={styles.avatarCircle}>
-                                    <Feather
-                                        name="user"
-                                        size={28}
-                                        color={colors.textPrimary}
-                                    />
+                                    {chat.avatar ? (
+                                        <Image
+                                            source={{ uri: chat.avatar }}
+                                            style={styles.avatarImage}
+                                        />
+                                    ) : (
+                                        <Feather
+                                            name="user"
+                                            size={28}
+                                            color={colors.textPrimary}
+                                        />
+                                    )}
                                 </View>
 
                                 <View
@@ -2548,6 +2762,13 @@ const createStyles = (colors) =>
             borderColor: colors.avatarBorder,
             alignItems: "center",
             justifyContent: "center",
+            overflow: "hidden",
+        },
+
+        avatarImage: {
+            width: "100%",
+            height: "100%",
+            borderRadius: 29,
         },
 
         statusDot: {

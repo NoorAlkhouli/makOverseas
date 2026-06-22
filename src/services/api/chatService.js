@@ -1,4 +1,5 @@
-import apiClient from "./apiClient";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import apiClient, { API_BASE_URL, STORAGE_KEYS } from "./apiClient";
 
 const normalizeParams = (params = {}) => {
     const normalized = {};
@@ -389,6 +390,113 @@ const appendAttachmentMetadata = (formData, attachment, messageType) => {
     }
 };
 
+const buildMessageFormData = ({
+    type = 1,
+    body = "",
+    attachment,
+    replyToMessageId,
+    targetUserId,
+} = {}) => {
+    const formData = new FormData();
+    const messageType = Number(type);
+
+    if (targetUserId) {
+        formData.append("target_user_id", String(targetUserId));
+    }
+
+    formData.append("type", String(messageType));
+
+    const cleanBody = String(body || "").trim();
+
+    if (cleanBody) {
+        formData.append("body", cleanBody);
+    }
+
+    if (replyToMessageId) {
+        formData.append("reply_to_message_id", String(replyToMessageId));
+    }
+
+    const attachmentPayload = buildAttachmentPayload(attachment, messageType);
+
+    if (attachmentPayload) {
+        formData.append("attachment", attachmentPayload);
+        appendAttachmentMetadata(formData, attachment, messageType);
+    }
+
+    return formData;
+};
+
+const buildFetchHeaders = async () => {
+    const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    const deviceId = await AsyncStorage.getItem(STORAGE_KEYS.DEVICE_ID);
+    const language = await AsyncStorage.getItem(STORAGE_KEYS.APP_LANGUAGE);
+
+    return {
+        Accept: "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(deviceId ? { "X-Device-ID": deviceId } : {}),
+        ...(language ? { "Accept-Language": language } : {}),
+    };
+};
+
+const parseFetchResponse = async (response) => {
+    const responseText = await response.text();
+
+    if (!responseText) {
+        return null;
+    }
+
+    try {
+        return JSON.parse(responseText);
+    } catch {
+        return responseText;
+    }
+};
+
+const sendFormDataWithFetch = async (endpoint, formData) => {
+    const headers = await buildFetchHeaders();
+
+    try {
+        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+            method: "POST",
+            headers,
+            body: formData,
+        });
+
+        const responseBody = await parseFetchResponse(response);
+
+        console.log("[CHAT SEND DEBUG] status:", response.status);
+        console.log("[CHAT SEND DEBUG] response:", responseBody);
+
+        if (!response.ok) {
+            const message =
+                responseBody?.message ||
+                responseBody?.error ||
+                "Failed to send message.";
+
+            const error = new Error(message);
+            error.raw = responseBody;
+            error.userMessage = message;
+
+            throw error;
+        }
+
+        return responseBody;
+    } catch (error) {
+        console.log("[CHAT SEND DEBUG] fetch error:", error?.raw || error);
+
+        if (error?.userMessage) {
+            throw error;
+        }
+
+        const nextError = new Error("Failed to send message.");
+        nextError.raw = error;
+        nextError.userMessage = "Failed to send message.";
+
+        throw nextError;
+    }
+};
+
 export const chatService = {
     async getProfile() {
         return apiClient.get("/api/v1/profile");
@@ -489,29 +597,14 @@ export const chatService = {
             throw new Error("conversationId is required to send message.");
         }
 
-        const formData = new FormData();
-        const messageType = Number(type);
+        const formData = buildMessageFormData({
+            type,
+            body,
+            attachment,
+            replyToMessageId,
+        });
 
-        formData.append("type", String(messageType));
-
-        const cleanBody = String(body || "").trim();
-
-        if (cleanBody) {
-            formData.append("body", cleanBody);
-        }
-
-        if (replyToMessageId) {
-            formData.append("reply_to_message_id", String(replyToMessageId));
-        }
-
-        const attachmentPayload = buildAttachmentPayload(attachment, messageType);
-
-        if (attachmentPayload) {
-            formData.append("attachment", attachmentPayload);
-            appendAttachmentMetadata(formData, attachment, messageType);
-        }
-
-        return apiClient.upload(
+        return sendFormDataWithFetch(
             `/api/v1/conversations/${conversationId}/messages`,
             formData
         );
@@ -530,30 +623,15 @@ export const chatService = {
             throw new Error("targetUserId is required to start direct message.");
         }
 
-        const formData = new FormData();
-        const messageType = Number(type);
+        const formData = buildMessageFormData({
+            type,
+            body,
+            attachment,
+            replyToMessageId,
+            targetUserId,
+        });
 
-        formData.append("target_user_id", String(targetUserId));
-        formData.append("type", String(messageType));
-
-        const cleanBody = String(body || "").trim();
-
-        if (cleanBody) {
-            formData.append("body", cleanBody);
-        }
-
-        if (replyToMessageId) {
-            formData.append("reply_to_message_id", String(replyToMessageId));
-        }
-
-        const attachmentPayload = buildAttachmentPayload(attachment, messageType);
-
-        if (attachmentPayload) {
-            formData.append("attachment", attachmentPayload);
-            appendAttachmentMetadata(formData, attachment, messageType);
-        }
-
-        return apiClient.upload("/api/v1/messages/start-direct", formData);
+        return sendFormDataWithFetch("/api/v1/messages/start-direct", formData);
     },
 
     async createQuote(conversationId, quote = {}) {

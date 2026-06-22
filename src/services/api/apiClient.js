@@ -193,10 +193,10 @@ api.interceptors.request.use(
          * إذا الطلب FormData يعني upload image/file
          * غير هيك JSON عادي
          */
-        if (!(config.data instanceof FormData)) {
-            config.headers['Content-Type'] = 'application/json';
+        if (config.data instanceof FormData) {
+            delete config.headers['Content-Type'];
         } else {
-            config.headers['Content-Type'] = 'multipart/form-data';
+            config.headers['Content-Type'] = 'application/json';
         }
 
         /**

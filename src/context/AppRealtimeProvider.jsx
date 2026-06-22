@@ -165,6 +165,22 @@ export function AppRealtimeProvider({ children }) {
     useEffect(() => {
         let isCancelled = false;
 
+        const cleanupRealtime = () => {
+            if (listenerKeyRef.current) {
+                unsubscribeUserChannelListener(listenerKeyRef.current);
+            }
+
+            if (livePresenceListenerKeyRef.current) {
+                unsubscribeLivePresenceListener(livePresenceListenerKeyRef.current);
+            }
+
+            leaveLivePresenceChannel();
+
+            subscribedUserIdRef.current = null;
+
+            updateState(() => INITIAL_REALTIME_STATE);
+        };
+
         const initializeRealtime = async () => {
             try {
                 console.log('[REALTIME DEBUG 01] AppRealtimeProvider initializeRealtime STARTED');
@@ -468,20 +484,7 @@ export function AppRealtimeProvider({ children }) {
 
         return () => {
             isCancelled = true;
-
-            if (listenerKeyRef.current) {
-                unsubscribeUserChannelListener(listenerKeyRef.current);
-            }
-
-            if (livePresenceListenerKeyRef.current) {
-                unsubscribeLivePresenceListener(livePresenceListenerKeyRef.current);
-            }
-
-            leaveLivePresenceChannel();
-
-            subscribedUserIdRef.current = null;
-
-            updateState(() => INITIAL_REALTIME_STATE);
+            cleanupRealtime();
         };
     }, [updateState]);
 

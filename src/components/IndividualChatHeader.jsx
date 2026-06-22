@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 const getStatusLabel = ({
     isBlocked,
@@ -68,6 +68,7 @@ export default function IndividualChatHeader({
     employeeInitials,
     employeeName,
     employeeDepartment,
+    employeeAvatar,
     isBlocked,
     isOnline = false,
     isTyping = false,
@@ -166,6 +167,7 @@ export default function IndividualChatHeader({
                 initials: employeeInitials,
                 name: employeeName,
                 department: employeeDepartment || tr("department", "Sales Department"),
+                avatar: employeeAvatar || null,
                 isBlocked,
                 isOnline: normalizedIsOnline,
                 isTyping: normalizedIsTyping,
@@ -215,15 +217,22 @@ export default function IndividualChatHeader({
                             },
                         ]}
                     >
-                        <Text
-                            style={[
-                                styles.avatarText,
-                                isCompactScreen && styles.avatarTextCompact,
-                                { color: colors.text },
-                            ]}
-                        >
-                            {employeeInitials}
-                        </Text>
+                        {employeeAvatar ? (
+                            <Image
+                                source={{ uri: employeeAvatar }}
+                                style={styles.avatarImage}
+                            />
+                        ) : (
+                            <Text
+                                style={[
+                                    styles.avatarText,
+                                    isCompactScreen && styles.avatarTextCompact,
+                                    { color: colors.text },
+                                ]}
+                            >
+                                {employeeInitials}
+                            </Text>
+                        )}
                     </View>
                 </View>
 
@@ -375,6 +384,12 @@ const styles = StyleSheet.create({
         width: 44,
         height: 44,
         borderRadius: 22,
+    },
+
+    avatarImage: {
+        width: "100%",
+        height: "100%",
+        borderRadius: 26,
     },
 
     avatarText: {

@@ -53,6 +53,7 @@ export default function IndividualChatProfile({ navigation, route }) {
             profile.target_user_id ||
             null,
         initials: profile.initials || "MO",
+        avatar: profile.avatar || null,
         name: profile.name || "MAK Overseas Sales Employee",
         department: profile.department || "Sales",
         isBlocked: !!profile.isBlocked,
@@ -381,7 +382,14 @@ export default function IndividualChatProfile({ navigation, route }) {
             >
                 <View style={styles.profileHeader}>
                     <View style={styles.avatar}>
-                        <Text style={styles.avatarText}>{data.initials}</Text>
+                        {data.avatar ? (
+                            <Image
+                                source={{ uri: data.avatar }}
+                                style={styles.avatarImage}
+                            />
+                        ) : (
+                            <Text style={styles.avatarText}>{data.initials}</Text>
+                        )}
                     </View>
 
                     <View style={styles.nameWrapper}>
@@ -790,7 +798,14 @@ function MediaTile({ item, data, colors, styles }) {
             <View style={styles.chatTile}>
                 <View style={styles.chatRow}>
                     <View style={styles.chatAvatar}>
-                        <Ionicons name="person-outline" size={26} color={colors.text} />
+                        {data.avatar ? (
+                            <Image
+                                source={{ uri: data.avatar }}
+                                style={styles.chatAvatarImage}
+                            />
+                        ) : (
+                            <Ionicons name="person-outline" size={26} color={colors.text} />
+                        )}
                         <View style={[styles.chatDot, { backgroundColor: chatDotColor }]} />
                     </View>
 
@@ -1005,6 +1020,13 @@ const createStyles = (colors) =>
             alignItems: "center",
             justifyContent: "center",
             marginBottom: 12,
+            overflow: "hidden",
+        },
+
+        avatarImage: {
+            width: "100%",
+            height: "100%",
+            borderRadius: 74,
         },
 
         avatarText: {
@@ -1364,6 +1386,13 @@ const createStyles = (colors) =>
             justifyContent: "center",
             marginRight: 8,
             position: "relative",
+            overflow: "hidden",
+        },
+
+        chatAvatarImage: {
+            width: "100%",
+            height: "100%",
+            borderRadius: 23,
         },
 
         chatDot: {
