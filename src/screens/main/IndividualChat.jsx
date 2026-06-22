@@ -48,10 +48,10 @@ import {
     sendConversationTypingWhisper,
     subscribeToConversationChannel,
 } from "../../services/realtime/conversationRealtimeService";
-// import {
-//     ScannedDocumentConfirmModal,
-//     useScanDocument,
-// } from "../../components/ScanDocumentTools";
+import {
+    ScannedDocumentConfirmModal,
+    useScanDocument,
+} from "../../components/ScanDocumentTools";
 import {
     ChatCameraCaptureModal,
     MediaConfirmModal,
@@ -4184,25 +4184,25 @@ export default function IndividualChatScreen({ navigation, route }) {
         });
     }, [cameraCaptureVisible, pickMediaFromLibrary]);
 
-    // const {
-    //     selectedScannedDocument,
-    //     selectedScannedDocuments,
-    //     activeScannedPageIndex,
-    //     isScanningDocument,
-    //     isCreatingScannedPdf,
-    //     scanDocumentWithCamera,
-    //     handleAddScannedPages,
-    //     handleRetakeScannedPage,
-    //     handleDeleteScannedPage,
-    //     handleCancelScannedDocument,
-    //     handleConfirmSendScannedDocument,
-    //     setActiveScannedPageIndex,
-    // } = useScanDocument({
-    //     tr,
-    //     addMessages,
-    //     cancelVoiceRecordingIfActive,
-    //     onSendScannedDocument: handleSendMediaMessage,
-    // });
+    const {
+        selectedScannedDocument,
+        selectedScannedDocuments,
+        activeScannedPageIndex,
+        isScanningDocument,
+        isCreatingScannedPdf,
+        scanDocumentWithCamera,
+        handleAddScannedPages,
+        handleRetakeScannedPage,
+        handleDeleteScannedPage,
+        handleCancelScannedDocument,
+        handleConfirmSendScannedDocument,
+        setActiveScannedPageIndex,
+    } = useScanDocument({
+        tr,
+        addMessages,
+        cancelVoiceRecordingIfActive,
+        onSendScannedDocument: handleSendMediaMessage,
+    });
 
     const openAttachMenu = async () => {
         Keyboard.dismiss();
@@ -4892,7 +4892,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     }}
                 />
 
-                {/* <ScannedDocumentConfirmModal
+                <ScannedDocumentConfirmModal
                     visible={!!selectedScannedDocument}
                     documentItem={selectedScannedDocument}
                     documents={selectedScannedDocuments}
@@ -4906,7 +4906,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     onRetake={handleRetakeScannedPage}
                     onChangePage={setActiveScannedPageIndex}
                     onSend={handleConfirmSendScannedDocument}
-                /> */}
+                /> 
                 <DocumentPreviewModal
                     visible={!!previewDocument}
                     documentItem={previewDocument}

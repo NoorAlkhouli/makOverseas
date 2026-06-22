@@ -1,8 +1,4 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import DocumentScanner, {
-    ResponseType,
-    ScanDocumentResponseStatus,
-} from "react-native-document-scanner-plugin";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Print from "expo-print";
 import React, { useMemo, useState } from "react";
@@ -20,6 +16,60 @@ import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const MAX_SCAN_PAGES = 30;
+
+let cachedDocumentScannerPlugin = undefined;
+
+const getDocumentScannerPlugin = () => {
+    if (cachedDocumentScannerPlugin !== undefined) {
+        return cachedDocumentScannerPlugin;
+    }
+
+    try {
+        // Keep the native scanner lazy-loaded so the chat screen does not crash
+        // when the current Expo/dev build does not include DocumentScanner.
+        // Static importing this package can throw TurboModuleRegistry.getEnforcing
+        // before we get a chance to show a friendly message.
+        // eslint-disable-next-line global-require
+        const scannerModule = require("react-native-document-scanner-plugin");
+
+        cachedDocumentScannerPlugin = {
+            scanDocument:
+                scannerModule?.default?.scanDocument ||
+                scannerModule?.scanDocument ||
+                null,
+            ResponseType:
+                scannerModule?.ResponseType ||
+                scannerModule?.default?.ResponseType ||
+                {},
+            ScanDocumentResponseStatus:
+                scannerModule?.ScanDocumentResponseStatus ||
+                scannerModule?.default?.ScanDocumentResponseStatus ||
+                {},
+        };
+
+        return cachedDocumentScannerPlugin;
+    } catch (error) {
+        console.log("Document scanner native module is not available:", error);
+        cachedDocumentScannerPlugin = null;
+        return cachedDocumentScannerPlugin;
+    }
+};
+
+const isDocumentScannerCancelResponse = (response, scannerPlugin) => {
+    const cancelStatus =
+        scannerPlugin?.ScanDocumentResponseStatus?.Cancel ||
+        scannerPlugin?.ScanDocumentResponseStatus?.CancelStatus ||
+        "cancel";
+
+    const status = String(response?.status || "").toLowerCase();
+
+    return [
+        String(cancelStatus).toLowerCase(),
+        "cancel",
+        "canceled",
+        "cancelled",
+    ].includes(status);
+};
 
 const normalizeScannedUri = (uri) => {
     if (!uri) return null;
@@ -274,14 +324,25 @@ export function useScanDocument({
     const selectedScannedDocuments = selectedScannedDocument?.pages || [];
 
     const runDocumentScanner = async ({ maxNumDocuments = MAX_SCAN_PAGES } = {}) => {
-        const response = await DocumentScanner.scanDocument({
+        const scannerPlugin = getDocumentScannerPlugin();
+
+        if (typeof scannerPlugin?.scanDocument !== "function") {
+            throw new Error(
+                "DocumentScanner native module is not registered in this build."
+            );
+        }
+
+        const response = await scannerPlugin.scanDocument({
             croppedImageQuality: 100,
             maxNumDocuments,
-            responseType: ResponseType.ImageFilePath,
+            responseType:
+                scannerPlugin?.ResponseType?.ImageFilePath ||
+                scannerPlugin?.ResponseType?.IMAGE_FILE_PATH ||
+                "imageFilePath",
         });
 
         if (
-            response?.status === ScanDocumentResponseStatus.Cancel ||
+            isDocumentScannerCancelResponse(response, scannerPlugin) ||
             !response?.scannedImages?.length
         ) {
             return [];
@@ -327,7 +388,7 @@ export function useScanDocument({
                 tr("errorTitle", "Something went wrong"),
                 tr(
                     "scanDocumentNativeError",
-                    "Document scanner is not available in Expo Go. Use a development build after installing react-native-document-scanner-plugin."
+                    "Document scanner is not included in this app build. Install react-native-document-scanner-plugin and create a new development/preview build, or use the normal document picker."
                 )
             );
         } finally {
@@ -375,7 +436,7 @@ export function useScanDocument({
                 tr("errorTitle", "Something went wrong"),
                 tr(
                     "scanDocumentError",
-                    "Could not scan the document. Please try again."
+                    "Could not scan the document. Make sure this build includes the native document scanner module."
                 )
             );
         } finally {
@@ -437,7 +498,7 @@ export function useScanDocument({
                 tr("errorTitle", "Something went wrong"),
                 tr(
                     "scanDocumentError",
-                    "Could not scan the document. Please try again."
+                    "Could not scan the document. Make sure this build includes the native document scanner module."
                 )
             );
         } finally {
