@@ -1,4 +1,3 @@
-
 //MICrephone
 import { getTextInputDirectionFromValue } from "@/src/styles/globalStyles";
 import { Ionicons } from "@expo/vector-icons";
@@ -77,12 +76,77 @@ export default function IndividualChatComposer({
     onFocusInput,
     replyingToMessage,
     onCancelReply,
+
+    // Block / permission guard props.
+    // Keep multiple names supported so the screen file can pass any one of them
+    // without breaking this component.
+    isBlocked = false,
+    isChatInputDisabled = false,
+    isComposerDisabled = false,
+    canSendMessage = true,
+    disabledMessage,
+    blockMessage,
 }) {
     const replyPreviewText = getReplyPreviewText(replyingToMessage, tr);
+    const composerDisabled =
+        isBlocked === true ||
+        isChatInputDisabled === true ||
+        isComposerDisabled === true ||
+        canSendMessage === false;
+
+    const disabledText =
+        disabledMessage ||
+        blockMessage ||
+        (isBlocked
+            ? tr(
+                "blockedComposerMessage",
+                isArabic
+                    ? "هذه المحادثة محظورة، لا يمكنك إرسال رسائل."
+                    : "This conversation is blocked. You cannot send messages."
+            )
+            : tr(
+                "cannotSendComposerMessage",
+                isArabic
+                    ? "لا يمكنك إرسال رسائل في هذه المحادثة."
+                    : "You cannot send messages in this conversation."
+            ));
 
     const handleChangeText = (text) => {
+        if (composerDisabled) {
+            return;
+        }
+
         onChangeMessageText?.(text);
         onTyping?.(text);
+    };
+
+    const handleAttachPress = () => {
+        if (composerDisabled) {
+            return;
+        }
+
+        onOpenAttachMenu?.();
+    };
+
+    const handleCameraPress = () => {
+        if (composerDisabled) {
+            return;
+        }
+
+        onTakePhoto?.();
+    };
+
+    const handleActionPress = () => {
+        if (composerDisabled) {
+            return;
+        }
+
+        if (hasMessage && !isRecordingVoice) {
+            onSend?.();
+            return;
+        }
+
+        onMicPress?.();
     };
 
     return (
@@ -98,7 +162,37 @@ export default function IndividualChatComposer({
                 },
             ]}
         >
-            {!!replyingToMessage && (
+            {composerDisabled && (
+                <View
+                    style={[
+                        styles.blockedBanner,
+                        isCompactScreen && styles.blockedBannerCompact,
+                        {
+                            backgroundColor: colors.cardSoft,
+                            borderColor: colors.border,
+                        },
+                    ]}
+                >
+                    <Ionicons
+                        name="lock-closed-outline"
+                        size={17}
+                        color={colors.danger || colors.muted}
+                    />
+
+                    <Text
+                        style={[
+                            styles.blockedBannerText,
+                            { color: colors.danger || colors.text },
+                            getComposerTextDirectionStyle(disabledText, isArabic),
+                        ]}
+                        numberOfLines={2}
+                    >
+                        {disabledText}
+                    </Text>
+                </View>
+            )}
+
+            {!!replyingToMessage && !composerDisabled && (
                 <View
                     style={[
                         styles.replyPreviewWrapper,
@@ -150,22 +244,34 @@ export default function IndividualChatComposer({
                 style={[
                     styles.composerWrapper,
                     isCompactScreen && styles.composerWrapperCompact,
+                    composerDisabled && styles.composerWrapperDisabled,
                 ]}
             >
                 <TouchableOpacity
-                    style={styles.attachButton}
+                    style={[
+                        styles.attachButton,
+                        composerDisabled && styles.disabledControl,
+                    ]}
                     activeOpacity={0.8}
-                    onPress={onOpenAttachMenu}
+                    onPress={handleAttachPress}
+                    disabled={composerDisabled}
                 >
-                    <Ionicons name="attach" size={27} color={colors.text} />
+                    <Ionicons
+                        name="attach"
+                        size={27}
+                        color={composerDisabled ? colors.muted : colors.text}
+                    />
                 </TouchableOpacity>
 
                 <View
                     style={[
                         styles.inputWrapper,
                         isCompactScreen && styles.inputWrapperCompact,
+                        composerDisabled && styles.inputWrapperDisabled,
                         {
-                            backgroundColor: colors.input,
+                            backgroundColor: composerDisabled
+                                ? colors.cardSoft
+                                : colors.input,
                             borderColor: colors.inputBorder,
                         },
                     ]}
@@ -187,29 +293,39 @@ export default function IndividualChatComposer({
                         <TextInput
                             value={messageText}
                             onChangeText={handleChangeText}
-                            onFocus={onFocusInput}
-                            placeholder={tr("inputPlaceholder", "Type a message...")}
+                            onFocus={composerDisabled ? undefined : onFocusInput}
+                            placeholder={
+                                composerDisabled
+                                    ? tr(
+                                        "inputBlockedPlaceholder",
+                                        isArabic ? "إرسال الرسائل غير متاح" : "Messaging unavailable"
+                                    )
+                                    : tr("inputPlaceholder", "Type a message...")
+                            }
                             placeholderTextColor={colors.muted}
                             style={[
                                 styles.input,
                                 isCompactScreen && styles.inputCompact,
-                                { color: colors.text },
+                                { color: composerDisabled ? colors.muted : colors.text },
                                 getTextInputDirectionFromValue(messageText, isArabic),
                             ]}
                             multiline
                             scrollEnabled
+                            editable={!composerDisabled}
                         />
                     )}
 
                     {!isRecordingVoice && (
                         <TouchableOpacity
                             activeOpacity={0.8}
-                            onPress={onTakePhoto}
+                            onPress={handleCameraPress}
+                            disabled={composerDisabled}
+                            style={composerDisabled && styles.disabledControl}
                         >
                             <Ionicons
                                 name="camera-outline"
                                 size={25}
-                                color={colors.text}
+                                color={composerDisabled ? colors.muted : colors.text}
                             />
                         </TouchableOpacity>
                     )}
@@ -219,26 +335,32 @@ export default function IndividualChatComposer({
                     style={[
                         styles.actionButton,
                         isCompactScreen && styles.actionButtonCompact,
+                        composerDisabled && styles.actionButtonDisabled,
                         {
-                            backgroundColor: isRecordingVoice
-                                ? colors.danger
-                                : hasMessage
-                                    ? colors.blue
-                                    : colors.primary,
+                            backgroundColor: composerDisabled
+                                ? colors.border
+                                : isRecordingVoice
+                                    ? colors.danger
+                                    : hasMessage
+                                        ? colors.blue
+                                        : colors.primary,
                         },
                     ]}
                     activeOpacity={0.85}
-                    onPress={hasMessage && !isRecordingVoice ? onSend : onMicPress}
+                    onPress={handleActionPress}
+                    disabled={composerDisabled}
                     accessibilityLabel={
-                        isRecordingVoice
-                            ? tr("stopRecording", "Stop recording")
-                            : hasMessage
-                                ? tr("send", "Send")
-                                : tr("recordVoiceMessage", "Record voice message")
+                        composerDisabled
+                            ? tr("messagingUnavailable", "Messaging unavailable")
+                            : isRecordingVoice
+                                ? tr("stopRecording", "Stop recording")
+                                : hasMessage
+                                    ? tr("send", "Send")
+                                    : tr("recordVoiceMessage", "Record voice message")
                     }
                 >
                     <Ionicons
-                        name={isRecordingVoice ? "stop" : hasMessage ? "send" : "mic"}
+                        name={composerDisabled ? "lock-closed" : isRecordingVoice ? "stop" : hasMessage ? "send" : "mic"}
                         size={isCompactScreen ? 20 : 22}
                         color="#FFFFFF"
                     />
@@ -253,12 +375,43 @@ const styles = StyleSheet.create({
         borderTopWidth: 1,
     },
 
+    blockedBanner: {
+        marginHorizontal: 14,
+        marginTop: 8,
+        borderWidth: 1,
+        borderRadius: 16,
+        paddingVertical: 9,
+        paddingHorizontal: 11,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+    },
+
+    blockedBannerCompact: {
+        marginHorizontal: 10,
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        borderRadius: 14,
+    },
+
+    blockedBannerText: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 13,
+        lineHeight: 18,
+        fontWeight: "800",
+    },
+
     composerWrapper: {
         paddingHorizontal: 14,
         paddingTop: 8,
         flexDirection: "row",
         alignItems: "flex-end",
         gap: 8,
+    },
+
+    composerWrapperDisabled: {
+        opacity: 0.95,
     },
 
     composerWrapperCompact: {
@@ -324,6 +477,10 @@ const styles = StyleSheet.create({
         flexShrink: 0,
     },
 
+    disabledControl: {
+        opacity: 0.55,
+    },
+
     inputWrapper: {
         flex: 1,
         minHeight: 46,
@@ -336,6 +493,10 @@ const styles = StyleSheet.create({
         alignItems: "center",
         gap: 8,
         minWidth: 0,
+    },
+
+    inputWrapperDisabled: {
+        opacity: 0.9,
     },
 
     inputWrapperCompact: {
@@ -387,6 +548,10 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
+    },
+
+    actionButtonDisabled: {
+        opacity: 0.75,
     },
 
     actionButtonCompact: {

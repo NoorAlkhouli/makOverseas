@@ -297,6 +297,83 @@ const getConversationLastSeenValue = (conversation) => getPresenceValueFromPaths
     "user.lastSeen",
 ]);
 
+const normalizeChatBoolean = (value, fallback = false) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+
+    if (typeof value === "string") {
+        const cleanValue = value.trim().toLowerCase();
+
+        if (["1", "true", "yes", "active", "blocked", "forbidden"].includes(cleanValue)) {
+            return true;
+        }
+
+        if (["0", "false", "no", "inactive", "null", "undefined", "allowed"].includes(cleanValue)) {
+            return false;
+        }
+    }
+
+    return fallback;
+};
+
+const getBooleanValueFromPaths = (source, paths, fallback = null) => {
+    for (const path of paths) {
+        const value = String(path)
+            .split(".")
+            .reduce((current, key) => current?.[key], source);
+
+        if (value !== undefined && value !== null && value !== "") {
+            return normalizeChatBoolean(value, fallback === true);
+        }
+    }
+
+    return fallback;
+};
+
+const getConversationBlockedState = (conversation) => {
+    return getBooleanValueFromPaths(conversation, [
+        "is_blocked",
+        "isBlocked",
+        "blocked",
+        "blocked_by_me",
+        "blockedByMe",
+        "is_blocked_for_me",
+        "isBlockedForMe",
+        "block.is_blocked",
+        "block.isBlocked",
+        "block.blocked_by_me",
+        "block.blockedByMe",
+        "block.status",
+        "meta.is_blocked",
+        "meta.isBlocked",
+        "conversation_block.is_blocked",
+        "conversationBlock.isBlocked",
+    ], false) === true;
+};
+
+const getConversationCanSendMessage = (conversation) => {
+    const blocked = getConversationBlockedState(conversation);
+
+    if (blocked) {
+        return false;
+    }
+
+    const canSendValue = getBooleanValueFromPaths(conversation, [
+        "can_send_message",
+        "canSendMessage",
+        "can_send_messages",
+        "canSendMessages",
+        "permissions.can_send_message",
+        "permissions.canSendMessage",
+        "abilities.can_send_message",
+        "abilities.canSendMessage",
+        "meta.can_send_message",
+        "meta.canSendMessage",
+    ], null);
+
+    return canSendValue === null ? true : canSendValue === true;
+};
+
 const getProfilePayload = (response) => {
     return (
         response?.data?.user ||
@@ -1202,6 +1279,9 @@ const normalizeConversation = (conversation, isArabic) => {
         "user.avatarUrl",
     ]);
 
+    const isBlocked = getConversationBlockedState(conversation);
+    const canSendMessage = getConversationCanSendMessage(conversation);
+
     return {
         id: String(id || conversation?.uuid || conversation?.key || Date.now()),
         conversationId: id,
@@ -1212,10 +1292,12 @@ const normalizeConversation = (conversation, isArabic) => {
         message: String(message || ""),
         time: formatConversationTime(time, isArabic),
         unread: Number.isFinite(unread) ? unread : 0,
-        status: isOnline ? "online" : "offline",
-        isOnline,
+        status: isBlocked ? "blocked" : isOnline ? "online" : "offline",
+        isOnline: isBlocked ? false : isOnline,
         lastSeenAt,
         isGroup,
+        isBlocked,
+        canSendMessage,
         raw: conversation,
     };
 };
@@ -1420,6 +1502,7 @@ export default function Chat({ navigation }) {
     const [activeFilter, setActiveFilter] = useState("all");
     const [showNavTitle, setShowNavTitle] = useState(false);
     const [selectMode, setSelectMode] = useState(false);
+    const [selectedConversationIds, setSelectedConversationIds] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -2009,31 +2092,104 @@ export default function Chat({ navigation }) {
     };
 
     const handleSelectChats = () => {
-        setSelectMode((prev) => !prev);
+        setSelectMode((prev) => {
+            const nextValue = !prev;
+
+            if (!nextValue) {
+                setSelectedConversationIds([]);
+            }
+
+            return nextValue;
+        });
+    };
+
+    const toggleSelectedConversation = (chat) => {
+        const selectableConversationId = normalizeId(chat?.conversationId);
+
+        if (!selectableConversationId) {
+            return;
+        }
+
+        setSelectedConversationIds((currentIds) => {
+            const isAlreadySelected = currentIds.some(
+                (id) => String(id) === String(selectableConversationId)
+            );
+
+            if (isAlreadySelected) {
+                return currentIds.filter(
+                    (id) => String(id) !== String(selectableConversationId)
+                );
+            }
+
+            return [...currentIds, selectableConversationId];
+        });
     };
 
     const handleReadAll = async () => {
         const previousChats = chats;
+        const selectedIds = selectedConversationIds
+            .map((id) => normalizeId(id))
+            .filter(Boolean);
+        const shouldReadSelectedOnly = selectMode && selectedIds.length > 0;
 
         setChats((currentChats) =>
-            currentChats.map((chat) => ({
-                ...chat,
-                unread: 0,
-            }))
+            currentChats.map((chat) => {
+                const chatConversationId = normalizeId(chat.conversationId);
+
+                if (shouldReadSelectedOnly) {
+                    const isSelected = selectedIds.some(
+                        (id) => String(id) === String(chatConversationId)
+                    );
+
+                    return isSelected
+                        ? {
+                            ...chat,
+                            unread: 0,
+                        }
+                        : chat;
+                }
+
+                return {
+                    ...chat,
+                    unread: 0,
+                };
+            })
         );
 
         try {
+            if (shouldReadSelectedOnly) {
+                await chatService.markConversationsRead(selectedIds);
+
+                selectedIds.forEach((conversationId) => {
+                    DeviceEventEmitter.emit(BOTTOM_TAB_BADGE_EVENTS.CLEAR_CHAT_CONVERSATION, {
+                        conversationId,
+                    });
+                });
+
+                setSelectedConversationIds([]);
+                setSelectMode(false);
+                return;
+            }
+
             await chatService.markAllConversationsRead();
 
             DeviceEventEmitter.emit(BOTTOM_TAB_BADGE_EVENTS.CLEAR_ALL_CHAT);
+            setSelectedConversationIds([]);
+            setSelectMode(false);
         } catch (error) {
-            console.log("Mark all conversations read error:", error?.raw || error);
+            console.log(
+                shouldReadSelectedOnly
+                    ? "Mark selected conversations read error:"
+                    : "Mark all conversations read error:",
+                error?.raw || error
+            );
             setChats(previousChats);
         }
     };
 
     const handleChatPress = (selectedChat) => {
         if (selectMode) {
+            toggleSelectedConversation(selectedChat);
             return;
         }
 
@@ -2067,7 +2223,9 @@ export default function Chat({ navigation }) {
             typeof isUserOnline === "function" &&
             isUserOnline(selectedChatTargetUserId)
         );
-        const selectedChatIsOnline = !selectedChat.isGroup && (
+        const selectedChatIsBlocked =
+            selectedChat.isBlocked === true || selectedChat.canSendMessage === false;
+        const selectedChatIsOnline = !selectedChatIsBlocked && !selectedChat.isGroup && (
             selectedChatLiveIsOnline ||
             (!selectedChatTargetUserId && selectedChat.isOnline === true)
         );
@@ -2108,6 +2266,10 @@ export default function Chat({ navigation }) {
             target_user_id: selectedChat.targetUserId,
             isGroup: selectedChat.isGroup,
             is_group: selectedChat.isGroup,
+            isBlocked: selectedChatIsBlocked,
+            is_blocked: selectedChatIsBlocked,
+            canSendMessage: selectedChat.canSendMessage !== false,
+            can_send_message: selectedChat.canSendMessage !== false,
             customer: selectedChat.isCustomerSearchResult
                 ? {
                     id: selectedChat.targetUserId,
@@ -2128,6 +2290,10 @@ export default function Chat({ navigation }) {
                 status: selectedChatIsOnline ? "online" : "offline",
                 is_online: selectedChatIsOnline,
                 isOnline: selectedChatIsOnline,
+                is_blocked: selectedChatIsBlocked,
+                isBlocked: selectedChatIsBlocked,
+                can_send_message: selectedChat.canSendMessage !== false,
+                canSendMessage: selectedChat.canSendMessage !== false,
                 last_seen_at: selectedChat.lastSeenAt,
                 lastSeenAt: selectedChat.lastSeenAt,
                 conversation_id: selectedChat.conversationId,
@@ -2169,7 +2335,10 @@ export default function Chat({ navigation }) {
         },
         {
             key: "readAll",
-            label: t("chat.menuReadAll"),
+            label:
+                selectMode && selectedConversationIds.length > 0
+                    ? `${t("chat.menuReadAll")} (${selectedConversationIds.length})`
+                    : t("chat.menuReadAll"),
             iconType: "feather",
             iconName: "check-circle",
             onPress: handleReadAll,
@@ -2273,19 +2442,34 @@ export default function Chat({ navigation }) {
             <>
                 {visibleChats.map((chat) => {
                     const normalizedTargetUserId = normalizeId(chat.targetUserId);
+                    const selectableConversationId = normalizeId(chat.conversationId);
+                    const isSelectedConversation = !!(
+                        selectableConversationId &&
+                        selectedConversationIds.some(
+                            (id) => String(id) === String(selectableConversationId)
+                        )
+                    );
                     const liveIsOnline = !!(
                         !chat.isGroup &&
                         normalizedTargetUserId &&
                         typeof isUserOnline === "function" &&
                         isUserOnline(normalizedTargetUserId)
                     );
-                    const chatIsOnline = !chat.isGroup && (
+                    const chatIsBlocked = chat.isBlocked === true || chat.canSendMessage === false;
+                    const chatIsOnline = !chatIsBlocked && !chat.isGroup && (
                         liveIsOnline ||
                         (!normalizedTargetUserId && chat.isOnline === true)
                     );
-                    const statusText = chatIsOnline
-                        ? (isArabic ? "متصل الآن" : "Online")
-                        : formatLastSeenText(chat.lastSeenAt, isArabic);
+                    const statusText = chatIsBlocked
+                        ? (isArabic ? "محظور" : "Blocked")
+                        : chatIsOnline
+                            ? (isArabic ? "متصل الآن" : "Online")
+                            : formatLastSeenText(chat.lastSeenAt, isArabic);
+                    const statusColor = chatIsBlocked
+                        ? colors.danger
+                        : chatIsOnline
+                            ? colors.primary
+                            : colors.textMuted;
 
                     console.log("[CHAT ONLINE DEBUG] Render chat row:", {
                         name: chat.name,
@@ -2300,6 +2484,8 @@ export default function Chat({ navigation }) {
                         rawOnlineStatusCamel: chat.raw?.onlineStatus,
                         liveIsOnline,
                         chatIsOnline,
+                        chatIsBlocked,
+                        canSendMessage: chat.canSendMessage,
                         onlineUserIds,
                         status: chat.status,
                         statusText,
@@ -2313,11 +2499,20 @@ export default function Chat({ navigation }) {
                             onPress={() => handleChatPress(chat)}
                         >
                             {selectMode && (
-                                <View style={styles.selectCircle}>
+                                <View
+                                    style={[
+                                        styles.selectCircle,
+                                        isSelectedConversation && styles.selectCircleSelected,
+                                    ]}
+                                >
                                     <Feather
-                                        name="circle"
-                                        size={20}
-                                        color={colors.textSecondary}
+                                        name={isSelectedConversation ? "check" : "circle"}
+                                        size={isSelectedConversation ? 17 : 20}
+                                        color={
+                                            isSelectedConversation
+                                                ? colors.darkText
+                                                : colors.textSecondary
+                                        }
                                     />
                                 </View>
                             )}
@@ -2341,7 +2536,8 @@ export default function Chat({ navigation }) {
                                 <View
                                     style={[
                                         styles.statusDot,
-                                        !chatIsOnline && styles.statusDotOffline,
+                                        !chatIsOnline && !chatIsBlocked && styles.statusDotOffline,
+                                        chatIsBlocked && { backgroundColor: colors.danger, opacity: 1 },
                                     ]}
                                 />
                             </View>
@@ -2383,7 +2579,7 @@ export default function Chat({ navigation }) {
                                     <Text
                                         style={[
                                             styles.presenceText,
-                                            { color: chatIsOnline ? colors.primary : colors.textMuted },
+                                            { color: statusColor },
                                             getTextDirectionStyle(isArabic),
                                         ]}
                                         numberOfLines={1}
@@ -2625,6 +2821,10 @@ const createStyles = (colors) =>
             borderRadius: 14,
             alignItems: "center",
             justifyContent: "center",
+        },
+
+        selectCircleSelected: {
+            backgroundColor: colors.primary,
         },
 
         headerBox: {

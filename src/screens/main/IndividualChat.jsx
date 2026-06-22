@@ -1,9 +1,9 @@
+import QuoteFormModal from "@/src/components/quotes/QuoteFormModal";
 import {
     getRowDirectionStyle,
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
-import { useAppRealtime } from "../../context/AppRealtimeProvider";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
     AudioModule,
@@ -40,18 +40,18 @@ import ChatPatternBackground from "../../components/ChatPatternBackground";
 import IndividualChatComposer from "../../components/IndividualChatComposer";
 import IndividualChatHeader from "../../components/IndividualChatHeader";
 import IndividualChatMessagesList from "../../components/IndividualChatMessagesList";
-import QuoteFormModal from "@/src/components/quotes/QuoteFormModal";
 import { API_BASE_URL } from "../../constants/config/apiConfig";
+import { useAppRealtime } from "../../context/AppRealtimeProvider";
 import chatService from "../../services/api/chatService";
 import {
     leaveConversationChannel,
     sendConversationTypingWhisper,
     subscribeToConversationChannel,
 } from "../../services/realtime/conversationRealtimeService";
-import {
-    ScannedDocumentConfirmModal,
-    useScanDocument,
-} from "../../components/ScanDocumentTools";
+// import {
+//     ScannedDocumentConfirmModal,
+//     useScanDocument,
+// } from "../../components/ScanDocumentTools";
 import {
     ChatCameraCaptureModal,
     MediaConfirmModal,
@@ -326,8 +326,205 @@ const getInitialBlockedState = (route, employee) => {
         route?.params?.is_blocked ||
         route?.params?.conversation?.is_blocked ||
         route?.params?.conversation?.blocked_by_me ||
+        route?.params?.conversation?.is_blocked_for_me ||
+        route?.params?.conversation?.block ||
+        route?.params?.isBlockedForMe ||
+        route?.params?.is_blocked_for_me ||
+        route?.params?.blockedByMe ||
+        route?.params?.blocked_by_me ||
         employee?.is_blocked ||
-        employee?.blocked_by_me
+        employee?.blocked_by_me ||
+        employee?.is_blocked_for_me ||
+        employee?.block
+    );
+};
+
+const normalizeTruthy = (value) => {
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+
+    if (typeof value === "string") {
+        const cleanValue = value.trim().toLowerCase();
+
+        if (["1", "true", "yes", "blocked", "disabled"].includes(cleanValue)) {
+            return true;
+        }
+
+        if (["0", "false", "no", "null", "undefined", "active", "enabled"].includes(cleanValue)) {
+            return false;
+        }
+    }
+
+    return null;
+};
+
+const getNestedSourceValue = (source, paths = []) => {
+    if (!source || typeof source !== "object") {
+        return null;
+    }
+
+    for (const path of paths) {
+        const value = String(path)
+            .split(".")
+            .reduce((current, key) => current?.[key], source);
+
+        if (value !== undefined && value !== null && value !== "") {
+            return value;
+        }
+    }
+
+    return null;
+};
+
+const getBooleanFromSources = (sources = [], paths = []) => {
+    for (const source of sources) {
+        const value = getNestedSourceValue(source, paths);
+        const normalized = normalizeTruthy(value);
+
+        if (normalized !== null) {
+            return normalized;
+        }
+    }
+
+    return null;
+};
+
+const getCurrentUserIdFromProfile = (profile) => {
+    return (
+        profile?.id ||
+        profile?.user_id ||
+        profile?.userId ||
+        profile?.user?.id ||
+        profile?.profile?.id ||
+        null
+    );
+};
+
+const getConversationBlockInfoFromSources = (...sources) => {
+    const validSources = sources.filter(Boolean);
+
+    const blockedForMe = getBooleanFromSources(validSources, [
+        "is_blocked_for_me",
+        "isBlockedForMe",
+        "blocked_for_me",
+        "blockedForMe",
+        "meta.is_blocked_for_me",
+        "meta.isBlockedForMe",
+        "conversation.is_blocked_for_me",
+        "conversation.isBlockedForMe",
+    ]);
+
+    const blockedByMe = getBooleanFromSources(validSources, [
+        "blocked_by_me",
+        "blockedByMe",
+        "is_blocked_by_me",
+        "isBlockedByMe",
+        "meta.blocked_by_me",
+        "meta.blockedByMe",
+        "conversation.blocked_by_me",
+        "conversation.blockedByMe",
+    ]);
+
+    const directBlocked = getBooleanFromSources(validSources, [
+        "is_blocked",
+        "isBlocked",
+        "blocked",
+        "meta.is_blocked",
+        "meta.isBlocked",
+        "conversation.is_blocked",
+        "conversation.isBlocked",
+    ]);
+
+    const hasBlockObject = validSources.some((source) => {
+        const block = getNestedSourceValue(source, [
+            "block",
+            "conversation.block",
+            "data.block",
+            "data.conversation.block",
+        ]);
+
+        return !!block && typeof block === "object";
+    });
+
+    const isBlocked =
+        blockedForMe === true ||
+        blockedByMe === true ||
+        directBlocked === true ||
+        hasBlockObject;
+
+    return {
+        isBlocked,
+        blockedForMe: blockedForMe === true,
+        blockedByMe: blockedByMe === true,
+        hasBlockObject,
+    };
+};
+
+const getConversationCanSendMessageFromSources = (...sources) => {
+    const value = getBooleanFromSources(sources.filter(Boolean), [
+        "can_send_message",
+        "canSendMessage",
+        "permissions.can_send_message",
+        "permissions.canSendMessage",
+        "meta.can_send_message",
+        "meta.canSendMessage",
+        "conversation.can_send_message",
+        "conversation.canSendMessage",
+        "data.can_send_message",
+        "data.canSendMessage",
+        "data.conversation.can_send_message",
+        "data.conversation.canSendMessage",
+    ]);
+
+    return value;
+};
+
+const getConversationCanBlockFromSources = (...sources) => {
+    const value = getBooleanFromSources(sources.filter(Boolean), [
+        "can_block",
+        "canBlock",
+        "can_block_customer",
+        "canBlockCustomer",
+        "can_block_participants",
+        "canBlockParticipants",
+        "permissions.can_block",
+        "permissions.canBlock",
+        "permissions.block",
+        "abilities.can_block",
+        "abilities.canBlock",
+        "meta.can_block",
+        "meta.canBlock",
+        "conversation.can_block",
+        "conversation.canBlock",
+    ]);
+
+    return value;
+};
+
+const getConversationIdFromBlockEvent = (payload) => {
+    return getNormalizedChatValue(
+        payload?.conversation_id ||
+        payload?.conversationId ||
+        payload?.conversation?.id ||
+        payload?.data?.conversation_id ||
+        payload?.data?.conversationId ||
+        payload?.data?.conversation?.id ||
+        payload?.item?.conversation_id ||
+        payload?.item?.conversationId ||
+        payload?.item?.conversation?.id ||
+        null
+    );
+};
+
+const getConversationPayloadFromBlockEvent = (payload) => {
+    return (
+        payload?.conversation ||
+        payload?.data?.conversation ||
+        payload?.item?.conversation ||
+        payload?.data ||
+        payload?.item ||
+        payload ||
+        null
     );
 };
 
@@ -615,6 +812,12 @@ const USER_ROLE = {
 };
 
 const canRoleCreateQuotes = (roleValue) => {
+    const numericRole = Number(roleValue);
+
+    return numericRole === USER_ROLE.EMPLOYEE || numericRole === USER_ROLE.ADMIN;
+};
+
+const canRoleBlockConversations = (roleValue) => {
     const numericRole = Number(roleValue);
 
     return numericRole === USER_ROLE.EMPLOYEE || numericRole === USER_ROLE.ADMIN;
@@ -2397,6 +2600,7 @@ export default function IndividualChatScreen({ navigation, route }) {
     const {
         currentUserId,
         isUserOnline,
+        latestConversationBlockEvent,
     } = useAppRealtime();
 
     const employee = route?.params?.employee;
@@ -2486,6 +2690,19 @@ export default function IndividualChatScreen({ navigation, route }) {
     const canLoadOlderMessagesRef = useRef(false);
     const [canCreateQuote, setCanCreateQuote] = useState(false);
     const [currentUserRole, setCurrentUserRole] = useState(null);
+    const [currentProfileUserId, setCurrentProfileUserId] = useState(null);
+    const [canSendMessage, setCanSendMessage] = useState(() => {
+        const initialCanSend = getConversationCanSendMessageFromSources(
+            conversation,
+            employee,
+            route?.params?.conversation,
+            route?.params
+        );
+
+        return initialCanSend === null ? !getInitialBlockedState(route, employee) : initialCanSend;
+    });
+    const [canBlockConversation, setCanBlockConversation] = useState(false);
+    const lastHandledBlockEventRef = useRef(null);
     const [quoteFormVisible, setQuoteFormVisible] = useState(false);
     const [isSubmittingQuote, setIsSubmittingQuote] = useState(false);
 
@@ -2536,8 +2753,31 @@ export default function IndividualChatScreen({ navigation, route }) {
     }, [appColors, isDark]);
 
     const canViewerCreateQuote =
-        canRoleCreateQuotes(currentUserRole) ||
-        (currentUserRole === null && canCreateQuote);
+        (canSendMessage && !isBlocked) &&
+        (canRoleCreateQuotes(currentUserRole) ||
+            (currentUserRole === null && canCreateQuote));
+
+    const cannotSendBecauseBlocked = isBlocked || !canSendMessage;
+    const blockedComposerMessage = isBlocked
+        ? tr(
+            "blockedComposerMessage",
+            isArabic
+                ? "هذه المحادثة محظورة، لا يمكنك إرسال رسائل."
+                : "This conversation is blocked. You cannot send messages."
+        )
+        : tr(
+            "sendingUnavailableMessage",
+            isArabic
+                ? "إرسال الرسائل غير متاح في هذه المحادثة."
+                : "Sending messages is not available in this conversation."
+        );
+
+    const canViewerBlockConversation =
+        !isGroupConversation &&
+        (
+            canBlockConversation === true ||
+            canRoleBlockConversations(currentUserRole)
+        );
 
     useEffect(() => {
         let isMounted = true;
@@ -2552,8 +2792,23 @@ export default function IndividualChatScreen({ navigation, route }) {
                 }
 
                 const profileRole = getProfileRoleValue(profile);
+                const profileUserId = getCurrentUserIdFromProfile(profile);
 
                 setCurrentUserRole(profileRole);
+                setCurrentProfileUserId(profileUserId);
+                const initialCanBlockValue = getConversationCanBlockFromSources(
+                    conversation,
+                    employee,
+                    route?.params
+                );
+
+                setCanBlockConversation(
+                    !initialIsGroupConversation &&
+                    (
+                        canRoleBlockConversations(profileRole) ||
+                        initialCanBlockValue === true
+                    )
+                );
 
                 if (profileRole !== null) {
                     setCanCreateQuote(canRoleCreateQuotes(profileRole));
@@ -2597,6 +2852,28 @@ export default function IndividualChatScreen({ navigation, route }) {
     const scrollToBottom = (animated = true) => {
         requestAnimationFrame(() => {
             messagesScrollRef.current?.scrollToEnd({ animated });
+        });
+    };
+
+    const markActiveConversationRead = (
+        conversationIdValue = conversationId,
+        sourceMessages = messagesRef.current || []
+    ) => {
+        const normalizedConversationId = getNormalizedChatValue(conversationIdValue);
+
+        if (!normalizedConversationId) {
+            return;
+        }
+
+        const safeMessages = Array.isArray(sourceMessages) ? sourceMessages : [];
+        const lastMessage = safeMessages[safeMessages.length - 1] || null;
+        const lastMessageId = getValidApiMessageId(lastMessage);
+
+        chatService.markConversationRead(
+            normalizedConversationId,
+            lastMessageId
+        ).catch((error) => {
+            console.log("Mark conversation read error:", error?.raw || error);
         });
     };
 
@@ -2675,6 +2952,13 @@ export default function IndividualChatScreen({ navigation, route }) {
     }, [messages.length]);
 
     useEffect(() => {
+        if (cannotSendBecauseBlocked) {
+            cancelVoiceRecordingIfActive();
+            sendTypingWhisper(false);
+        }
+    }, [cannotSendBecauseBlocked]);
+
+    useEffect(() => {
         const showEvent =
             Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
         const hideEvent =
@@ -2703,13 +2987,7 @@ export default function IndividualChatScreen({ navigation, route }) {
     }, []);
 
     useEffect(() => {
-        if (!conversationId) {
-            return;
-        }
-
-        chatService.markConversationRead(conversationId).catch((error) => {
-            console.log("Mark conversation read error:", error);
-        });
+        markActiveConversationRead(conversationId);
     }, [conversationId]);
 
     useEffect(() => {
@@ -2739,6 +3017,46 @@ export default function IndividualChatScreen({ navigation, route }) {
 
         return unsubscribe;
     }, [navigation, conversationId]);
+
+    useEffect(() => {
+        if (!latestConversationBlockEvent) {
+            return;
+        }
+
+        if (lastHandledBlockEventRef.current === latestConversationBlockEvent) {
+            return;
+        }
+
+        lastHandledBlockEventRef.current = latestConversationBlockEvent;
+
+        const normalizedConversationId = getNormalizedChatValue(conversationId);
+        const blockConversationId = getConversationIdFromBlockEvent(latestConversationBlockEvent);
+
+        if (
+            normalizedConversationId &&
+            blockConversationId &&
+            String(normalizedConversationId) !== String(blockConversationId)
+        ) {
+            return;
+        }
+
+        const blockPayload = getConversationPayloadFromBlockEvent(latestConversationBlockEvent);
+        const blockInfo = getConversationBlockInfoFromSources(blockPayload, latestConversationBlockEvent);
+        const nextCanSend = getConversationCanSendMessageFromSources(blockPayload, latestConversationBlockEvent);
+
+        setIsBlocked(blockInfo.isBlocked);
+
+        if (nextCanSend !== null) {
+            setCanSendMessage(nextCanSend);
+        } else {
+            setCanSendMessage(!blockInfo.isBlocked);
+        }
+
+        if (blockInfo.isBlocked) {
+            cancelVoiceRecordingIfActive();
+            sendTypingWhisper(false);
+        }
+    }, [latestConversationBlockEvent, conversationId]);
 
     useEffect(() => {
         const normalizedConversationId = getNormalizedChatValue(conversationId);
@@ -2893,6 +3211,11 @@ export default function IndividualChatScreen({ navigation, route }) {
 
                     return [...prevMessages, preparedMessage];
                 });
+
+                markActiveConversationRead(normalizedConversationId, [
+                    ...currentMessages,
+                    preparedMessage,
+                ]);
 
                 setTimeout(() => {
                     scrollToBottom(true);
@@ -3073,6 +3396,46 @@ export default function IndividualChatScreen({ navigation, route }) {
                     mergeChatProfileInfo(currentInfo, nextChatProfileInfo)
                 );
 
+                const nextCanSendValue = getConversationCanSendMessageFromSources(
+                    showConversationObject,
+                    showConversationObject?.raw,
+                    showConversationObject?.meta,
+                    showConversationObject?.permissions,
+                    conversation,
+                    employee,
+                    route?.params
+                );
+                const nextBlockInfo = getConversationBlockInfoFromSources(
+                    showConversationObject,
+                    showConversationObject?.raw,
+                    showConversationObject?.meta,
+                    showConversationObject?.permissions,
+                    conversation,
+                    employee,
+                    route?.params
+                );
+                const nextCanBlockValue = getConversationCanBlockFromSources(
+                    showConversationObject,
+                    showConversationObject?.raw,
+                    showConversationObject?.meta,
+                    showConversationObject?.permissions,
+                    conversation,
+                    employee,
+                    route?.params
+                );
+
+                setIsBlocked(nextBlockInfo.isBlocked);
+                setCanSendMessage(
+                    nextCanSendValue === null ? !nextBlockInfo.isBlocked : nextCanSendValue
+                );
+                setCanBlockConversation(
+                    !nextIsGroup &&
+                    (
+                        canRoleBlockConversations(currentUserRole) ||
+                        nextCanBlockValue === true
+                    )
+                );
+
                 setCanCreateQuote((currentValue) => {
                     if (canRoleCreateQuotes(currentUserRole)) {
                         return true;
@@ -3163,8 +3526,10 @@ export default function IndividualChatScreen({ navigation, route }) {
                         ),
                     ];
                 });
+
+                markActiveConversationRead(nextConversationId, preparedMessages);
+
                 setConversationMessagesMeta(getShowConversationMessagesMeta(response));
-                setIsBlocked(getConversationBlockedStateFromShowResponse(response));
 
                 setTimeout(() => {
                     scrollToBottom(false);
@@ -3488,6 +3853,11 @@ export default function IndividualChatScreen({ navigation, route }) {
         const activeConversationIdForSend = getNormalizedChatValue(conversationId);
         const activeTargetUserIdForSend = getNormalizedChatValue(targetUserId);
 
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return false;
+        }
+
         if (!activeConversationIdForSend && !activeTargetUserIdForSend) {
             Alert.alert(
                 tr("missingConversationTitle", "Conversation not ready"),
@@ -3616,6 +3986,11 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const handleTyping = (text) => {
+        if (cannotSendBecauseBlocked) {
+            sendTypingWhisper(false);
+            return;
+        }
+
         const hasTypedText = String(text || "").trim().length > 0;
         const now = Date.now();
 
@@ -3647,6 +4022,11 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const handleSend = () => {
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return;
+        }
+
         const cleanText = messageText.trim();
         if (!cleanText) return;
 
@@ -3668,6 +4048,11 @@ export default function IndividualChatScreen({ navigation, route }) {
 
     const handleSubmitQuote = async (quotePayload) => {
         const activeConversationIdForQuote = getNormalizedChatValue(conversationId);
+
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return false;
+        }
 
         if (!canViewerCreateQuote) {
             Alert.alert(
@@ -3859,6 +4244,11 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const handleSendMediaMessage = async (mediaItem) => {
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return false;
+        }
+
         if (!mediaItem) return;
 
         const mediaUri =
@@ -3919,6 +4309,11 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const startVoiceRecording = async () => {
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return;
+        }
+
         if (isRecordingRef.current || recorderState?.isRecording || isStoppingRecordingRef.current) {
             return;
         }
@@ -4184,27 +4579,39 @@ export default function IndividualChatScreen({ navigation, route }) {
         });
     }, [cameraCaptureVisible, pickMediaFromLibrary]);
 
-    const {
-        selectedScannedDocument,
-        selectedScannedDocuments,
-        activeScannedPageIndex,
-        isScanningDocument,
-        isCreatingScannedPdf,
-        scanDocumentWithCamera,
-        handleAddScannedPages,
-        handleRetakeScannedPage,
-        handleDeleteScannedPage,
-        handleCancelScannedDocument,
-        handleConfirmSendScannedDocument,
-        setActiveScannedPageIndex,
-    } = useScanDocument({
-        tr,
-        addMessages,
-        cancelVoiceRecordingIfActive,
-        onSendScannedDocument: handleSendMediaMessage,
-    });
+    // const {
+    //     selectedScannedDocument,
+    //     selectedScannedDocuments,
+    //     activeScannedPageIndex,
+    //     isScanningDocument,
+    //     isCreatingScannedPdf,
+    //     scanDocumentWithCamera,
+    //     handleAddScannedPages,
+    //     handleRetakeScannedPage,
+    //     handleDeleteScannedPage,
+    //     handleCancelScannedDocument,
+    //     handleConfirmSendScannedDocument,
+    //     setActiveScannedPageIndex,
+    // } = useScanDocument({
+    //     tr,
+    //     addMessages,
+    //     cancelVoiceRecordingIfActive,
+    //     onSendScannedDocument: handleSendMediaMessage,
+    // });
+
+    const showBlockedSendAlert = () => {
+        Alert.alert(
+            tr("blockedConversationTitle", isArabic ? "المحادثة محظورة" : "Conversation blocked"),
+            blockedComposerMessage
+        );
+    };
 
     const openAttachMenu = async () => {
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return;
+        }
+
         Keyboard.dismiss();
         await cancelVoiceRecordingIfActive();
 
@@ -4263,6 +4670,11 @@ export default function IndividualChatScreen({ navigation, route }) {
 
     const handleAttachmentPress = async (type) => {
         setAttachMenuVisible(false);
+
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return;
+        }
 
         if (type === "camera") {
             await takePhotoWithCamera();
@@ -4494,6 +4906,11 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const handleRetryFailedMessage = async (message) => {
+        if (cannotSendBecauseBlocked) {
+            showBlockedSendAlert();
+            return;
+        }
+
         if (!message?.isFailed) {
             return;
         }
@@ -4537,6 +4954,10 @@ export default function IndividualChatScreen({ navigation, route }) {
     const handleToggleBlockContact = () => {
         setMenuVisible(false);
 
+        if (!canViewerBlockConversation) {
+            return;
+        }
+
         if (!conversationId) {
             Alert.alert(
                 tr("missingConversationTitle", "Conversation not ready"),
@@ -4561,6 +4982,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                                 setIsMutatingChat(true);
                                 await chatService.unblockConversationCustomer(conversationId);
                                 setIsBlocked(false);
+                                setCanSendMessage(true);
                             } catch (error) {
                                 console.log("Unblock conversation error:", error);
 
@@ -4593,6 +5015,9 @@ export default function IndividualChatScreen({ navigation, route }) {
                             setIsMutatingChat(true);
                             await chatService.blockConversationCustomer(conversationId);
                             setIsBlocked(true);
+                            setCanSendMessage(false);
+                            await cancelVoiceRecordingIfActive();
+                            sendTypingWhisper(false);
                         } catch (error) {
                             console.log("Block conversation error:", error);
 
@@ -4744,6 +5169,8 @@ export default function IndividualChatScreen({ navigation, route }) {
                         onMicPress={handleMicPress}
                         replyingToMessage={replyingToMessage}
                         onCancelReply={() => setReplyingToMessage(null)}
+                        disabled={cannotSendBecauseBlocked}
+                        disabledReason={blockedComposerMessage}
                         onFocusInput={() => {
                             setTimeout(() => {
                                 scrollToBottom(true);
@@ -4781,6 +5208,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     language={language}
                     isDark={isDark}
                     isBlocked={isBlocked}
+                    canBlock={canViewerBlockConversation}
                     onChangeLanguage={handleChangeLanguage}
                     onChangeTheme={handleChangeTheme}
                     onToggleBlock={handleToggleBlockContact}
@@ -4892,7 +5320,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     }}
                 />
 
-                <ScannedDocumentConfirmModal
+                {/* <ScannedDocumentConfirmModal
                     visible={!!selectedScannedDocument}
                     documentItem={selectedScannedDocument}
                     documents={selectedScannedDocuments}
@@ -4906,7 +5334,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     onRetake={handleRetakeScannedPage}
                     onChangePage={setActiveScannedPageIndex}
                     onSend={handleConfirmSendScannedDocument}
-                /> 
+                />  */}
                 <DocumentPreviewModal
                     visible={!!previewDocument}
                     documentItem={previewDocument}
@@ -5531,6 +5959,7 @@ function ChatOptionsModal({
     language,
     isDark,
     isBlocked,
+    canBlock = false,
     onChangeLanguage,
     onChangeTheme,
     onToggleBlock,
@@ -5626,31 +6055,33 @@ function ChatOptionsModal({
                         />
                     </View>
 
-                    <TouchableOpacity
-                        style={[
-                            styles.dangerRow,
-                            { borderColor: isBlocked ? colors.primary : colors.border },
-                        ]}
-                        onPress={onToggleBlock}
-                        disabled={isMutatingChat}
-                    >
-                        <Ionicons
-                            name={isBlocked ? "checkmark-circle-outline" : "ban-outline"}
-                            size={22}
-                            color={isBlocked ? colors.primary : colors.danger}
-                        />
-
-                        <Text
+                    {canBlock && (
+                        <TouchableOpacity
                             style={[
-                                styles.dangerText,
-                                { color: isBlocked ? colors.primary : colors.danger },
+                                styles.dangerRow,
+                                { borderColor: isBlocked ? colors.primary : colors.border },
                             ]}
+                            onPress={onToggleBlock}
+                            disabled={isMutatingChat}
                         >
-                            {isBlocked
-                                ? tr("unblock", "Unblock Contact")
-                                : tr("block", "Block Contact")}
-                        </Text>
-                    </TouchableOpacity>
+                            <Ionicons
+                                name={isBlocked ? "checkmark-circle-outline" : "ban-outline"}
+                                size={22}
+                                color={isBlocked ? colors.primary : colors.danger}
+                            />
+
+                            <Text
+                                style={[
+                                    styles.dangerText,
+                                    { color: isBlocked ? colors.primary : colors.danger },
+                                ]}
+                            >
+                                {isBlocked
+                                    ? tr("unblock", "Unblock Contact")
+                                    : tr("block", "Block Contact")}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
 
                     <TouchableOpacity
                         style={[
