@@ -2,10 +2,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { CommonActions, useNavigation } from "@react-navigation/native";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    findNodeHandle,
     Image,
     KeyboardAvoidingView,
     Platform,
@@ -15,9 +16,11 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
+    UIManager,
+    useWindowDimensions,
     View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import {
@@ -118,7 +121,12 @@ const resetNavigationToLogin = (navigation) => {
 
 export default function Profile() {
     const navigation = useNavigation();
-    const { i18n } = useTranslation();
+    const { t, i18n } = useTranslation();
+    const { width, height } = useWindowDimensions();
+    const insets = useSafeAreaInsets();
+
+    const scrollViewRef = useRef(null);
+    const fullNameInputRef = useRef(null);
 
     const {
         colors,
@@ -130,9 +138,36 @@ export default function Profile() {
     const language = i18n.language === "ar" ? "ar" : "en";
     const isArabic = language === "ar";
 
+    const screenMetrics = useMemo(() => {
+        const shortestSide = Math.min(width, height);
+        const isTinyScreen = height < 620 || shortestSide < 340;
+        const isSmallScreen = height < 720 || shortestSide < 380;
+        const isLargeScreen = height >= 850 && shortestSide >= 390;
+
+        return {
+            width,
+            height,
+            isTinyScreen,
+            isSmallScreen,
+            isLargeScreen,
+            horizontalPadding: isTinyScreen ? 14 : isSmallScreen ? 16 : 18,
+            topPadding: isTinyScreen ? 12 : isSmallScreen ? 14 : 18,
+            bottomPadding: Math.max(
+                insets.bottom + (isTinyScreen ? 70 : isSmallScreen ? 90 : 110),
+                isTinyScreen ? 100 : 120
+            ),
+            focusedInputOffset: isTinyScreen ? 90 : isSmallScreen ? 110 : 130,
+            avatarSize: isTinyScreen ? 88 : isSmallScreen ? 102 : isLargeScreen ? 124 : 118,
+            pageTitleSize: isTinyScreen ? 24 : isSmallScreen ? 27 : 30,
+            cardRadius: isTinyScreen ? 22 : 28,
+            sectionRadius: isTinyScreen ? 20 : 24,
+            sectionPadding: isTinyScreen ? 13 : isSmallScreen ? 14 : 16,
+        };
+    }, [height, insets.bottom, width]);
+
     const styles = useMemo(
-        () => createStyles(colors, isArabic),
-        [colors, isArabic]
+        () => createStyles(colors, isArabic, screenMetrics),
+        [colors, isArabic, screenMetrics]
     );
 
     const [profile, setProfile] = useState(null);
@@ -165,6 +200,36 @@ export default function Profile() {
         );
     }, [fullName, profile?.fullName, selectedAvatar]);
 
+    const scrollToFocusedInput = useCallback((inputRef) => {
+        const delay = Platform.OS === "android" ? 320 : 120;
+
+        setTimeout(() => {
+            const scrollNode = findNodeHandle(scrollViewRef.current);
+            const inputNode = findNodeHandle(inputRef.current);
+
+            if (!scrollNode || !inputNode || !scrollViewRef.current?.scrollTo) {
+                return;
+            }
+
+            UIManager.measureLayout(
+                inputNode,
+                scrollNode,
+                () => { },
+                (_x, y) => {
+                    const nextY = Math.max(
+                        0,
+                        y - screenMetrics.focusedInputOffset
+                    );
+
+                    scrollViewRef.current?.scrollTo({
+                        y: nextY,
+                        animated: true,
+                    });
+                }
+            );
+        }, delay);
+    }, [screenMetrics.focusedInputOffset]);
+
     useEffect(() => {
         console.log("[PROFILE DEBUG] state changed:", {
             fullName,
@@ -175,78 +240,41 @@ export default function Profile() {
     }, [fullName, selectedAvatar, hasChanges, profile?.avatar]);
 
     const labels = useMemo(() => {
-        if (isArabic) {
-            return {
-                pageTitle: "الملف الشخصي",
-                pageSubtitle: "إدارة معلومات حسابك",
-                edit: "تعديل",
-                personalInfo: "المعلومات الشخصية",
-                fullName: "الاسم الكامل",
-                fullNamePlaceholder: "اكتب الاسم الكامل",
-                saveChanges: "حفظ التغييرات",
-                saving: "جارِ الحفظ...",
-                appearance: "المظهر",
-                appTheme: "ثيم التطبيق",
-                currentTheme: "الثيم الحالي",
-                light: "فاتح",
-                dark: "داكن",
-                language: "اللغة",
-                currentLanguage: "العربية",
-                switchLanguage: "English",
-                account: "الحساب",
-                logout: "تسجيل الخروج",
-                logoutConfirmTitle: "تسجيل الخروج",
-                logoutConfirmMessage: "هل تريد تسجيل الخروج من هذا الجهاز؟",
-                cancel: "إلغاء",
-                loadingProfile: "جارِ تحميل الملف الشخصي...",
-                profile: "الملف الشخصي",
-                noChanges: "لا توجد تغييرات للحفظ.",
-                enterNameOrImage: "يرجى إدخال الاسم أو اختيار صورة.",
-                updated: "تم تحديث الملف الشخصي بنجاح.",
-                failedLoad: "فشل تحميل الملف الشخصي.",
-                failedUpdate: "فشل تحديث الملف الشخصي.",
-                failedImage: "تعذر اختيار الصورة. حاول مرة أخرى.",
-                permissionTitle: "الصلاحية مطلوبة",
-                permissionMessage: "يرجى السماح بالوصول للصور لتحديث صورة الحساب.",
-                approvedAt: "تمت الموافقة في",
-            };
-        }
-
         return {
-            pageTitle: "Profile",
-            pageSubtitle: "Manage your account information",
-            edit: "Edit",
-            personalInfo: "Personal info",
-            fullName: "Full name",
-            fullNamePlaceholder: "Enter your full name",
-            saveChanges: "Save changes",
-            saving: "Saving...",
-            appearance: "Appearance",
-            appTheme: "App theme",
-            currentTheme: "Current theme",
-            light: "Light",
-            dark: "Dark",
-            language: "Language",
-            currentLanguage: "English",
-            switchLanguage: "العربية",
-            account: "Account",
-            logout: "Logout",
-            logoutConfirmTitle: "Logout",
-            logoutConfirmMessage: "Do you want to logout from this device?",
-            cancel: "Cancel",
-            loadingProfile: "Loading profile...",
-            profile: "Profile",
-            noChanges: "No changes to save.",
-            enterNameOrImage: "Please enter your name or choose a profile image.",
-            updated: "Profile updated successfully.",
-            failedLoad: "Failed to load profile.",
-            failedUpdate: "Failed to update profile.",
-            failedImage: "Could not select image. Please try again.",
-            permissionTitle: "Permission required",
-            permissionMessage: "Please allow access to your photos to update your profile picture.",
-            approvedAt: "Approved at",
+            pageTitle: t("profile.pageTitle"),
+            pageSubtitle: t("profile.pageSubtitle"),
+            edit: t("profile.edit"),
+            personalInfo: t("profile.personalInfo"),
+            fullName: t("profile.fullName"),
+            fullNamePlaceholder: t("profile.fullNamePlaceholder"),
+            saveChanges: t("profile.saveChanges"),
+            saving: t("profile.saving"),
+            appearance: t("profile.appearance"),
+            appTheme: t("profile.appTheme"),
+            currentTheme: t("profile.currentTheme"),
+            light: t("profile.light"),
+            dark: t("profile.dark"),
+            language: t("profile.language"),
+            currentLanguage: t("profile.currentLanguage"),
+            switchLanguage: t("profile.switchLanguage"),
+            account: t("profile.account"),
+            logout: t("profile.logout"),
+            logoutConfirmTitle: t("profile.logoutConfirmTitle"),
+            logoutConfirmMessage: t("profile.logoutConfirmMessage"),
+            cancel: t("profile.cancel"),
+            loadingProfile: t("profile.loadingProfile"),
+            profile: t("profile.profile"),
+            noChanges: t("profile.noChanges"),
+            enterNameOrImage: t("profile.enterNameOrImage"),
+            updated: t("profile.updated"),
+            failedLoad: t("profile.failedLoad"),
+            failedUpdate: t("profile.failedUpdate"),
+            failedImage: t("profile.failedImage"),
+            permissionTitle: t("profile.permissionTitle"),
+            permissionMessage: t("profile.permissionMessage"),
+            approvedAt: t("profile.approvedAt"),
         };
-    }, [isArabic]);
+    }, [t]);
 
     const loadProfile = useCallback(async ({ refreshing = false } = {}) => {
         try {
@@ -496,12 +524,18 @@ export default function Profile() {
         <SafeAreaView style={styles.safeArea}>
             <KeyboardAvoidingView
                 style={styles.keyboardView}
-                behavior={Platform.OS === "ios" ? "padding" : undefined}
+                behavior={Platform.OS === "ios" ? "padding" : "height"}
+                keyboardVerticalOffset={0}
             >
                 <ScrollView
+                    ref={scrollViewRef}
+                    style={styles.scrollView}
                     contentContainerStyle={styles.scrollContent}
                     showsVerticalScrollIndicator={false}
                     keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode="on-drag"
+                    bounces
+                    overScrollMode="always"
                     refreshControl={
                         <RefreshControl
                             refreshing={isRefreshing}
@@ -599,8 +633,10 @@ export default function Profile() {
                             </Text>
 
                             <TextInput
+                                ref={fullNameInputRef}
                                 value={fullName}
                                 onChangeText={setFullName}
+                                onFocus={() => scrollToFocusedInput(fullNameInputRef)}
                                 placeholder={labels.fullNamePlaceholder}
                                 placeholderTextColor={colors.textMuted}
                                 style={styles.input}
@@ -712,8 +748,11 @@ export default function Profile() {
     );
 }
 
-const createStyles = (colors, isArabic) =>
-    StyleSheet.create({
+const createStyles = (colors, isArabic, metrics) => {
+    const avatarSize = metrics.avatarSize;
+    const avatarRadius = avatarSize / 2;
+
+    return StyleSheet.create({
         safeArea: {
             flex: 1,
             backgroundColor: colors.background,
@@ -723,11 +762,15 @@ const createStyles = (colors, isArabic) =>
             flex: 1,
         },
 
+        scrollView: {
+            flex: 1,
+        },
+
         scrollContent: {
             flexGrow: 1,
-            paddingHorizontal: 18,
-            paddingTop: 18,
-            paddingBottom: 160,
+            paddingHorizontal: metrics.horizontalPadding,
+            paddingTop: metrics.topPadding,
+            paddingBottom: metrics.bottomPadding,
         },
 
         loadingContainer: {
@@ -747,13 +790,13 @@ const createStyles = (colors, isArabic) =>
         },
 
         header: {
-            marginBottom: 18,
+            marginBottom: metrics.isTinyScreen ? 12 : 18,
             alignItems: isArabic ? "flex-end" : "flex-start",
         },
 
         title: {
             color: colors.textPrimary,
-            fontSize: 30,
+            fontSize: metrics.pageTitleSize,
             fontWeight: "800",
             letterSpacing: -0.5,
             textAlign: isArabic ? "right" : "left",
@@ -763,7 +806,7 @@ const createStyles = (colors, isArabic) =>
         subtitle: {
             marginTop: 6,
             color: colors.textSecondary,
-            fontSize: 14,
+            fontSize: metrics.isTinyScreen ? 13 : 14,
             fontWeight: "500",
             textAlign: isArabic ? "right" : "left",
             writingDirection: isArabic ? "rtl" : "ltr",
@@ -771,37 +814,37 @@ const createStyles = (colors, isArabic) =>
 
         profileCard: {
             alignItems: "center",
-            paddingVertical: 24,
-            paddingHorizontal: 18,
-            borderRadius: 28,
+            paddingVertical: metrics.isTinyScreen ? 18 : 24,
+            paddingHorizontal: metrics.isTinyScreen ? 14 : 18,
+            borderRadius: metrics.cardRadius,
             backgroundColor: colors.card,
             borderWidth: 1,
             borderColor: colors.border,
-            marginBottom: 16,
+            marginBottom: metrics.isTinyScreen ? 12 : 16,
         },
 
         avatarWrapper: {
-            width: 118,
-            height: 118,
-            borderRadius: 59,
+            width: avatarSize,
+            height: avatarSize,
+            borderRadius: avatarRadius,
             alignItems: "center",
             justifyContent: "center",
-            marginBottom: 16,
+            marginBottom: metrics.isTinyScreen ? 12 : 16,
         },
 
         avatarImage: {
-            width: 118,
-            height: 118,
-            borderRadius: 59,
+            width: avatarSize,
+            height: avatarSize,
+            borderRadius: avatarRadius,
             borderWidth: 2,
             borderColor: colors.avatarBorder,
             backgroundColor: colors.avatarBackground,
         },
 
         avatarFallback: {
-            width: 118,
-            height: 118,
-            borderRadius: 59,
+            width: avatarSize,
+            height: avatarSize,
+            borderRadius: avatarRadius,
             alignItems: "center",
             justifyContent: "center",
             borderWidth: 2,
@@ -811,16 +854,16 @@ const createStyles = (colors, isArabic) =>
 
         avatarInitials: {
             color: colors.textPrimary,
-            fontSize: 34,
+            fontSize: metrics.isTinyScreen ? 28 : 34,
             fontWeight: "900",
         },
 
         avatarEditBadge: {
             position: "absolute",
             right: -4,
-            bottom: 8,
-            paddingHorizontal: 10,
-            paddingVertical: 5,
+            bottom: metrics.isTinyScreen ? 4 : 8,
+            paddingHorizontal: metrics.isTinyScreen ? 8 : 10,
+            paddingVertical: metrics.isTinyScreen ? 4 : 5,
             borderRadius: 999,
             backgroundColor: colors.primary,
             borderWidth: 2,
@@ -829,13 +872,13 @@ const createStyles = (colors, isArabic) =>
 
         avatarEditText: {
             color: colors.darkText,
-            fontSize: 11,
+            fontSize: metrics.isTinyScreen ? 10 : 11,
             fontWeight: "900",
         },
 
         profileName: {
             color: colors.textPrimary,
-            fontSize: 22,
+            fontSize: metrics.isTinyScreen ? 19 : 22,
             fontWeight: "800",
             textAlign: "center",
             writingDirection: isArabic ? "rtl" : "ltr",
@@ -844,7 +887,7 @@ const createStyles = (colors, isArabic) =>
         profilePhone: {
             marginTop: 6,
             color: colors.textSecondary,
-            fontSize: 14,
+            fontSize: metrics.isTinyScreen ? 13 : 14,
             fontWeight: "600",
             textAlign: "center",
         },
@@ -855,12 +898,12 @@ const createStyles = (colors, isArabic) =>
             justifyContent: "center",
             flexWrap: "wrap",
             gap: 8,
-            marginTop: 14,
+            marginTop: metrics.isTinyScreen ? 10 : 14,
         },
 
         badge: {
-            paddingHorizontal: 12,
-            paddingVertical: 7,
+            paddingHorizontal: metrics.isTinyScreen ? 10 : 12,
+            paddingVertical: metrics.isTinyScreen ? 6 : 7,
             borderRadius: 999,
             backgroundColor: colors.buttonSoft,
             borderWidth: 1,
@@ -869,7 +912,7 @@ const createStyles = (colors, isArabic) =>
 
         badgeText: {
             color: colors.textSecondary,
-            fontSize: 12,
+            fontSize: metrics.isTinyScreen ? 11 : 12,
             fontWeight: "800",
         },
 
@@ -883,19 +926,19 @@ const createStyles = (colors, isArabic) =>
         },
 
         section: {
-            padding: 16,
-            borderRadius: 24,
+            padding: metrics.sectionPadding,
+            borderRadius: metrics.sectionRadius,
             backgroundColor: colors.cardSoft,
             borderWidth: 1,
             borderColor: colors.borderSoft,
-            marginBottom: 16,
+            marginBottom: metrics.isTinyScreen ? 12 : 16,
         },
 
         sectionTitle: {
             color: colors.textPrimary,
-            fontSize: 17,
+            fontSize: metrics.isTinyScreen ? 16 : 17,
             fontWeight: "800",
-            marginBottom: 14,
+            marginBottom: metrics.isTinyScreen ? 12 : 14,
             textAlign: isArabic ? "right" : "left",
             writingDirection: isArabic ? "rtl" : "ltr",
         },
@@ -914,7 +957,7 @@ const createStyles = (colors, isArabic) =>
         },
 
         input: {
-            minHeight: 50,
+            minHeight: metrics.isTinyScreen ? 48 : 50,
             paddingHorizontal: 14,
             borderRadius: 16,
             color: colors.textPrimary,
@@ -926,7 +969,7 @@ const createStyles = (colors, isArabic) =>
         },
 
         saveButton: {
-            height: 50,
+            height: metrics.isTinyScreen ? 48 : 50,
             borderRadius: 16,
             alignItems: "center",
             justifyContent: "center",
@@ -944,7 +987,7 @@ const createStyles = (colors, isArabic) =>
         },
 
         settingRow: {
-            minHeight: 58,
+            minHeight: metrics.isTinyScreen ? 54 : 58,
             flexDirection: isArabic ? "row-reverse" : "row",
             alignItems: "center",
             justifyContent: "space-between",
@@ -975,8 +1018,8 @@ const createStyles = (colors, isArabic) =>
         },
 
         settingButton: {
-            minWidth: 92,
-            height: 44,
+            minWidth: metrics.isTinyScreen ? 82 : 92,
+            minHeight: 44,
             paddingHorizontal: 12,
             alignItems: "center",
             justifyContent: "center",
@@ -996,11 +1039,11 @@ const createStyles = (colors, isArabic) =>
         settingDivider: {
             height: 1,
             backgroundColor: colors.borderSoft,
-            marginVertical: 14,
+            marginVertical: metrics.isTinyScreen ? 12 : 14,
         },
 
         logoutButton: {
-            minHeight: 50,
+            minHeight: metrics.isTinyScreen ? 48 : 50,
             borderRadius: 16,
             alignItems: "center",
             justifyContent: "center",
@@ -1015,3 +1058,4 @@ const createStyles = (colors, isArabic) =>
             fontWeight: "900",
         },
     });
+};

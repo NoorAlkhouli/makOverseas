@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 const getFirstName = (value = "") => {
@@ -142,6 +142,91 @@ const getStatusDotColor = ({
     return colors.textMuted || colors.muted || colors.border;
 };
 
+const getResponsiveHeaderMetrics = ({
+    isCompactScreen,
+    isVeryCompactScreen,
+    isShortScreen,
+}) => {
+    if (isVeryCompactScreen) {
+        return {
+            headerMinHeight: isShortScreen ? 72 : 76,
+            headerPaddingHorizontal: 8,
+            headerPaddingTop: isShortScreen ? 4 : 5,
+            headerPaddingBottom: isShortScreen ? 6 : 8,
+            backButtonSize: 32,
+            backIconSize: 22,
+            avatarSize: 38,
+            avatarRadius: 19,
+            avatarIconSize: 20,
+            avatarTextSize: 13,
+            avatarMarginHorizontal: 6,
+            nameSize: 14,
+            departmentSize: 10,
+            statusTextSize: 11,
+            statusDotSize: 7,
+            statusGap: 5,
+            callButtonSize: 33,
+            callButtonRadius: 11,
+            callButtonMarginLeft: 4,
+            callIconSize: 18,
+            menuIconSize: 18,
+            showDepartment: true,
+        };
+    }
+
+    if (isCompactScreen) {
+        return {
+            headerMinHeight: isShortScreen ? 76 : 82,
+            headerPaddingHorizontal: 10,
+            headerPaddingTop: isShortScreen ? 5 : 6,
+            headerPaddingBottom: isShortScreen ? 7 : 9,
+            backButtonSize: 34,
+            backIconSize: 23,
+            avatarSize: 44,
+            avatarRadius: 22,
+            avatarIconSize: 22,
+            avatarTextSize: 15,
+            avatarMarginHorizontal: 7,
+            nameSize: 16,
+            departmentSize: 12,
+            statusTextSize: 12,
+            statusDotSize: 8,
+            statusGap: 5,
+            callButtonSize: 38,
+            callButtonRadius: 13,
+            callButtonMarginLeft: 6,
+            callIconSize: 21,
+            menuIconSize: 20,
+            showDepartment: true,
+        };
+    }
+
+    return {
+        headerMinHeight: isShortScreen ? 82 : 90,
+        headerPaddingHorizontal: 16,
+        headerPaddingTop: isShortScreen ? 6 : 8,
+        headerPaddingBottom: isShortScreen ? 8 : 12,
+        backButtonSize: 36,
+        backIconSize: 24,
+        avatarSize: 52,
+        avatarRadius: 26,
+        avatarIconSize: 26,
+        avatarTextSize: 17,
+        avatarMarginHorizontal: 8,
+        nameSize: 18,
+        departmentSize: 13,
+        statusTextSize: 13,
+        statusDotSize: 9,
+        statusGap: 6,
+        callButtonSize: 42,
+        callButtonRadius: 14,
+        callButtonMarginLeft: 8,
+        callIconSize: 23,
+        menuIconSize: 22,
+        showDepartment: true,
+    };
+};
+
 export default function IndividualChatHeader({
     navigation,
     colors,
@@ -171,6 +256,16 @@ export default function IndividualChatHeader({
     employeeEmail,
     employeeLocation,
 }) {
+    const metrics = useMemo(
+        () =>
+            getResponsiveHeaderMetrics({
+                isCompactScreen,
+                isVeryCompactScreen,
+                isShortScreen,
+            }),
+        [isCompactScreen, isVeryCompactScreen, isShortScreen]
+    );
+
     const normalizedIsGroup = isGroup === true;
     const normalizedIsOnline = !normalizedIsGroup && isOnline === true;
     const normalizedIsRecordingVoice = isRecordingVoice === true && !isBlocked;
@@ -310,20 +405,32 @@ export default function IndividualChatHeader({
         <View
             style={[
                 styles.header,
-                isCompactScreen && styles.headerCompact,
-                isShortScreen && styles.headerShort,
                 {
+                    minHeight: metrics.headerMinHeight,
+                    paddingHorizontal: metrics.headerPaddingHorizontal,
+                    paddingTop: metrics.headerPaddingTop,
+                    paddingBottom: metrics.headerPaddingBottom,
                     backgroundColor: colors.header,
                     borderBottomColor: colors.border,
                 },
             ]}
         >
             <TouchableOpacity
-                style={styles.iconButton}
+                style={[
+                    styles.iconButton,
+                    {
+                        width: metrics.backButtonSize,
+                        height: metrics.backButtonSize,
+                    },
+                ]}
                 activeOpacity={0.8}
                 onPress={() => navigation.goBack()}
             >
-                <Ionicons name="arrow-back" size={24} color={colors.text} />
+                <Ionicons
+                    name="arrow-back"
+                    size={metrics.backIconSize}
+                    color={colors.text}
+                />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -331,12 +438,19 @@ export default function IndividualChatHeader({
                 activeOpacity={0.82}
                 onPress={openChatProfile}
             >
-                <View style={styles.avatarWrapper}>
+                <View
+                    style={[
+                        styles.avatarWrapper,
+                        { marginHorizontal: metrics.avatarMarginHorizontal },
+                    ]}
+                >
                     <View
                         style={[
                             styles.avatar,
-                            isCompactScreen && styles.avatarCompact,
                             {
+                                width: metrics.avatarSize,
+                                height: metrics.avatarSize,
+                                borderRadius: metrics.avatarRadius,
                                 backgroundColor: colors.avatarBackground,
                                 borderColor: colors.avatarBorder,
                             },
@@ -345,21 +459,30 @@ export default function IndividualChatHeader({
                         {employeeAvatar ? (
                             <Image
                                 source={{ uri: employeeAvatar }}
-                                style={styles.avatarImage}
+                                style={[
+                                    styles.avatarImage,
+                                    {
+                                        borderRadius: metrics.avatarRadius,
+                                    },
+                                ]}
                             />
                         ) : normalizedIsGroup ? (
                             <Ionicons
                                 name="people"
-                                size={isCompactScreen ? 22 : 26}
+                                size={metrics.avatarIconSize}
                                 color={colors.text}
                             />
                         ) : (
                             <Text
                                 style={[
                                     styles.avatarText,
-                                    isCompactScreen && styles.avatarTextCompact,
-                                    { color: colors.text },
+                                    {
+                                        fontSize: metrics.avatarTextSize,
+                                        color: colors.text,
+                                    },
                                 ]}
+                                numberOfLines={1}
+                                adjustsFontSizeToFit
                             >
                                 {employeeInitials}
                             </Text>
@@ -371,9 +494,10 @@ export default function IndividualChatHeader({
                     <Text
                         style={[
                             styles.employeeName,
-                            isCompactScreen && styles.employeeNameCompact,
-                            isVeryCompactScreen && styles.employeeNameVeryCompact,
-                            { color: colors.text },
+                            {
+                                fontSize: metrics.nameSize,
+                                color: colors.text,
+                            },
                         ]}
                         numberOfLines={1}
                         ellipsizeMode="tail"
@@ -381,27 +505,44 @@ export default function IndividualChatHeader({
                         {employeeName}
                     </Text>
 
-                    <Text
-                        style={[
-                            styles.department,
-                            isCompactScreen && styles.departmentCompact,
-                            isVeryCompactScreen && styles.departmentVeryCompact,
-                            { color: colors.blue },
-                        ]}
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                    >
-                        {displayDepartment}
-                    </Text>
+                    {metrics.showDepartment && (
+                        <Text
+                            style={[
+                                styles.department,
+                                {
+                                    fontSize: metrics.departmentSize,
+                                    color: colors.blue,
+                                },
+                            ]}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                        >
+                            {displayDepartment}
+                        </Text>
+                    )}
 
-                    <View style={styles.statusRow}>
+                    <View
+                        style={[
+                            styles.statusRow,
+                            {
+                                gap: metrics.statusGap,
+                            },
+                        ]}
+                    >
                         <View
                             style={[
                                 styles.onlineDot,
                                 {
+                                    width: metrics.statusDotSize,
+                                    height: metrics.statusDotSize,
+                                    borderRadius: metrics.statusDotSize / 2,
                                     backgroundColor: statusDotColor,
                                     borderColor:
-                                        normalizedIsGroup || normalizedIsOnline || normalizedIsTyping || normalizedIsRecordingVoice || isBlocked
+                                        normalizedIsGroup ||
+                                            normalizedIsOnline ||
+                                            normalizedIsTyping ||
+                                            normalizedIsRecordingVoice ||
+                                            isBlocked
                                             ? statusDotColor
                                             : colors.border,
                                 },
@@ -411,10 +552,13 @@ export default function IndividualChatHeader({
                         <Text
                             style={[
                                 styles.onlineText,
-                                isVeryCompactScreen && styles.onlineTextVeryCompact,
-                                { color: statusColor },
+                                {
+                                    fontSize: metrics.statusTextSize,
+                                    color: statusColor,
+                                },
                             ]}
                             numberOfLines={1}
+                            ellipsizeMode="tail"
                         >
                             {statusLabel}
                         </Text>
@@ -425,15 +569,19 @@ export default function IndividualChatHeader({
             <TouchableOpacity
                 style={[
                     styles.callButton,
-                    isCompactScreen && styles.callButtonCompact,
-                    isVeryCompactScreen && styles.callButtonVeryCompact,
-                    { borderColor: colors.border },
+                    {
+                        width: metrics.callButtonSize,
+                        height: metrics.callButtonSize,
+                        borderRadius: metrics.callButtonRadius,
+                        marginLeft: metrics.callButtonMarginLeft,
+                        borderColor: colors.border,
+                    },
                 ]}
                 activeOpacity={0.8}
             >
                 <Ionicons
                     name="call-outline"
-                    size={isVeryCompactScreen ? 19 : isCompactScreen ? 21 : 23}
+                    size={metrics.callIconSize}
                     color={colors.text}
                 />
             </TouchableOpacity>
@@ -441,16 +589,20 @@ export default function IndividualChatHeader({
             <TouchableOpacity
                 style={[
                     styles.callButton,
-                    isCompactScreen && styles.callButtonCompact,
-                    isVeryCompactScreen && styles.callButtonVeryCompact,
-                    { borderColor: colors.border },
+                    {
+                        width: metrics.callButtonSize,
+                        height: metrics.callButtonSize,
+                        borderRadius: metrics.callButtonRadius,
+                        marginLeft: metrics.callButtonMarginLeft,
+                        borderColor: colors.border,
+                    },
                 ]}
                 activeOpacity={0.8}
                 onPress={onOpenMenu}
             >
                 <Ionicons
                     name="ellipsis-vertical"
-                    size={isVeryCompactScreen ? 19 : isCompactScreen ? 20 : 22}
+                    size={metrics.menuIconSize}
                     color={colors.text}
                 />
             </TouchableOpacity>
@@ -460,31 +612,12 @@ export default function IndividualChatHeader({
 
 const styles = StyleSheet.create({
     header: {
-        minHeight: 90,
-        paddingHorizontal: 16,
-        paddingTop: 8,
-        paddingBottom: 12,
         flexDirection: "row",
         alignItems: "center",
         borderBottomWidth: 1,
     },
 
-    headerCompact: {
-        minHeight: 84,
-        paddingHorizontal: 12,
-        paddingTop: 6,
-        paddingBottom: 10,
-    },
-
-    headerShort: {
-        minHeight: 80,
-        paddingTop: 6,
-        paddingBottom: 8,
-    },
-
     iconButton: {
-        width: 36,
-        height: 36,
         alignItems: "center",
         justifyContent: "center",
         flexShrink: 0,
@@ -495,124 +628,73 @@ const styles = StyleSheet.create({
         minWidth: 0,
         flexDirection: "row",
         alignItems: "center",
+        overflow: "hidden",
     },
 
     avatarWrapper: {
-        marginHorizontal: 8,
         flexShrink: 0,
     },
 
     avatar: {
-        width: 52,
-        height: 52,
-        borderRadius: 26,
         borderWidth: 1,
         alignItems: "center",
         justifyContent: "center",
-    },
-
-    avatarCompact: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
+        overflow: "hidden",
     },
 
     avatarImage: {
         width: "100%",
         height: "100%",
-        borderRadius: 26,
     },
 
     avatarText: {
-        fontSize: 17,
         fontWeight: "800",
-    },
-
-    avatarTextCompact: {
-        fontSize: 15,
+        includeFontPadding: false,
+        maxWidth: "92%",
+        textAlign: "center",
     },
 
     headerInfo: {
         flex: 1,
         minWidth: 0,
-        paddingRight: 4,
+        paddingRight: 2,
+        overflow: "hidden",
     },
 
     employeeName: {
-        fontSize: 18,
         fontWeight: "800",
         includeFontPadding: false,
     },
 
-    employeeNameCompact: {
-        fontSize: 16,
-    },
-
-    employeeNameVeryCompact: {
-        fontSize: 15,
-    },
-
     department: {
-        marginTop: 4,
-        fontSize: 13,
+        marginTop: 3,
         fontWeight: "600",
         includeFontPadding: false,
     },
 
-    departmentCompact: {
-        fontSize: 12,
-    },
-
-    departmentVeryCompact: {
-        fontSize: 11,
-    },
-
     statusRow: {
-        marginTop: 5,
+        marginTop: 4,
         flexDirection: "row",
         alignItems: "center",
-        gap: 6,
+        minWidth: 0,
     },
 
     onlineDot: {
-        width: 9,
-        height: 9,
-        borderRadius: 5,
         borderWidth: 1,
+        flexShrink: 0,
     },
 
     onlineText: {
-        fontSize: 13,
+        flex: 1,
+        minWidth: 0,
         fontWeight: "700",
         includeFontPadding: false,
     },
 
-    onlineTextVeryCompact: {
-        fontSize: 12,
-    },
-
     callButton: {
-        width: 42,
-        height: 42,
-        borderRadius: 14,
         borderWidth: 1,
         alignItems: "center",
         justifyContent: "center",
-        marginLeft: 8,
         flexShrink: 0,
-    },
-
-    callButtonCompact: {
-        width: 38,
-        height: 38,
-        borderRadius: 13,
-        marginLeft: 6,
-    },
-
-    callButtonVeryCompact: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
-        marginLeft: 4,
     },
 });

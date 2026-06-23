@@ -282,6 +282,31 @@ const getMessageSendState = (message) => {
     return "sent";
 };
 
+const getDisplayMessageId = (message) => {
+    const messageId =
+        message?.raw?.id ||
+        message?.message_id ||
+        message?.id ||
+        message?.uuid ||
+        null;
+
+    if (messageId === undefined || messageId === null || messageId === "") {
+        return null;
+    }
+
+    return String(messageId);
+};
+
+const isHighlightedMessage = (message, highlightedMessageId) => {
+    const messageId = getDisplayMessageId(message);
+
+    return !!(
+        messageId &&
+        highlightedMessageId &&
+        String(messageId) === String(highlightedMessageId)
+    );
+};
+
 function MessageStatusIcon({ item, colors }) {
     const sendState = getMessageSendState(item);
 
@@ -336,6 +361,9 @@ export default function IndividualChatMessagesList({
     onMessageLongPress,
     canCreateQuote = false,
     viewerRole = null,
+    onMessageLayout,
+    onReplyPreviewPress,
+    highlightedMessageId = null,
 }) {
     const handleMessagesScroll = (event) => {
         onScroll?.(event);
@@ -345,6 +373,10 @@ export default function IndividualChatMessagesList({
         if (offsetY <= 40 && hasOlderMessages && !isLoadingOlderMessages) {
             onLoadOlderMessages?.();
         }
+    };
+
+    const handleItemLayout = (item, event) => {
+        onMessageLayout?.(item, event?.nativeEvent?.layout);
     };
 
     return (
@@ -385,23 +417,45 @@ export default function IndividualChatMessagesList({
                 const displayTime = getLocalizedMessageTime(item.time, tr, isArabic);
 
                 if (item.type === "quote") {
+                    const isHighlighted = isHighlightedMessage(item, highlightedMessageId);
+
                     return (
-                        <QuoteMessageCard
+                        <View
                             key={item.id}
-                            item={item}
-                            colors={colors}
-                            tr={tr}
-                            time={displayTime}
-                            isArabic={isArabic}
-                            isCompactScreen={isCompactScreen}
-                            onLongPress={() => onMessageLongPress?.(item)}
-                            viewerCanCreateQuote={canCreateQuote}
-                            viewerRole={viewerRole}
-                        />
+                            onLayout={(event) => handleItemLayout(item, event)}
+                            style={isHighlighted ? [
+                                styles.highlightedMessageWrapper,
+                                { borderColor: colors.primary || colors.blue },
+                            ] : null}
+                        >
+                            {!!item.replyToMessage && (
+                                <MessageReplyPreview
+                                    message={item.replyToMessage}
+                                    ownerMessage={item}
+                                    colors={colors}
+                                    tr={tr}
+                                    isArabic={isArabic}
+                                    onPress={onReplyPreviewPress}
+                                />
+                            )}
+
+                            <QuoteMessageCard
+                                item={item}
+                                colors={colors}
+                                tr={tr}
+                                time={displayTime}
+                                isArabic={isArabic}
+                                isCompactScreen={isCompactScreen}
+                                onLongPress={() => onMessageLongPress?.(item)}
+                                viewerCanCreateQuote={canCreateQuote}
+                                viewerRole={viewerRole}
+                            />
+                        </View>
                     );
                 }
 
                 if (item.type === "image" || item.type === "video") {
+                    const isHighlighted = isHighlightedMessage(item, highlightedMessageId);
                     const handleOpenMedia = () => {
                         if (item.type === "image") {
                             onOpenImage?.(item);
@@ -412,28 +466,48 @@ export default function IndividualChatMessagesList({
                     };
 
                     return (
-                        <Pressable
+                        <View
                             key={item.id}
-                            delayLongPress={260}
-                            onPress={handleOpenMedia}
-                            onLongPress={() => onMessageLongPress?.(item)}
-                            onStartShouldSetResponderCapture={() => true}
+                            onLayout={(event) => handleItemLayout(item, event)}
+                            style={isHighlighted ? [
+                                styles.highlightedMessageWrapper,
+                                { borderColor: colors.primary || colors.blue },
+                            ] : null}
                         >
-                            <MediaMessage
-                                item={item}
-                                colors={colors}
-                                isCompactScreen={isCompactScreen}
-                                mediaWidth={imageMessageWidth}
-                                mediaHeight={imageMessageHeight}
-                                time={displayTime}
-                                onOpen={handleOpenMedia}
-                            />
-                        </Pressable>
+                            {!!item.replyToMessage && (
+                                <MessageReplyPreview
+                                    message={item.replyToMessage}
+                                    ownerMessage={item}
+                                    colors={colors}
+                                    tr={tr}
+                                    isArabic={isArabic}
+                                    onPress={onReplyPreviewPress}
+                                />
+                            )}
+
+                            <Pressable
+                                delayLongPress={260}
+                                onPress={handleOpenMedia}
+                                onLongPress={() => onMessageLongPress?.(item)}
+                                onStartShouldSetResponderCapture={() => true}
+                            >
+                                <MediaMessage
+                                    item={item}
+                                    colors={colors}
+                                    isCompactScreen={isCompactScreen}
+                                    mediaWidth={imageMessageWidth}
+                                    mediaHeight={imageMessageHeight}
+                                    time={displayTime}
+                                    onOpen={handleOpenMedia}
+                                />
+                            </Pressable>
+                        </View>
                     );
                 }
 
                 if (item.type === "document") {
                     const documentItem = getOpenableDocumentItem(item, tr);
+                    const isHighlighted = isHighlightedMessage(item, highlightedMessageId);
 
                     return (
                         <DocumentMessage
@@ -445,11 +519,17 @@ export default function IndividualChatMessagesList({
                             time={displayTime}
                             onOpen={() => onOpenDocument(documentItem)}
                             onLongPress={() => onMessageLongPress?.(item)}
+                            onLayout={(event) => handleItemLayout(item, event)}
+                            onReplyPreviewPress={onReplyPreviewPress}
+                            isArabic={isArabic}
+                            isHighlighted={isHighlighted}
                         />
                     );
                 }
 
                 if (item.type === "audio") {
+                    const isHighlighted = isHighlightedMessage(item, highlightedMessageId);
+
                     return (
                         <AudioMessage
                             key={item.id}
@@ -459,15 +539,21 @@ export default function IndividualChatMessagesList({
                             tr={tr}
                             time={displayTime}
                             onLongPress={() => onMessageLongPress?.(item)}
+                            onLayout={(event) => handleItemLayout(item, event)}
+                            onReplyPreviewPress={onReplyPreviewPress}
+                            isArabic={isArabic}
+                            isHighlighted={isHighlighted}
                         />
                     );
                 }
 
                 const isMine = item.side === "me";
+                const isHighlighted = isHighlightedMessage(item, highlightedMessageId);
 
                 return (
                     <View
                         key={item.id}
+                        onLayout={(event) => handleItemLayout(item, event)}
                         style={[
                             styles.messageRow,
                             isMine ? styles.myMessageRow : styles.employeeMessageRow,
@@ -484,16 +570,21 @@ export default function IndividualChatMessagesList({
                                     backgroundColor: isMine
                                         ? colors.myBubble
                                         : colors.employeeBubble,
-                                    borderColor: colors.border,
+                                    borderColor: isHighlighted
+                                        ? colors.primary || colors.blue
+                                        : colors.border,
+                                    borderWidth: isHighlighted ? 2 : 1,
                                 },
                             ]}
                         >
                             {!!item.replyToMessage && (
                                 <MessageReplyPreview
                                     message={item.replyToMessage}
+                                    ownerMessage={item}
                                     colors={colors}
                                     tr={tr}
                                     isArabic={isArabic}
+                                    onPress={onReplyPreviewPress}
                                 />
                             )}
 
@@ -529,11 +620,20 @@ export default function IndividualChatMessagesList({
 }
 
 
-function MessageReplyPreview({ message, colors, tr, isArabic }) {
+function MessageReplyPreview({
+    message,
+    ownerMessage,
+    colors,
+    tr,
+    isArabic,
+    onPress,
+}) {
     const previewText = getReplyPreviewText(message, tr);
 
     return (
-        <View
+        <TouchableOpacity
+            activeOpacity={0.78}
+            onPress={() => onPress?.(message, ownerMessage)}
             style={[
                 styles.messageReplyPreview,
                 {
@@ -562,11 +662,23 @@ function MessageReplyPreview({ message, colors, tr, isArabic }) {
             >
                 {previewText}
             </Text>
-        </View>
+        </TouchableOpacity>
     );
 }
 
-function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen, onLongPress }) {
+function DocumentMessage({
+    item,
+    colors,
+    isCompactScreen,
+    tr,
+    time,
+    onOpen,
+    onLongPress,
+    onLayout,
+    onReplyPreviewPress,
+    isArabic,
+    isHighlighted = false,
+}) {
     const isMine = item.side === "me";
     const fileName = getDocumentFileName(item, tr);
     const mimeType = getDocumentMimeType(item);
@@ -575,74 +687,94 @@ function DocumentMessage({ item, colors, isCompactScreen, tr, time, onOpen, onLo
 
     return (
         <View
+            onLayout={onLayout}
             style={[
                 styles.messageRow,
                 isMine ? styles.myMessageRow : styles.employeeMessageRow,
             ]}
         >
-            <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={onOpen}
-                delayLongPress={260}
-                onLongPress={onLongPress}
+            <View
                 style={[
                     styles.documentBubble,
                     isCompactScreen && styles.documentBubbleCompact,
+                    item.replyToMessage && styles.messageBubbleWithReply,
                     {
                         backgroundColor: isMine ? colors.myBubble : colors.employeeBubble,
-                        borderColor: colors.border,
+                        borderColor: isHighlighted
+                            ? colors.primary || colors.blue
+                            : colors.border,
+                        borderWidth: isHighlighted ? 2 : 1,
                     },
                 ]}
             >
-                <View
-                    style={[
-                        styles.documentIconBox,
-                        {
-                            backgroundColor: colors.cardSoft,
-                            borderColor: colors.border,
-                        },
-                    ]}
-                >
-                    <MaterialCommunityIcons
-                        name={fileIconName}
-                        size={32}
-                        color={colors.blue}
+                {!!item.replyToMessage && (
+                    <MessageReplyPreview
+                        message={item.replyToMessage}
+                        ownerMessage={item}
+                        colors={colors}
+                        tr={tr}
+                        isArabic={isArabic}
+                        onPress={onReplyPreviewPress}
                     />
-                </View>
+                )}
 
-                <View style={styles.documentInfo}>
-                    <Text
+                <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={onOpen}
+                    delayLongPress={260}
+                    onLongPress={onLongPress}
+                    style={styles.documentMainRow}
+                >
+                    <View
                         style={[
-                            styles.documentName,
-                            { color: colors.text },
-                            getMessageTextDirectionStyle(fileName, false),
+                            styles.documentIconBox,
+                            {
+                                backgroundColor: colors.cardSoft,
+                                borderColor: colors.border,
+                            },
                         ]}
-                        numberOfLines={2}
                     >
-                        {fileName}
-                    </Text>
+                        <MaterialCommunityIcons
+                            name={fileIconName}
+                            size={32}
+                            color={colors.blue}
+                        />
+                    </View>
 
-                    <Text
-                        style={[styles.documentMeta, { color: colors.muted }]}
-                        numberOfLines={1}
-                    >
-                        {fileSizeText || mimeType || tr("file", "File")}
-                    </Text>
-
-                    <View style={styles.documentTimeRow}>
-                        <Text style={[styles.timeText, { color: colors.muted }]}>
-                            {time}
+                    <View style={styles.documentInfo}>
+                        <Text
+                            style={[
+                                styles.documentName,
+                                { color: colors.text },
+                                getMessageTextDirectionStyle(fileName, false),
+                            ]}
+                            numberOfLines={2}
+                        >
+                            {fileName}
                         </Text>
 
-                        {isMine && (
-                            <MessageStatusIcon
-                                item={item}
-                                colors={colors}
-                            />
-                        )}
+                        <Text
+                            style={[styles.documentMeta, { color: colors.muted }]}
+                            numberOfLines={1}
+                        >
+                            {fileSizeText || mimeType || tr("file", "File")}
+                        </Text>
+
+                        <View style={styles.documentTimeRow}>
+                            <Text style={[styles.timeText, { color: colors.muted }]}>
+                                {time}
+                            </Text>
+
+                            {isMine && (
+                                <MessageStatusIcon
+                                    item={item}
+                                    colors={colors}
+                                />
+                            )}
+                        </View>
                     </View>
-                </View>
-            </TouchableOpacity>
+                </TouchableOpacity>
+            </View>
         </View>
     );
 }
@@ -782,7 +914,18 @@ const getPlayableAudioUri = async (item = {}) => {
     }
 };
 
-function AudioMessage({ item, colors, isCompactScreen, tr, time, onLongPress }) {
+function AudioMessage({
+    item,
+    colors,
+    isCompactScreen,
+    tr,
+    time,
+    onLongPress,
+    onLayout,
+    onReplyPreviewPress,
+    isArabic,
+    isHighlighted = false,
+}) {
     const isMine = item.side === "me";
     const [playableAudioUri, setPlayableAudioUri] = useState(() => getAudioUri(item));
     const player = useAudioPlayer(playableAudioUri ? { uri: playableAudioUri } : null);
@@ -841,6 +984,7 @@ function AudioMessage({ item, colors, isCompactScreen, tr, time, onLongPress }) 
 
     return (
         <View
+            onLayout={onLayout}
             style={[
                 styles.messageRow,
                 isMine ? styles.myMessageRow : styles.employeeMessageRow,
@@ -853,64 +997,81 @@ function AudioMessage({ item, colors, isCompactScreen, tr, time, onLongPress }) 
                 style={[
                     styles.audioBubble,
                     isCompactScreen && styles.audioBubbleCompact,
+                    item.replyToMessage && styles.messageBubbleWithReply,
                     {
                         backgroundColor: isMine ? colors.myBubble : colors.employeeBubble,
-                        borderColor: colors.border,
+                        borderColor: isHighlighted
+                            ? colors.primary || colors.blue
+                            : colors.border,
+                        borderWidth: isHighlighted ? 2 : 1,
                     },
                 ]}
             >
-                <TouchableOpacity
-                    style={[
-                        styles.audioPlayButton,
-                        { backgroundColor: colors.primary },
-                    ]}
-                    activeOpacity={0.85}
-                    onPress={handleTogglePlayback}
-                    accessibilityLabel={
-                        isPlaying
-                            ? tr("pauseVoiceMessage", "Pause voice message")
-                            : tr("playVoiceMessage", "Play voice message")
-                    }
-                >
-                    <Ionicons
-                        name={isPlaying ? "pause" : "play"}
-                        size={18}
-                        color="#FFFFFF"
+                {!!item.replyToMessage && (
+                    <MessageReplyPreview
+                        message={item.replyToMessage}
+                        ownerMessage={item}
+                        colors={colors}
+                        tr={tr}
+                        isArabic={isArabic}
+                        onPress={onReplyPreviewPress}
                     />
-                </TouchableOpacity>
+                )}
 
-                <View style={styles.audioContent}>
-                    <View style={styles.audioWaveRow}>
-                        {Array.from({ length: 18 }).map((_, index) => (
-                            <View
-                                key={`wave-${item.id}-${index}`}
-                                style={[
-                                    styles.audioWaveBar,
-                                    {
-                                        height: 8 + ((index % 5) * 4),
-                                        backgroundColor: colors.primary,
-                                    },
-                                ]}
-                            />
-                        ))}
-                    </View>
+                <View style={styles.audioMainRow}>
+                    <TouchableOpacity
+                        style={[
+                            styles.audioPlayButton,
+                            { backgroundColor: colors.primary },
+                        ]}
+                        activeOpacity={0.85}
+                        onPress={handleTogglePlayback}
+                        accessibilityLabel={
+                            isPlaying
+                                ? tr("pauseVoiceMessage", "Pause voice message")
+                                : tr("playVoiceMessage", "Play voice message")
+                        }
+                    >
+                        <Ionicons
+                            name={isPlaying ? "pause" : "play"}
+                            size={18}
+                            color="#FFFFFF"
+                        />
+                    </TouchableOpacity>
 
-                    <View style={styles.audioMetaRow}>
-                        <Text style={[styles.audioDuration, { color: colors.muted }]}>
-                            {durationText}
-                        </Text>
+                    <View style={styles.audioContent}>
+                        <View style={styles.audioWaveRow}>
+                            {Array.from({ length: 18 }).map((_, index) => (
+                                <View
+                                    key={`wave-${item.id}-${index}`}
+                                    style={[
+                                        styles.audioWaveBar,
+                                        {
+                                            height: 8 + ((index % 5) * 4),
+                                            backgroundColor: colors.primary,
+                                        },
+                                    ]}
+                                />
+                            ))}
+                        </View>
 
-                        <View style={styles.audioTimeWrapper}>
-                            <Text style={[styles.timeText, { color: colors.muted }]}>
-                                {time}
+                        <View style={styles.audioMetaRow}>
+                            <Text style={[styles.audioDuration, { color: colors.muted }]}>
+                                {durationText}
                             </Text>
 
-                            {isMine && (
-                                <MessageStatusIcon
-                                    item={item}
-                                    colors={colors}
-                                />
-                            )}
+                            <View style={styles.audioTimeWrapper}>
+                                <Text style={[styles.timeText, { color: colors.muted }]}>
+                                    {time}
+                                </Text>
+
+                                {isMine && (
+                                    <MessageStatusIcon
+                                        item={item}
+                                        colors={colors}
+                                    />
+                                )}
+                            </View>
                         </View>
                     </View>
                 </View>
@@ -960,6 +1121,13 @@ const styles = StyleSheet.create({
         flexDirection: "row",
     },
 
+    highlightedMessageWrapper: {
+        borderWidth: 2,
+        borderRadius: 20,
+        padding: 2,
+        marginBottom: 6,
+    },
+
     myMessageRow: {
         justifyContent: "flex-end",
     },
@@ -980,6 +1148,12 @@ const styles = StyleSheet.create({
     bubbleCompact: {
         maxWidth: "88%",
         paddingHorizontal: 12,
+    },
+
+    messageBubbleWithReply: {
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: 8,
     },
 
     messageText: {
@@ -1036,6 +1210,12 @@ const styles = StyleSheet.create({
         padding: 9,
     },
 
+    documentMainRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+    },
+
     documentIconBox: {
         width: 54,
         height: 54,
@@ -1086,6 +1266,12 @@ const styles = StyleSheet.create({
         width: "84%",
         borderRadius: 16,
         padding: 9,
+    },
+
+    audioMainRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
     },
 
     audioPlayButton: {

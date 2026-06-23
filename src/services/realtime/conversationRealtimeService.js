@@ -43,6 +43,8 @@ const getMessageDebugInfo = (message) => {
     return {
         hasMessage: true,
         id: message?.id,
+        message_id: message?.message_id,
+        messageId: message?.messageId,
         conversation_id: message?.conversation_id,
         conversationId: message?.conversationId,
         type: message?.type,
@@ -52,6 +54,20 @@ const getMessageDebugInfo = (message) => {
         deleted_at: message?.deleted_at,
         attachmentsCount: attachments.length,
         firstAttachment: attachments[0] || null,
+    };
+};
+
+const getDeletePayloadDebugInfo = (payload) => {
+    const message = getMessageFromPayload(payload);
+
+    return {
+        message: getMessageDebugInfo(message),
+        payload_id: payload?.id,
+        payload_message_id: payload?.message_id,
+        payload_messageId: payload?.messageId,
+        data_id: payload?.data?.id,
+        data_message_id: payload?.data?.message_id,
+        data_messageId: payload?.data?.messageId,
     };
 };
 
@@ -193,6 +209,27 @@ const bindMessageEvent = (channelState, eventName, logName, handlerKey) => {
     });
 };
 
+const bindDeleteMessageEvent = (channelState, eventName, logName, handlerKey) => {
+    channelState.channel.listen(eventName, (payload) => {
+        const message = getMessageFromPayload(payload);
+        const deletePayload = message || payload;
+
+        console.log(
+            `[Conversation Realtime] ${logName} RAW PAYLOAD:`,
+            safeStringify(payload)
+        );
+
+        console.log(
+            `[Conversation Realtime] ${logName} DELETE CHECK:`,
+            getDeletePayloadDebugInfo(payload)
+        );
+
+        // Delete events can arrive as a full message object OR only { id/message_id }.
+        // Do not ignore the event just because a nested message object is missing.
+        channelState.handlers?.[handlerKey]?.(deletePayload, payload);
+    });
+};
+
 const bindTypingWhisperEvent = (channelState) => {
     if (typeof channelState?.channel?.listenForWhisper !== 'function') {
         console.log(
@@ -216,10 +253,29 @@ const bindTypingWhisperEvent = (channelState) => {
     });
 };
 
+const buildHandlers = ({
+    onMessageSent,
+    onMessageUpdated,
+    onMessageDeleted,
+    onMessageRemoved,
+    onMessageDeletedForEveryone,
+    onTyping,
+}) => ({
+    onMessageSent,
+    onMessageUpdated,
+    onMessageDeleted,
+    onMessageRemoved,
+    onMessageDeletedForEveryone,
+    onTyping,
+});
+
 export function subscribeToConversationChannel({
     conversationId,
     onMessageSent,
     onMessageUpdated,
+    onMessageDeleted,
+    onMessageRemoved,
+    onMessageDeletedForEveryone,
     onTyping,
 }) {
     const echo = getEcho();
@@ -238,11 +294,14 @@ export function subscribeToConversationChannel({
     const existingChannelState = conversationChannels.get(normalizedConversationId);
 
     if (existingChannelState) {
-        existingChannelState.handlers = {
+        existingChannelState.handlers = buildHandlers({
             onMessageSent,
             onMessageUpdated,
+            onMessageDeleted,
+            onMessageRemoved,
+            onMessageDeletedForEveryone,
             onTyping,
-        };
+        });
 
         console.log(
             '[Conversation Realtime] Already subscribed to conversation channel, handlers updated:',
@@ -268,11 +327,14 @@ export function subscribeToConversationChannel({
         conversationId: normalizedConversationId,
         isSubscribed: false,
         hasSubscriptionError: false,
-        handlers: {
+        handlers: buildHandlers({
             onMessageSent,
             onMessageUpdated,
+            onMessageDeleted,
+            onMessageRemoved,
+            onMessageDeletedForEveryone,
             onTyping,
-        },
+        }),
     };
 
     conversationChannels.set(normalizedConversationId, channelState);
@@ -306,6 +368,23 @@ export function subscribeToConversationChannel({
     bindMessageEvent(channelState, 'MessageUpdated', 'MessageUpdated(no-dot)', 'onMessageUpdated');
     bindMessageEvent(channelState, '.message.updated', 'message.updated', 'onMessageUpdated');
     bindMessageEvent(channelState, 'message.updated', 'message.updated(no-dot)', 'onMessageUpdated');
+
+    bindDeleteMessageEvent(channelState, '.MessageDeleted', 'MessageDeleted', 'onMessageDeleted');
+    bindDeleteMessageEvent(channelState, 'MessageDeleted', 'MessageDeleted(no-dot)', 'onMessageDeleted');
+    bindDeleteMessageEvent(channelState, '.message.deleted', 'message.deleted', 'onMessageDeleted');
+    bindDeleteMessageEvent(channelState, 'message.deleted', 'message.deleted(no-dot)', 'onMessageDeleted');
+
+    bindDeleteMessageEvent(channelState, '.MessageRemoved', 'MessageRemoved', 'onMessageRemoved');
+    bindDeleteMessageEvent(channelState, 'MessageRemoved', 'MessageRemoved(no-dot)', 'onMessageRemoved');
+    bindDeleteMessageEvent(channelState, '.message.removed', 'message.removed', 'onMessageRemoved');
+    bindDeleteMessageEvent(channelState, 'message.removed', 'message.removed(no-dot)', 'onMessageRemoved');
+
+    bindDeleteMessageEvent(channelState, '.MessageDeletedForEveryone', 'MessageDeletedForEveryone', 'onMessageDeletedForEveryone');
+    bindDeleteMessageEvent(channelState, 'MessageDeletedForEveryone', 'MessageDeletedForEveryone(no-dot)', 'onMessageDeletedForEveryone');
+    bindDeleteMessageEvent(channelState, '.message.deleted_for_everyone', 'message.deleted_for_everyone', 'onMessageDeletedForEveryone');
+    bindDeleteMessageEvent(channelState, 'message.deleted_for_everyone', 'message.deleted_for_everyone(no-dot)', 'onMessageDeletedForEveryone');
+    bindDeleteMessageEvent(channelState, '.message.deleted.for.everyone', 'message.deleted.for.everyone', 'onMessageDeletedForEveryone');
+    bindDeleteMessageEvent(channelState, 'message.deleted.for.everyone', 'message.deleted.for.everyone(no-dot)', 'onMessageDeletedForEveryone');
 
     bindTypingWhisperEvent(channelState);
 

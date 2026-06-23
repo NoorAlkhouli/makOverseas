@@ -48,10 +48,10 @@ import {
     sendConversationTypingWhisper,
     subscribeToConversationChannel,
 } from "../../services/realtime/conversationRealtimeService";
-// import {
-//     ScannedDocumentConfirmModal,
-//     useScanDocument,
-// } from "../../components/ScanDocumentTools";
+import {
+    ScannedDocumentConfirmModal,
+    useScanDocument,
+} from "../../components/ScanDocumentTools";
 import {
     ChatCameraCaptureModal,
     MediaConfirmModal,
@@ -881,6 +881,99 @@ const isMessageDeletable = (message) => {
     return !!getMessageDeleteId(message);
 };
 
+const getMessageLocalTrackingId = (message) => {
+    const trackingId =
+        message?.local_id ||
+        message?.localId ||
+        message?.tempId ||
+        message?.optimistic_id ||
+        message?.optimisticId ||
+        null;
+
+    return trackingId !== undefined && trackingId !== null && trackingId !== ""
+        ? String(trackingId)
+        : null;
+};
+
+const preserveLocalTrackingOnSentMessage = (sentMessage, previousMessage) => {
+    if (!previousMessage) {
+        return sentMessage;
+    }
+
+    const localTrackingId =
+        getMessageLocalTrackingId(previousMessage) ||
+        (String(previousMessage?.id || "").startsWith("local-")
+            ? String(previousMessage.id)
+            : null);
+
+    if (!localTrackingId) {
+        return sentMessage;
+    }
+
+    return {
+        ...sentMessage,
+        local_id: sentMessage?.local_id || localTrackingId,
+        localId: sentMessage?.localId || localTrackingId,
+        tempId: sentMessage?.tempId || localTrackingId,
+    };
+};
+
+const isMessageSentByViewer = (message, viewerIds = []) => {
+    if (!message) {
+        return false;
+    }
+
+    if (
+        message.side === "me" ||
+        message.is_mine === true ||
+        message.isMine === true ||
+        message.raw?.is_mine === true ||
+        message.raw?.sender?.is_me === true ||
+        message.sender?.is_me === true
+    ) {
+        return true;
+    }
+
+    const senderId =
+        message?.raw?.sender?.id ||
+        message?.raw?.sender_id ||
+        message?.raw?.senderId ||
+        message?.raw?.user_id ||
+        message?.raw?.userId ||
+        message?.sender?.id ||
+        message?.sender_id ||
+        message?.senderId ||
+        message?.user_id ||
+        message?.userId ||
+        null;
+
+    if (!senderId) {
+        return false;
+    }
+
+    return viewerIds
+        .filter((viewerId) => viewerId !== undefined && viewerId !== null && viewerId !== "")
+        .some((viewerId) => String(viewerId) === String(senderId));
+};
+
+const canViewerDeleteMessage = ({ viewerRole, viewerIds = [], message }) => {
+    if (!isMessageDeletable(message)) {
+        return false;
+    }
+
+    const messageType = String(message?.type || getApiMessageType(message?.raw || message) || "").toLowerCase();
+
+    if (["system", "call"].includes(messageType)) {
+        return false;
+    }
+
+    if (Number(viewerRole) === 3) {
+        return true;
+    }
+
+    return isMessageSentByViewer(message, viewerIds);
+};
+
 const getValidApiMessageId = (message) => {
     const messageId =
         message?.raw?.id ||
@@ -1187,8 +1280,43 @@ const isApiMessageDeleted = (message) => {
         message?.raw?.is_deleted === true ||
         message?.raw?.deleted_at ||
         message?.raw?.deletedAt ||
-        message?.raw?.isDeleted === true
+        message?.raw?.isDeleted === true ||
+        message?.message?.is_deleted === true ||
+        message?.message?.deleted_at ||
+        message?.message?.deletedAt ||
+        message?.data?.is_deleted === true ||
+        message?.data?.deleted_at ||
+        message?.data?.deletedAt
     );
+};
+
+const getDeletedRealtimeMessageId = (payload) => {
+    const message =
+        payload?.message ||
+        payload?.data?.message ||
+        payload?.item ||
+        payload?.data?.item ||
+        payload?.data ||
+        payload ||
+        null;
+
+    const messageId =
+        message?.raw?.id ||
+        message?.message_id ||
+        message?.messageId ||
+        message?.id ||
+        message?.uuid ||
+        payload?.message_id ||
+        payload?.messageId ||
+        payload?.id ||
+        payload?.uuid ||
+        null;
+
+    if (messageId === undefined || messageId === null || messageId === "") {
+        return null;
+    }
+
+    return String(messageId);
 };
 
 const getVisibleShowConversationMessages = (response) => {
@@ -2762,6 +2890,13 @@ export default function IndividualChatScreen({ navigation, route }) {
     const insets = useSafeAreaInsets();
     const { width, height } = useWindowDimensions();
     const messagesScrollRef = useRef(null);
+    const messageLayoutsRef = useRef(new Map());
+    const pendingScrollToMessageIdRef = useRef(null);
+    const replyHighlightTimerRef = useRef(null);
+    const [highlightedMessageId, setHighlightedMessageId] = useState(null);
+    const isMessagesNearBottomRef = useRef(true);
+    const [showScrollToBottomButton, setShowScrollToBottomButton] = useState(false);
+    const [newMessagesCount, setNewMessagesCount] = useState(0);
     const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
     const recorderState = useAudioRecorderState(audioRecorder, 250);
     const isRecordingRef = useRef(false);
@@ -2985,6 +3120,24 @@ export default function IndividualChatScreen({ navigation, route }) {
             canRoleBlockConversations(currentUserRole)
         );
 
+    const currentViewerIds = useMemo(
+        () => [
+            currentProfileUserId,
+            currentUserId,
+        ].filter((viewerId) => viewerId !== undefined && viewerId !== null && viewerId !== ""),
+        [currentProfileUserId, currentUserId]
+    );
+
+    const canDeleteSelectedMessage = useMemo(
+        () =>
+            canViewerDeleteMessage({
+                viewerRole: currentUserRole,
+                viewerIds: currentViewerIds,
+                message: messageOptionsMessage,
+            }),
+        [currentUserRole, currentViewerIds, messageOptionsMessage]
+    );
+
     useEffect(() => {
         let isMounted = true;
 
@@ -3078,10 +3231,157 @@ export default function IndividualChatScreen({ navigation, route }) {
         tr,
     });
 
+    const getJumpableMessageId = (message) => {
+        const messageId =
+            message?.raw?.id ||
+            message?.message_id ||
+            message?.id ||
+            message?.uuid ||
+            message?.reply_to_message_id ||
+            message?.replyToMessageId ||
+            null;
+
+        return getNormalizedChatValue(messageId);
+    };
+
+    const flashMessageHighlight = (messageId) => {
+        const normalizedMessageId = getNormalizedChatValue(messageId);
+
+        if (!normalizedMessageId) {
+            return;
+        }
+
+        if (replyHighlightTimerRef.current) {
+            clearTimeout(replyHighlightTimerRef.current);
+            replyHighlightTimerRef.current = null;
+        }
+
+        setHighlightedMessageId(normalizedMessageId);
+
+        replyHighlightTimerRef.current = setTimeout(() => {
+            setHighlightedMessageId(null);
+            replyHighlightTimerRef.current = null;
+        }, 1500);
+    };
+
+    const scrollToMessageById = (messageId) => {
+        const normalizedMessageId = getNormalizedChatValue(messageId);
+
+        if (!normalizedMessageId) {
+            return false;
+        }
+
+        const layout = messageLayoutsRef.current.get(normalizedMessageId);
+
+        if (!layout) {
+            return false;
+        }
+
+        const targetY = Math.max(0, Number(layout.y || 0) - 88);
+
+        requestAnimationFrame(() => {
+            messagesScrollRef.current?.scrollTo({
+                y: targetY,
+                animated: true,
+            });
+
+            flashMessageHighlight(normalizedMessageId);
+        });
+
+        pendingScrollToMessageIdRef.current = null;
+        return true;
+    };
+
+    const handleMessageLayout = (message, layout) => {
+        const messageId = getJumpableMessageId(message);
+
+        if (!messageId || !layout) {
+            return;
+        }
+
+        messageLayoutsRef.current.set(messageId, {
+            y: Number(layout.y || 0),
+            height: Number(layout.height || 0),
+        });
+
+        if (pendingScrollToMessageIdRef.current === messageId) {
+            setTimeout(() => {
+                scrollToMessageById(messageId);
+            }, 80);
+        }
+    };
+
+    const handleReplyPreviewPress = async (replyMessage, ownerMessage = null) => {
+        const targetMessageId =
+            getJumpableMessageId(replyMessage) ||
+            getNormalizedChatValue(ownerMessage?.reply_to_message_id) ||
+            getNormalizedChatValue(ownerMessage?.replyToMessageId) ||
+            getNormalizedChatValue(ownerMessage?.raw?.reply_to_message_id) ||
+            getNormalizedChatValue(ownerMessage?.raw?.replyToMessageId);
+
+        if (!targetMessageId) {
+            return;
+        }
+
+        if (scrollToMessageById(targetMessageId)) {
+            return;
+        }
+
+        pendingScrollToMessageIdRef.current = targetMessageId;
+
+        if (hasOlderMessages && !isLoadingOlderMessagesRef.current) {
+            await loadOlderMessages();
+
+            setTimeout(() => {
+                if (!scrollToMessageById(targetMessageId) && !hasOlderMessages) {
+                    pendingScrollToMessageIdRef.current = null;
+                }
+            }, 260);
+
+            return;
+        }
+
+        Alert.alert(
+            tr("replyMessageNotLoadedTitle", isArabic ? "الرسالة غير ظاهرة" : "Message not visible"),
+            tr(
+                "replyMessageNotLoadedMessage",
+                isArabic
+                    ? "الرسالة الأصلية قديمة أو غير محمّلة حالياً. اسحب للأعلى لتحميل الرسائل الأقدم ثم اضغط على الريبلاي مرة ثانية."
+                    : "The original message is older or not loaded yet. Scroll up to load earlier messages, then tap the reply again."
+            )
+        );
+
+        pendingScrollToMessageIdRef.current = null;
+    };
+
     const scrollToBottom = (animated = true) => {
         requestAnimationFrame(() => {
             messagesScrollRef.current?.scrollToEnd({ animated });
         });
+    };
+
+    const handleScrollToBottomButtonPress = () => {
+        isMessagesNearBottomRef.current = true;
+        setShowScrollToBottomButton(false);
+        setNewMessagesCount(0);
+        scrollToBottom(true);
+        markActiveConversationRead();
+    };
+
+    const handleNewMessageScrollBehavior = (shouldForceScroll = false) => {
+        if (shouldForceScroll || isMessagesNearBottomRef.current) {
+            setShowScrollToBottomButton(false);
+            setNewMessagesCount(0);
+
+            setTimeout(() => {
+                scrollToBottom(true);
+            }, 80);
+
+            return;
+        }
+
+        setShowScrollToBottomButton(true);
+        setNewMessagesCount((currentCount) => currentCount + 1);
     };
 
     const markActiveConversationRead = (
@@ -3106,6 +3406,41 @@ export default function IndividualChatScreen({ navigation, route }) {
         });
     };
 
+
+    const removeDeletedMessageFromState = (deletedMessageId) => {
+        const normalizedDeletedMessageId = getNormalizedChatValue(deletedMessageId);
+
+        if (!normalizedDeletedMessageId) {
+            return;
+        }
+
+        setMessageOptionsMessage((currentMessage) => {
+            if (!currentMessage) {
+                return currentMessage;
+            }
+
+            const currentMessageId = getComparableMessageId(currentMessage);
+
+            return currentMessageId !== undefined &&
+                currentMessageId !== null &&
+                String(currentMessageId) === String(normalizedDeletedMessageId)
+                ? null
+                : currentMessage;
+        });
+
+        setMessages((prevMessages) =>
+            prevMessages.filter((message) => {
+                const messageId = getComparableMessageId(message);
+
+                return !(
+                    messageId !== undefined &&
+                    messageId !== null &&
+                    String(messageId) === String(normalizedDeletedMessageId)
+                );
+            })
+        );
+    };
+
     const showCopyToast = () => {
         if (copyToastTimerRef.current) {
             clearTimeout(copyToastTimerRef.current);
@@ -3126,6 +3461,29 @@ export default function IndividualChatScreen({ navigation, route }) {
             }
         };
     }, []);
+
+    useEffect(() => {
+        return () => {
+            if (replyHighlightTimerRef.current) {
+                clearTimeout(replyHighlightTimerRef.current);
+                replyHighlightTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        const pendingMessageId = pendingScrollToMessageIdRef.current;
+
+        if (!pendingMessageId || isLoadingOlderMessages) {
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            scrollToMessageById(pendingMessageId);
+        }, 120);
+
+        return () => clearTimeout(timer);
+    }, [messages.length, isLoadingOlderMessages]);
 
     useEffect(() => {
         return () => {
@@ -3162,6 +3520,52 @@ export default function IndividualChatScreen({ navigation, route }) {
     }, [messages]);
 
     useEffect(() => {
+        if (!messageOptionsMessage) {
+            return;
+        }
+
+        const selectedApiId = getMessageDeleteId(messageOptionsMessage);
+        const selectedTrackingId =
+            getMessageLocalTrackingId(messageOptionsMessage) ||
+            (String(messageOptionsMessage?.id || "").startsWith("local-")
+                ? String(messageOptionsMessage.id)
+                : null);
+
+        const updatedSelectedMessage = messages.find((item) => {
+            const itemApiId = getMessageDeleteId(item);
+
+            if (
+                selectedApiId &&
+                itemApiId &&
+                String(itemApiId) === String(selectedApiId)
+            ) {
+                return true;
+            }
+
+            const itemTrackingId = getMessageLocalTrackingId(item);
+
+            return !!(
+                selectedTrackingId &&
+                itemTrackingId &&
+                String(itemTrackingId) === String(selectedTrackingId)
+            );
+        });
+
+        if (
+            updatedSelectedMessage &&
+            updatedSelectedMessage !== messageOptionsMessage
+        ) {
+            setMessageOptionsMessage(updatedSelectedMessage);
+        }
+    }, [
+        messages,
+        messageOptionsMessage?.id,
+        messageOptionsMessage?.local_id,
+        messageOptionsMessage?.localId,
+        messageOptionsMessage?.tempId,
+    ]);
+
+    useEffect(() => {
         setTimeout(() => {
             scrollToBottom(false);
         }, 120);
@@ -3176,17 +3580,10 @@ export default function IndividualChatScreen({ navigation, route }) {
             return;
         }
 
-        setTimeout(() => {
-            if (
-                shouldKeepScrollPositionAfterOlderLoadRef.current ||
-                isLoadingOlderMessagesRef.current ||
-                Date.now() < suppressAutoScrollAfterOlderLoadUntilRef.current
-            ) {
-                return;
-            }
-
-            scrollToBottom(true);
-        }, 100);
+        if (isMessagesNearBottomRef.current) {
+            setShowScrollToBottomButton(false);
+            setNewMessagesCount(0);
+        }
     }, [messages.length]);
 
     useEffect(() => {
@@ -3327,7 +3724,12 @@ export default function IndividualChatScreen({ navigation, route }) {
                 });
 
 
-                if (!apiMessage?.id || isApiMessageDeleted(apiMessage)) {
+                if (!apiMessage?.id) {
+                    return;
+                }
+
+                if (isApiMessageDeleted(apiMessage)) {
+                    removeDeletedMessageFromState(getDeletedRealtimeMessageId(apiMessage));
                     return;
                 }
 
@@ -3413,7 +3815,12 @@ export default function IndividualChatScreen({ navigation, route }) {
 
                         return prevMessages.map((message, index) =>
                             index === localSendingIndex
-                                ? markMessageAsSent(preparedOwnMessage)
+                                ? markMessageAsSent(
+                                    preserveLocalTrackingOnSentMessage(
+                                        preparedOwnMessage,
+                                        message
+                                    )
+                                )
                                 : message
                         );
                     });
@@ -3455,9 +3862,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     preparedMessage,
                 ]);
 
-                setTimeout(() => {
-                    scrollToBottom(true);
-                }, 80);
+                handleNewMessageScrollBehavior(false);
             },
 
             onMessageUpdated: (apiMessage) => {
@@ -3466,18 +3871,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                 }
 
                 if (isApiMessageDeleted(apiMessage)) {
-                    setMessages((prevMessages) =>
-                        prevMessages.filter((message) => {
-                            const messageId =
-                                message?.raw?.id ||
-                                message?.message_id ||
-                                message?.id ||
-                                null;
-
-                            return String(messageId) !== String(apiMessage.id);
-                        })
-                    );
-
+                    removeDeletedMessageFromState(getDeletedRealtimeMessageId(apiMessage));
                     return;
                 }
 
@@ -3521,6 +3915,18 @@ export default function IndividualChatScreen({ navigation, route }) {
                             : preparedMessage;
                     })
                 );
+            },
+
+            onMessageDeleted: (deleteEvent) => {
+                removeDeletedMessageFromState(getDeletedRealtimeMessageId(deleteEvent));
+            },
+
+            onMessageRemoved: (deleteEvent) => {
+                removeDeletedMessageFromState(getDeletedRealtimeMessageId(deleteEvent));
+            },
+
+            onMessageDeletedForEveryone: (deleteEvent) => {
+                removeDeletedMessageFromState(getDeletedRealtimeMessageId(deleteEvent));
             },
 
             onTyping: (typingEvent) => {
@@ -3632,10 +4038,16 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
 
         loadedConversationIdRef.current = normalizedConversationId;
+        messageLayoutsRef.current.clear();
+        pendingScrollToMessageIdRef.current = null;
+        setHighlightedMessageId(null);
         canLoadOlderMessagesRef.current = false;
         messagesContentHeightRef.current = 0;
         messagesScrollOffsetYRef.current = 0;
         shouldKeepScrollPositionAfterOlderLoadRef.current = false;
+        isMessagesNearBottomRef.current = true;
+        setShowScrollToBottomButton(false);
+        setNewMessagesCount(0);
 
         let isMounted = true;
 
@@ -3852,9 +4264,22 @@ export default function IndividualChatScreen({ navigation, route }) {
     const hasOlderMessages = !!getNextOlderMessagesPage(conversationMessagesMeta);
 
     const handleMessagesScroll = (event) => {
-        messagesScrollOffsetYRef.current = Number(
-            event?.nativeEvent?.contentOffset?.y || 0
-        );
+        const offsetY = Number(event?.nativeEvent?.contentOffset?.y || 0);
+        const contentHeight = Number(event?.nativeEvent?.contentSize?.height || 0);
+        const viewportHeight = Number(event?.nativeEvent?.layoutMeasurement?.height || 0);
+        const distanceFromBottom = contentHeight - (offsetY + viewportHeight);
+        const isNearBottom = distanceFromBottom <= 120;
+
+        messagesScrollOffsetYRef.current = offsetY;
+        isMessagesNearBottomRef.current = isNearBottom;
+
+        if (isNearBottom) {
+            setShowScrollToBottomButton(false);
+            setNewMessagesCount(0);
+            return;
+        }
+
+        setShowScrollToBottomButton(true);
     };
 
     const handleMessagesContentSizeChange = (contentWidth, contentHeight) => {
@@ -3894,7 +4319,9 @@ export default function IndividualChatScreen({ navigation, route }) {
             return;
         }
 
-        scrollToBottom(false);
+        if (isMessagesNearBottomRef.current) {
+            scrollToBottom(false);
+        }
     };
 
     const loadOlderMessages = async () => {
@@ -4106,7 +4533,12 @@ export default function IndividualChatScreen({ navigation, route }) {
                     if (optimisticIndex !== -1) {
                         return prev.map((item, index) =>
                             index === optimisticIndex
-                                ? markMessageAsSent(preparedMessage)
+                                ? markMessageAsSent(
+                                    preserveLocalTrackingOnSentMessage(
+                                        preparedMessage,
+                                        item
+                                    )
+                                )
                                 : item
                         );
                     }
@@ -4183,9 +4615,7 @@ export default function IndividualChatScreen({ navigation, route }) {
 
         setMessages((prev) => [...prev, optimisticMessage]);
 
-        setTimeout(() => {
-            scrollToBottom(true);
-        }, 40);
+        handleNewMessageScrollBehavior(true);
 
         try {
             setIsMutatingChat(true);
@@ -4900,25 +5330,25 @@ export default function IndividualChatScreen({ navigation, route }) {
         });
     }, [cameraCaptureVisible, pickMediaFromLibrary]);
 
-    // const {
-    //     selectedScannedDocument,
-    //     selectedScannedDocuments,
-    //     activeScannedPageIndex,
-    //     isScanningDocument,
-    //     isCreatingScannedPdf,
-    //     scanDocumentWithCamera,
-    //     handleAddScannedPages,
-    //     handleRetakeScannedPage,
-    //     handleDeleteScannedPage,
-    //     handleCancelScannedDocument,
-    //     handleConfirmSendScannedDocument,
-    //     setActiveScannedPageIndex,
-    // } = useScanDocument({
-    //     tr,
-    //     addMessages,
-    //     cancelVoiceRecordingIfActive,
-    //     onSendScannedDocument: handleSendMediaMessage,
-    // });
+    const {
+        selectedScannedDocument,
+        selectedScannedDocuments,
+        activeScannedPageIndex,
+        isScanningDocument,
+        isCreatingScannedPdf,
+        scanDocumentWithCamera,
+        handleAddScannedPages,
+        handleRetakeScannedPage,
+        handleDeleteScannedPage,
+        handleCancelScannedDocument,
+        handleConfirmSendScannedDocument,
+        setActiveScannedPageIndex,
+    } = useScanDocument({
+        tr,
+        addMessages,
+        cancelVoiceRecordingIfActive,
+        onSendScannedDocument: handleSendMediaMessage,
+    });
 
     const showBlockedSendAlert = () => {
         Alert.alert(
@@ -5175,7 +5605,13 @@ export default function IndividualChatScreen({ navigation, route }) {
     };
 
     const handleDeleteMessage = (message) => {
-        if (!isMessageDeletable(message)) {
+        if (
+            !canViewerDeleteMessage({
+                viewerRole: currentUserRole,
+                viewerIds: currentViewerIds,
+                message,
+            })
+        ) {
             Alert.alert(
                 tr("deleteUnavailableTitle", "Delete unavailable"),
                 tr("deleteUnavailableMessage", "This message cannot be deleted.")
@@ -5204,9 +5640,8 @@ export default function IndividualChatScreen({ navigation, route }) {
                     onPress: async () => {
                         const previousMessages = messagesRef.current || messages;
 
-                        setMessages((prev) =>
-                            prev.filter((item) => getMessageDeleteId(item) !== messageDeleteId)
-                        );
+                        setMessageOptionsMessage(null);
+                        removeDeletedMessageFromState(messageDeleteId);
 
                         try {
                             await chatService.deleteMessage(messageDeleteId);
@@ -5474,7 +5909,50 @@ export default function IndividualChatScreen({ navigation, route }) {
                         onMessageLongPress={handleMessageLongPress}
                         canCreateQuote={canViewerCreateQuote}
                         viewerRole={currentUserRole}
+                        onMessageLayout={handleMessageLayout}
+                        onReplyPreviewPress={handleReplyPreviewPress}
+                        highlightedMessageId={highlightedMessageId}
                     />
+
+                    {(showScrollToBottomButton || newMessagesCount > 0) && (
+                        <TouchableOpacity
+                            style={[
+                                styles.scrollToBottomButton,
+                                isArabic
+                                    ? styles.scrollToBottomButtonArabic
+                                    : styles.scrollToBottomButtonEnglish,
+                                {
+                                    bottom: (insets.bottom || 0) + (isCompactScreen ? 78 : 86),
+                                    backgroundColor: colors.modalCard,
+                                    borderColor: colors.border,
+                                },
+                            ]}
+                            activeOpacity={0.86}
+                            onPress={handleScrollToBottomButtonPress}
+                        >
+                            <Ionicons
+                                name="chevron-down"
+                                size={24}
+                                color={colors.primary || colors.text}
+                            />
+
+                            {newMessagesCount > 0 && (
+                                <View
+                                    style={[
+                                        styles.scrollToBottomBadge,
+                                        {
+                                            backgroundColor: colors.danger || colors.primary,
+                                            borderColor: colors.modalCard,
+                                        },
+                                    ]}
+                                >
+                                    <Text style={styles.scrollToBottomBadgeText}>
+                                        {newMessagesCount > 99 ? "99+" : newMessagesCount}
+                                    </Text>
+                                </View>
+                            )}
+                        </TouchableOpacity>
+                    )}
 
                     <IndividualChatComposer
                         colors={colors}
@@ -5547,7 +6025,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     visible={!!messageOptionsMessage}
                     message={messageOptionsMessage}
                     previewText={getMessagePreviewText(messageOptionsMessage, tr)}
-                    canDelete={isMessageDeletable(messageOptionsMessage)}
+                    canDelete={canDeleteSelectedMessage}
                     canRetry={messageOptionsMessage?.isFailed === true}
                     colors={colors}
                     tr={tr}
@@ -5646,7 +6124,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     }}
                 />
 
-                {/* <ScannedDocumentConfirmModal
+                <ScannedDocumentConfirmModal
                     visible={!!selectedScannedDocument}
                     documentItem={selectedScannedDocument}
                     documents={selectedScannedDocuments}
@@ -5660,7 +6138,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     onRetake={handleRetakeScannedPage}
                     onChangePage={setActiveScannedPageIndex}
                     onSend={handleConfirmSendScannedDocument}
-                />  */}
+                />
                 <DocumentPreviewModal
                     visible={!!previewDocument}
                     documentItem={previewDocument}
@@ -6718,6 +7196,50 @@ const styles = StyleSheet.create({
     copyToastText: {
         fontSize: 13,
         fontWeight: "900",
+    },
+
+    scrollToBottomButton: {
+        position: "absolute",
+        width: 46,
+        height: 46,
+        borderRadius: 23,
+        borderWidth: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 80,
+        elevation: 80,
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.16,
+        shadowRadius: 8,
+    },
+
+    scrollToBottomButtonArabic: {
+        left: 18,
+    },
+
+    scrollToBottomButtonEnglish: {
+        right: 18,
+    },
+
+    scrollToBottomBadge: {
+        position: "absolute",
+        top: -7,
+        right: -7,
+        minWidth: 22,
+        height: 22,
+        borderRadius: 11,
+        borderWidth: 2,
+        paddingHorizontal: 5,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+
+    scrollToBottomBadgeText: {
+        color: "#ffffff",
+        fontSize: 11,
+        fontWeight: "900",
+        includeFontPadding: false,
     },
 
     attachmentOverlayRoot: {
