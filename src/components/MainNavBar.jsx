@@ -1,5 +1,5 @@
 import { Feather, MaterialIcons } from "@expo/vector-icons";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     Image,
@@ -25,6 +25,7 @@ export default function MainNavBar({
     onToggleLanguage,
     onCreateGroupPress = null,
     menuItems = [],
+    showMenu = true,
 }) {
     const { t, i18n } = useTranslation();
     const isArabic = i18n.language === "ar";
@@ -37,6 +38,39 @@ export default function MainNavBar({
     const closeMenu = () => {
         setMenuOpen(false);
     };
+
+    /**
+     * لما ننتقل بين التابات أو تتغير حالة الـ navigation
+     * المنيو إذا كان مفتوح بينسكر لحالو.
+     */
+    useEffect(() => {
+        if (!navigation?.addListener) {
+            return undefined;
+        }
+
+        const unsubscribeBlur = navigation.addListener("blur", () => {
+            setMenuOpen(false);
+        });
+
+        const unsubscribeState = navigation.addListener("state", () => {
+            setMenuOpen(false);
+        });
+
+        return () => {
+            unsubscribeBlur?.();
+            unsubscribeState?.();
+        };
+    }, [navigation]);
+
+    /**
+     * إذا صفحة معينة مثل Profile بعتت showMenu={false}
+     * منسكر المنيو فوراً وما منخليه عالق.
+     */
+    useEffect(() => {
+        if (!showMenu && menuOpen) {
+            setMenuOpen(false);
+        }
+    }, [showMenu, menuOpen]);
 
     const handleToggleTheme = async () => {
         await toggleTheme();
@@ -100,7 +134,7 @@ export default function MainNavBar({
 
     return (
         <>
-            {menuOpen && (
+            {showMenu && menuOpen && (
                 <Pressable
                     style={styles.menuBackdrop}
                     onPress={closeMenu}
@@ -137,7 +171,10 @@ export default function MainNavBar({
                     <TouchableOpacity
                         activeOpacity={0.85}
                         style={styles.notificationButton}
-                        onPress={() => navigation.navigate("Notifications")}
+                        onPress={() => {
+                            closeMenu();
+                            navigation.navigate("Notifications");
+                        }}
                     >
                         <Feather
                             name="bell"
@@ -158,7 +195,10 @@ export default function MainNavBar({
                         <TouchableOpacity
                             activeOpacity={0.85}
                             style={styles.createGroupButton}
-                            onPress={onCreateGroupPress}
+                            onPress={() => {
+                                closeMenu();
+                                onCreateGroupPress();
+                            }}
                             accessibilityRole="button"
                             accessibilityLabel={
                                 isArabic ? "إنشاء مجموعة" : "Create group"
@@ -172,53 +212,55 @@ export default function MainNavBar({
                         </TouchableOpacity>
                     )}
 
-                    <View style={styles.menuWrapper}>
-                        <TouchableOpacity
-                            activeOpacity={0.85}
-                            style={styles.menuButton}
-                            onPress={() => setMenuOpen((prev) => !prev)}
-                        >
-                            <Feather
-                                name="menu"
-                                size={24}
-                                color={colors.textPrimary}
-                            />
-                        </TouchableOpacity>
-
-                        {menuOpen && (
-                            <View
-                                style={[
-                                    styles.menuDropdown,
-                                    isArabic
-                                        ? styles.menuDropdownArabic
-                                        : styles.menuDropdownEnglish,
-                                ]}
+                    {showMenu && (
+                        <View style={styles.menuWrapper}>
+                            <TouchableOpacity
+                                activeOpacity={0.85}
+                                style={styles.menuButton}
+                                onPress={() => setMenuOpen((prev) => !prev)}
                             >
-                                {finalMenuItems.map((item) => (
-                                    <Pressable
-                                        key={item.key}
-                                        style={[
-                                            styles.menuItem,
-                                            getRowDirectionStyle(isArabic),
-                                        ]}
-                                        onPress={() => handleMenuItemPress(item)}
-                                    >
-                                        {renderIcon(item)}
+                                <Feather
+                                    name="menu"
+                                    size={24}
+                                    color={colors.textPrimary}
+                                />
+                            </TouchableOpacity>
 
-                                        <Text
+                            {menuOpen && (
+                                <View
+                                    style={[
+                                        styles.menuDropdown,
+                                        isArabic
+                                            ? styles.menuDropdownArabic
+                                            : styles.menuDropdownEnglish,
+                                    ]}
+                                >
+                                    {finalMenuItems.map((item) => (
+                                        <Pressable
+                                            key={item.key}
                                             style={[
-                                                styles.menuText,
-                                                getTextDirectionStyle(isArabic),
+                                                styles.menuItem,
+                                                getRowDirectionStyle(isArabic),
                                             ]}
-                                            numberOfLines={1}
+                                            onPress={() => handleMenuItemPress(item)}
                                         >
-                                            {item.label}
-                                        </Text>
-                                    </Pressable>
-                                ))}
-                            </View>
-                        )}
-                    </View>
+                                            {renderIcon(item)}
+
+                                            <Text
+                                                style={[
+                                                    styles.menuText,
+                                                    getTextDirectionStyle(isArabic),
+                                                ]}
+                                                numberOfLines={1}
+                                            >
+                                                {item.label}
+                                            </Text>
+                                        </Pressable>
+                                    ))}
+                                </View>
+                            )}
+                        </View>
+                    )}
                 </View>
             </View>
         </>

@@ -503,14 +503,19 @@ export function getConversationChannel(conversationId) {
 }
 
 export function leaveConversationChannel(conversationId) {
-    const echo = getEcho();
-
-    if (!echo || !conversationId) {
+    if (!conversationId) {
         return;
     }
 
     const normalizedConversationId = String(conversationId);
     const channelName = `conversation.${normalizedConversationId}`;
+
+    const echo = getEcho({ silent: true });
+
+    if (!echo) {
+        conversationChannels.delete(normalizedConversationId);
+        return;
+    }
 
     console.log('[Conversation Realtime] Leaving:', channelName);
 

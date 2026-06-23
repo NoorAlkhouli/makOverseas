@@ -40,7 +40,8 @@ import channelEvents from "@/src/services/api/channelEvents";
  */
 if (
     Platform.OS === "android" &&
-    UIManager.setLayoutAnimationEnabledExperimental
+    UIManager.setLayoutAnimationEnabledExperimental &&
+    !global.nativeFabricUIManager
 ) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
 }

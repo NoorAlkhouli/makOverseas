@@ -23,6 +23,7 @@ import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
     Alert,
+    Animated,
     Image,
     ImageBackground,
     Keyboard,
@@ -43,9 +44,10 @@ export default function Login({ navigation }) {
     const [phone, setPhone] = useState("");
     const [selectedCountry, setSelectedCountry] = useState(COUNTRIES[0]);
     const [loading, setLoading] = useState(false);
-    const [keyboardHeight, setKeyboardHeight] = useState(0);
+    const [keyboardOpen, setKeyboardOpen] = useState(false);
 
     const scrollRef = useRef(null);
+    const keyboardAnim = useRef(new Animated.Value(0)).current;
 
     const { height } = useWindowDimensions();
 
@@ -55,41 +57,69 @@ export default function Login({ navigation }) {
     const { colors, isDark } = useAppTheme();
 
     const styles = useMemo(
-        () => createStyles(colors, height),
-        [colors, height]
+        () => createStyles(colors, height, keyboardOpen),
+        [colors, height, keyboardOpen]
     );
 
     const imageSource = isDark ? appImages.splashDark : appImages.splashLight;
 
-    const isKeyboardOpen = keyboardHeight > 0;
-
     useEffect(() => {
         const showEvent =
             Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
-
         const hideEvent =
             Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
         const showSubscription = Keyboard.addListener(showEvent, (event) => {
-            const nextKeyboardHeight = event?.endCoordinates?.height || 0;
-            setKeyboardHeight(nextKeyboardHeight);
+            setKeyboardOpen(true);
+
+            Animated.timing(keyboardAnim, {
+                toValue: 1,
+                duration: Platform.OS === "ios" ? event?.duration || 260 : 220,
+                useNativeDriver: true,
+            }).start();
+
+            setTimeout(() => {
+                requestAnimationFrame(() => {
+                    scrollRef.current?.scrollTo({
+                        y: Platform.OS === "android" ? 60 : 80,
+                        animated: Platform.OS === "ios",
+                    });
+                });
+            }, Platform.OS === "android" ? 220 : 120);
         });
 
-        const hideSubscription = Keyboard.addListener(hideEvent, () => {
-            setKeyboardHeight(0);
+        const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
+            Animated.timing(keyboardAnim, {
+                toValue: 0,
+                duration: Platform.OS === "ios" ? event?.duration || 260 : 220,
+                useNativeDriver: true,
+            }).start();
+
+            setTimeout(() => {
+                scrollRef.current?.scrollTo({
+                    y: 0,
+                    animated: Platform.OS === "ios",
+                });
+                setKeyboardOpen(false);
+            }, Platform.OS === "android" ? 120 : 80);
         });
 
         return () => {
             showSubscription.remove();
             hideSubscription.remove();
         };
-    }, []);
+    }, [keyboardAnim]);
 
-    const scrollToFormEnd = () => {
-        setTimeout(() => {
-            scrollRef.current?.scrollToEnd({ animated: true });
-        }, Platform.OS === "android" ? 120 : 80);
-    };
+    const logoScale = keyboardAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [1, 0.62],
+    });
+
+    const logoTranslateY = keyboardAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, Platform.OS === "android" ? -54 : -62],
+    });
+
 
     const handleContinue = async () => {
         const cleanFullName = fullName.trim();
@@ -227,34 +257,37 @@ export default function Login({ navigation }) {
                                 <LanguageButton disabled={loading} />
                             </View>
 
-                            <View pointerEvents="none" style={styles.logoBox}>
+                            <Animated.View
+                                pointerEvents="none"
+                                style={[
+                                    styles.logoBox,
+                                    {
+                                        transform: [
+                                            { translateY: logoTranslateY },
+                                            { scale: logoScale },
+                                        ],
+                                    },
+                                ]}
+                            >
                                 <Image
                                     source={require("@/src/assets/MAK/logo-light.png")}
                                     style={styles.logo}
                                     resizeMode="contain"
                                 />
-                            </View>
+                            </Animated.View>
                         </View>
 
                         <KeyboardAvoidingView
                             style={styles.contentSection}
-                            behavior={Platform.OS === "ios" ? "padding" : undefined}
-                            keyboardVerticalOffset={Platform.OS === "ios" ? 12 : 0}
+                            behavior={Platform.OS === "ios" ? "padding" : "height"}
+                            keyboardVerticalOffset={0}
                         >
                             <ScrollView
                                 ref={scrollRef}
                                 style={styles.scrollView}
-                                contentContainerStyle={[
-                                    styles.scrollContent,
-                                    isKeyboardOpen && {
-                                        paddingBottom:
-                                            Platform.OS === "android"
-                                                ? keyboardHeight + 28
-                                                : 44,
-                                    },
-                                ]}
+                                contentContainerStyle={styles.scrollContent}
                                 keyboardShouldPersistTaps="handled"
-                                keyboardDismissMode="interactive"
+                                keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
                                 showsVerticalScrollIndicator={false}
                                 bounces={false}
                                 overScrollMode="never"
@@ -262,7 +295,7 @@ export default function Login({ navigation }) {
                             >
                                 <View style={styles.formBox}>
                                     <Text style={[styles.title, getTextDirectionStyle(isArabic)]}>
-                                        {t("login.titleWelcome")}{" "}
+                                        {t("login.titleWelcome")} {" "}
                                         <Text style={styles.green}>
                                             {t("login.titleBack")}
                                         </Text>
@@ -278,7 +311,6 @@ export default function Login({ navigation }) {
                                         <TextInput
                                             value={fullName}
                                             onChangeText={setFullName}
-                                            onFocus={scrollToFormEnd}
                                             placeholder={t("login.fullNamePlaceholder", {
                                                 defaultValue: "Full Name",
                                             })}
@@ -288,22 +320,21 @@ export default function Login({ navigation }) {
                                             editable={!loading}
                                             textAlign={isArabic ? "right" : "left"}
                                             returnKeyType="next"
+                                            blurOnSubmit={false}
                                         />
                                     </View>
 
-                                    <View onTouchStart={scrollToFormEnd}>
-                                        <CountryPhoneInput
-                                            value={phone}
-                                            onChangeText={setPhone}
-                                            selectedCountry={selectedCountry}
-                                            onChangeCountry={setSelectedCountry}
-                                            placeholder={t("login.phonePlaceholder", {
-                                                defaultValue: "Client phone number",
-                                            })}
-                                            disabled={loading}
-                                            isArabic={isArabic}
-                                        />
-                                    </View>
+                                    <CountryPhoneInput
+                                        value={phone}
+                                        onChangeText={setPhone}
+                                        selectedCountry={selectedCountry}
+                                        onChangeCountry={setSelectedCountry}
+                                        placeholder={t("login.phonePlaceholder", {
+                                            defaultValue: "Client phone number",
+                                        })}
+                                        disabled={loading}
+                                        isArabic={isArabic}
+                                    />
 
                                     <TouchableOpacity
                                         activeOpacity={0.85}
@@ -333,21 +364,32 @@ export default function Login({ navigation }) {
                                         </LinearGradient>
                                     </TouchableOpacity>
 
-                                    <View style={[styles.privateBox, getRowDirectionStyle(isArabic)]}>
-                                        <Feather name="shield" size={22} color={colors.textMuted} />
-
-                                        <Text
+                                    {!keyboardOpen && (
+                                        <View
                                             style={[
-                                                styles.privateText,
-                                                getTextDirectionStyle(isArabic),
+                                                styles.privateBox,
+                                                getRowDirectionStyle(isArabic),
                                             ]}
                                         >
-                                            {t("login.privatePartOne")}{" "}
-                                            <Text style={styles.privateGreen}>
-                                                {t("login.privatePartTwo")}
+                                            <Feather
+                                                name="shield"
+                                                size={22}
+                                                color={colors.textMuted}
+                                            />
+
+                                            <Text
+                                                style={[
+                                                    styles.privateText,
+                                                    getTextDirectionStyle(isArabic),
+                                                ]}
+                                            >
+                                                {t("login.privatePartOne")} {" "}
+                                                <Text style={styles.privateGreen}>
+                                                    {t("login.privatePartTwo")}
+                                                </Text>
                                             </Text>
-                                        </Text>
-                                    </View>
+                                        </View>
+                                    )}
                                 </View>
                             </ScrollView>
                         </KeyboardAvoidingView>
@@ -358,9 +400,27 @@ export default function Login({ navigation }) {
     );
 }
 
-const createStyles = (colors, height) => {
+const createStyles = (colors, height, keyboardOpen) => {
+    const isTinyScreen = height < 660;
     const isSmallScreen = height < 720;
     const logoTop = Platform.OS === "android" ? 105 : 118;
+    const logoHeight = 120;
+
+    const activeLogoScale = keyboardOpen ? 0.62 : 1;
+    const activeLogoTranslateY = keyboardOpen
+        ? Platform.OS === "android"
+            ? -54
+            : -62
+        : 0;
+
+    const logoVisualBottom =
+        logoTop +
+        activeLogoTranslateY +
+        logoHeight / 2 +
+        (logoHeight * activeLogoScale) / 2;
+
+    const headerGap = keyboardOpen ? 10 : isSmallScreen ? 14 : 20;
+    const dynamicHeaderHeight = Math.ceil(logoVisualBottom + headerGap);
 
     return StyleSheet.create({
         root: {
@@ -380,7 +440,7 @@ const createStyles = (colors, height) => {
         },
 
         fixedHeader: {
-            height: Platform.OS === "android" ? 250 : 268,
+            height: dynamicHeaderHeight,
             width: "100%",
             paddingTop: Platform.OS === "android" ? 48 : 55,
             paddingHorizontal: 24,
@@ -409,7 +469,7 @@ const createStyles = (colors, height) => {
         },
 
         logo: {
-            width: 230,
+            width: isTinyScreen ? 210 : 230,
             height: 120,
         },
 
@@ -423,9 +483,15 @@ const createStyles = (colors, height) => {
 
         scrollContent: {
             flexGrow: 1,
-            paddingHorizontal: 34,
-            paddingTop: isSmallScreen ? 4 : 8,
-            paddingBottom: Platform.OS === "android" ? 28 : 44,
+            paddingHorizontal: isTinyScreen ? 24 : 34,
+            paddingTop: keyboardOpen ? 0 : isSmallScreen ? 4 : 8,
+            paddingBottom: keyboardOpen
+                ? Platform.OS === "android"
+                    ? 14
+                    : 18
+                : Platform.OS === "android"
+                    ? 28
+                    : 44,
             justifyContent: "flex-end",
         },
 
@@ -435,9 +501,9 @@ const createStyles = (colors, height) => {
 
         title: {
             color: colors.textPrimary,
-            fontSize: isSmallScreen ? 34 : 38,
+            fontSize: keyboardOpen ? (isTinyScreen ? 29 : 31) : isSmallScreen ? 34 : 38,
             fontWeight: "900",
-            marginBottom: 8,
+            marginBottom: keyboardOpen ? 8 : 8,
         },
 
         green: {
@@ -446,14 +512,14 @@ const createStyles = (colors, height) => {
 
         subtitle: {
             color: colors.textPrimary,
-            fontSize: isSmallScreen ? 17 : 19,
-            lineHeight: isSmallScreen ? 25 : 28,
+            fontSize: keyboardOpen ? 16 : isSmallScreen ? 17 : 19,
+            lineHeight: keyboardOpen ? 24 : isSmallScreen ? 25 : 28,
             fontWeight: "600",
-            marginBottom: isSmallScreen ? 18 : 22,
+            marginBottom: keyboardOpen ? 18 : isSmallScreen ? 18 : 22,
         },
 
         inputBox: {
-            height: 66,
+            height: keyboardOpen && isTinyScreen ? 60 : 66,
             borderWidth: 1.3,
             borderColor: colors.inputBorder,
             borderRadius: 20,
@@ -461,7 +527,7 @@ const createStyles = (colors, height) => {
             flexDirection: "row",
             alignItems: "center",
             paddingHorizontal: 24,
-            marginBottom: 16,
+            marginBottom: keyboardOpen ? 12 : 16,
         },
 
         input: {
@@ -473,9 +539,9 @@ const createStyles = (colors, height) => {
         },
 
         buttonWrapper: {
-            height: 66,
+            height: keyboardOpen && isTinyScreen ? 60 : 66,
             borderRadius: 21,
-            marginTop: 12,
+            marginTop: keyboardOpen ? 10 : 12,
             shadowColor: colors.primary,
             shadowOffset: { width: 0, height: 0 },
             shadowOpacity: 0.85,

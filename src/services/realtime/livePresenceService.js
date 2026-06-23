@@ -178,7 +178,7 @@ export function unsubscribeLivePresenceListener(listenerKey) {
 }
 
 export function leaveLivePresenceChannel() {
-    const echo = getEcho();
+    const echo = getEcho({ silent: true });
 
     if (!echo) {
         livePresenceChannel = null;

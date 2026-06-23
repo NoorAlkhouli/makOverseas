@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useMemo, useState } from "react";
 import {
     FlatList,
+    Image,
     Modal,
     Pressable,
     StyleSheet,
@@ -11,6 +12,8 @@ import {
     View,
 } from "react-native";
 
+import SyriaFlag from "../assets/MAK/syria-new-flag.png";
+
 import {
     getInputLanguageStyle,
     getRowDirectionStyle,
@@ -19,7 +22,12 @@ import {
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 
 const COUNTRIES = [
-    { name: "Syria", nameAr: "سوريا", code: "+963", flag: "🇸🇾" },
+    {
+        name: "Syria",
+        nameAr: "سوريا",
+        code: "+963",
+        flagImage: SyriaFlag,
+    },
     { name: "United Arab Emirates", nameAr: "الإمارات", code: "+971", flag: "🇦🇪" },
     { name: "Albania", nameAr: "ألبانيا", code: "+355", flag: "🇦🇱" },
     { name: "Lebanon", nameAr: "لبنان", code: "+961", flag: "🇱🇧" },
@@ -32,6 +40,20 @@ const COUNTRIES = [
     { name: "Egypt", nameAr: "مصر", code: "+20", flag: "🇪🇬" },
     { name: "United States", nameAr: "أمريكا", code: "+1", flag: "🇺🇸" },
 ];
+
+const CountryFlag = ({ country, style, emojiStyle }) => {
+    if (country?.flagImage) {
+        return (
+            <Image
+                source={country.flagImage}
+                style={[stylesShared.flagImage, style]}
+                resizeMode="cover"
+            />
+        );
+    }
+
+    return <Text style={emojiStyle}>{country?.flag}</Text>;
+};
 
 export default function CountryPhoneInput({
     value,
@@ -68,16 +90,18 @@ export default function CountryPhoneInput({
     return (
         <>
             <View style={[styles.phoneInputBox, getRowDirectionStyle(isArabic)]}>
-                {/* <Ionicons name="call-outline" size={25} color={colors.primary} /> */}
-
                 <Pressable
                     style={styles.countryButton}
                     onPress={() => setModalVisible(true)}
                     disabled={disabled}
                 >
-                    <Text style={styles.countryText}>
-                        {selectedCountry.flag} {selectedCountry.code}
-                    </Text>
+                    <CountryFlag
+                        country={selectedCountry}
+                        style={styles.selectedFlagImage}
+                        emojiStyle={styles.countryFlagInline}
+                    />
+
+                    <Text style={styles.countryText}>{selectedCountry.code}</Text>
 
                     <Ionicons
                         name="chevron-down"
@@ -133,7 +157,11 @@ export default function CountryPhoneInput({
                                         ]}
                                         onPress={() => handleSelectCountry(item)}
                                     >
-                                        <Text style={styles.countryFlag}>{item.flag}</Text>
+                                        <CountryFlag
+                                            country={item}
+                                            style={styles.countryFlagImage}
+                                            emojiStyle={styles.countryFlag}
+                                        />
 
                                         <View style={styles.countryInfo}>
                                             <Text
@@ -175,6 +203,13 @@ export default function CountryPhoneInput({
 
 export { COUNTRIES };
 
+const stylesShared = StyleSheet.create({
+    flagImage: {
+        overflow: "hidden",
+        backgroundColor: "transparent",
+    },
+});
+
 const createStyles = (colors) =>
     StyleSheet.create({
         phoneInputBox: {
@@ -185,35 +220,36 @@ const createStyles = (colors) =>
             backgroundColor: colors.inputBackground,
             flexDirection: "row",
             alignItems: "center",
-
-            // خففناها لأن الأيقونة انشالت
             paddingLeft: 18,
             paddingRight: 14,
-
             marginBottom: 16,
         },
 
         countryButton: {
-            // خففنا العرض حتى نترك مساحة أكبر للرقم
-            minWidth: 82,
+            minWidth: 92,
             height: 42,
             borderRadius: 14,
             alignItems: "center",
             justifyContent: "center",
             flexDirection: "row",
-
-            // gap أقل حتى الرمز والسهم ما ياخدوا مساحة كبيرة
-            gap: 4,
-
-            // بدل marginHorizontal كبير
+            gap: 5,
             marginRight: 6,
             marginLeft: 0,
         },
 
+        selectedFlagImage: {
+            width: 24,
+            height: 16,
+            borderRadius: 2,
+        },
+
+        countryFlagInline: {
+            fontSize: 17,
+            lineHeight: 20,
+        },
+
         countryText: {
             color: colors.textPrimary,
-
-            // كان 16، صغرناه شوي
             fontSize: 14,
             fontWeight: "800",
         },
@@ -223,8 +259,6 @@ const createStyles = (colors) =>
             height: 30,
             backgroundColor: colors.inputBorder,
             opacity: 0.75,
-
-            // خففنا الفراغ حوالين الخط
             marginLeft: 4,
             marginRight: 8,
         },
@@ -232,13 +266,9 @@ const createStyles = (colors) =>
         phoneInput: {
             flex: 1,
             color: colors.textPrimary,
-
-            // كان 18، صغرناه حتى placeholder يبين كامل
             fontSize: 15.5,
             fontWeight: "700",
             paddingVertical: 0,
-
-            // مهم بالأندرويد حتى ما يعمل فراغ داخلي غريب
             includeFontPadding: false,
         },
 
@@ -286,6 +316,13 @@ const createStyles = (colors) =>
 
         countryFlag: {
             fontSize: 28,
+            marginHorizontal: 10,
+        },
+
+        countryFlagImage: {
+            width: 34,
+            height: 23,
+            borderRadius: 3,
             marginHorizontal: 10,
         },
 

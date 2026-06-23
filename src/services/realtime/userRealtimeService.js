@@ -141,9 +141,19 @@ export function unsubscribeUserChannelListener(listenerKey) {
 
 // ترك القناة بالكامل
 export function leaveUserChannel(userId) {
-    const echo = getEcho();
+    const echo = getEcho({ silent: true });
 
-    if (!echo || !userId) {
+    if (!userId) {
+        return;
+    }
+
+    if (!echo) {
+        if (subscribedUserId === userId) {
+            subscribedUserId = null;
+            userChannel = null;
+            userListeners.clear();
+        }
+
         return;
     }
 

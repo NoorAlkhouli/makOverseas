@@ -6,6 +6,14 @@ import { API_BASE_URL, REVERB } from '../../constants/config/apiConfig';
 
 let echoInstance = null;
 
+/**
+ * حتى نميّز بين:
+ * - socket فصل لحاله بسبب مشكلة => WARN
+ * - socket فصل لأننا عملنا logout/disconnectEcho => LOG فقط
+ */
+let isManualDisconnectInProgress = false;
+let wasEchoManuallyDisconnected = false;
+
 const REALTIME_DEBUG = __DEV__;
 const BROADCASTING_AUTH_ENDPOINT = `${API_BASE_URL}/api/v1/broadcasting/auth`;
 
@@ -36,7 +44,7 @@ function resolvePusherClient() {
         PusherPackage,
     ];
 
-    const client = candidates.find(candidate => typeof candidate === 'function');
+    const client = candidates.find((candidate) => typeof candidate === 'function');
 
     if (!client) {
         console.log('[Realtime] Pusher package type:', typeof PusherPackage);
@@ -127,14 +135,19 @@ function attachConnectionLogs(echo) {
     });
 
     pusherConnection.bind('disconnected', () => {
+        if (isManualDisconnectInProgress || wasEchoManuallyDisconnected) {
+            logRealtime('Socket disconnected');
+            return;
+        }
+
         warnRealtime('Socket disconnected');
     });
 
-    pusherConnection.bind('error', error => {
+    pusherConnection.bind('error', (error) => {
         errorRealtime('Socket error:', error);
     });
 
-    pusherConnection.bind('state_change', states => {
+    pusherConnection.bind('state_change', (states) => {
         logRealtime('Socket state changed:', states);
     });
 }
@@ -152,6 +165,12 @@ export function initEcho({ token, deviceId, language = 'en' }) {
         logRealtime('Echo already initialized. Current socket id:', getSocketId());
         return echoInstance;
     }
+
+    /**
+     * طالما عم نعمل init جديد، يعني انتهى وضع logout القديم
+     */
+    isManualDisconnectInProgress = false;
+    wasEchoManuallyDisconnected = false;
 
     logRealtime('Initializing Echo...');
     logRealtime('Host:', REVERB.HOST);
@@ -211,6 +230,8 @@ export function initEcho({ token, deviceId, language = 'en' }) {
         return echoInstance;
     } catch (error) {
         echoInstance = null;
+        isManualDisconnectInProgress = false;
+        wasEchoManuallyDisconnected = false;
 
         errorRealtime('Echo initialization failed ❌', {
             message: error?.message,
@@ -222,9 +243,21 @@ export function initEcho({ token, deviceId, language = 'en' }) {
     }
 }
 
-export function getEcho() {
+/**
+ * getEcho العادي:
+ * - إذا Echo غير مهيأ قبل login => يحذر
+ * - إذا Echo مفصول بسبب logout => لا يحذر
+ *
+ * silent مفيد لو بدك تستخدمه بملفات cleanup كمان:
+ * getEcho({ silent: true })
+ */
+export function getEcho({ silent = false } = {}) {
     if (!echoInstance) {
-        warnRealtime('getEcho called before initEcho.');
+        if (!silent && !wasEchoManuallyDisconnected && !isManualDisconnectInProgress) {
+            warnRealtime('getEcho called before initEcho.');
+        }
+
+        return null;
     }
 
     return echoInstance;
@@ -249,10 +282,15 @@ export function leaveChannel(channelName) {
 
 export function disconnectEcho() {
     if (!echoInstance) {
+        wasEchoManuallyDisconnected = true;
+        isManualDisconnectInProgress = false;
         return;
     }
 
     logRealtime('Disconnecting Echo...');
+
+    isManualDisconnectInProgress = true;
+    wasEchoManuallyDisconnected = true;
 
     try {
         echoInstance.disconnect?.();
@@ -260,6 +298,7 @@ export function disconnectEcho() {
         warnRealtime('Echo disconnect failed and was ignored:', error);
     } finally {
         echoInstance = null;
+        isManualDisconnectInProgress = false;
         logRealtime('Echo disconnected and cleared.');
     }
 }

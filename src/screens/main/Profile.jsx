@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { CommonActions, useNavigation } from "@react-navigation/native";
+import { StatusBar } from "expo-status-bar";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -20,8 +21,9 @@ import {
     useWindowDimensions,
     View,
 } from "react-native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import MainNavBar from "@/src/components/MainNavBar";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import {
     getProfile,
@@ -151,7 +153,7 @@ export default function Profile() {
             isSmallScreen,
             isLargeScreen,
             horizontalPadding: isTinyScreen ? 14 : isSmallScreen ? 16 : 18,
-            topPadding: isTinyScreen ? 12 : isSmallScreen ? 14 : 18,
+            topPadding: Platform.OS === "android" ? 130 : 145,
             bottomPadding: Math.max(
                 insets.bottom + (isTinyScreen ? 70 : isSmallScreen ? 90 : 110),
                 isTinyScreen ? 100 : 120
@@ -179,6 +181,7 @@ export default function Profile() {
     const [isSaving, setIsSaving] = useState(false);
     const [isLoggingOut, setIsLoggingOut] = useState(false);
     const [isChangingLanguage, setIsChangingLanguage] = useState(false);
+    const [showNavTitle, setShowNavTitle] = useState(false);
 
     const statusColor = useMemo(() => {
         return getStatusColor(profile?.status, colors);
@@ -199,45 +202,6 @@ export default function Profile() {
             Boolean(selectedAvatar?.uri)
         );
     }, [fullName, profile?.fullName, selectedAvatar]);
-
-    const scrollToFocusedInput = useCallback((inputRef) => {
-        const delay = Platform.OS === "android" ? 320 : 120;
-
-        setTimeout(() => {
-            const scrollNode = findNodeHandle(scrollViewRef.current);
-            const inputNode = findNodeHandle(inputRef.current);
-
-            if (!scrollNode || !inputNode || !scrollViewRef.current?.scrollTo) {
-                return;
-            }
-
-            UIManager.measureLayout(
-                inputNode,
-                scrollNode,
-                () => { },
-                (_x, y) => {
-                    const nextY = Math.max(
-                        0,
-                        y - screenMetrics.focusedInputOffset
-                    );
-
-                    scrollViewRef.current?.scrollTo({
-                        y: nextY,
-                        animated: true,
-                    });
-                }
-            );
-        }, delay);
-    }, [screenMetrics.focusedInputOffset]);
-
-    useEffect(() => {
-        console.log("[PROFILE DEBUG] state changed:", {
-            fullName,
-            selectedAvatar,
-            hasChanges,
-            profileAvatar: profile?.avatar,
-        });
-    }, [fullName, selectedAvatar, hasChanges, profile?.avatar]);
 
     const labels = useMemo(() => {
         return {
@@ -275,6 +239,57 @@ export default function Profile() {
             approvedAt: t("profile.approvedAt"),
         };
     }, [t]);
+
+    const scrollToFocusedInput = useCallback((inputRef) => {
+        const delay = Platform.OS === "android" ? 320 : 120;
+
+        setTimeout(() => {
+            const scrollNode = findNodeHandle(scrollViewRef.current);
+            const inputNode = findNodeHandle(inputRef.current);
+
+            if (!scrollNode || !inputNode || !scrollViewRef.current?.scrollTo) {
+                return;
+            }
+
+            UIManager.measureLayout(
+                inputNode,
+                scrollNode,
+                () => { },
+                (_x, y) => {
+                    const nextY = Math.max(
+                        0,
+                        y - screenMetrics.focusedInputOffset
+                    );
+
+                    scrollViewRef.current?.scrollTo({
+                        y: nextY,
+                        animated: true,
+                    });
+                }
+            );
+        }, delay);
+    }, [screenMetrics.focusedInputOffset]);
+
+    const handleScroll = useCallback((event) => {
+        const y = event.nativeEvent.contentOffset.y;
+
+        if (y > 45 && !showNavTitle) {
+            setShowNavTitle(true);
+        }
+
+        if (y <= 45 && showNavTitle) {
+            setShowNavTitle(false);
+        }
+    }, [showNavTitle]);
+
+    useEffect(() => {
+        console.log("[PROFILE DEBUG] state changed:", {
+            fullName,
+            selectedAvatar,
+            hasChanges,
+            profileAvatar: profile?.avatar,
+        });
+    }, [fullName, selectedAvatar, hasChanges, profile?.avatar]);
 
     const loadProfile = useCallback(async ({ refreshing = false } = {}) => {
         try {
@@ -438,7 +453,13 @@ export default function Profile() {
 
         try {
             setIsChangingLanguage(true);
+            setShowNavTitle(false);
             await toggleAppLanguage();
+
+            scrollViewRef.current?.scrollTo({
+                y: 0,
+                animated: false,
+            });
         } finally {
             setIsChangingLanguage(false);
         }
@@ -447,9 +468,9 @@ export default function Profile() {
     const performForcedLogout = useCallback(async () => {
         if (isLoggingOut) return;
 
-        try {
-            setIsLoggingOut(true);
+        setIsLoggingOut(true);
 
+        try {
             try {
                 await logoutSession();
             } catch (error) {
@@ -469,14 +490,18 @@ export default function Profile() {
             console.log("Forced logout cleanup failed:", error);
 
             try {
+                disconnectEcho();
+            } catch (disconnectError) {
+                console.log("Realtime disconnect fallback failed:", disconnectError);
+            }
+
+            try {
                 await clearStoredSession();
             } catch (storageError) {
                 console.log("Forced logout storage cleanup failed:", storageError);
             }
 
             resetNavigationToLogin(navigation);
-        } finally {
-            setIsLoggingOut(false);
         }
     }, [isLoggingOut, navigation]);
 
@@ -507,21 +532,20 @@ export default function Profile() {
         performForcedLogout,
     ]);
 
-    if (isLoading) {
-        return (
-            <SafeAreaView style={styles.safeArea}>
+    const renderContent = () => {
+        if (isLoading) {
+            return (
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator color={colors.primary} size="large" />
+
                     <Text style={styles.loadingText}>
                         {labels.loadingProfile}
                     </Text>
                 </View>
-            </SafeAreaView>
-        );
-    }
+            );
+        }
 
-    return (
-        <SafeAreaView style={styles.safeArea}>
+        return (
             <KeyboardAvoidingView
                 style={styles.keyboardView}
                 behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -536,11 +560,14 @@ export default function Profile() {
                     keyboardDismissMode="on-drag"
                     bounces
                     overScrollMode="always"
+                    onScroll={handleScroll}
+                    scrollEventThrottle={16}
                     refreshControl={
                         <RefreshControl
                             refreshing={isRefreshing}
                             onRefresh={() => loadProfile({ refreshing: true })}
                             tintColor={colors.primary}
+                            colors={[colors.primary]}
                         />
                     }
                 >
@@ -744,7 +771,27 @@ export default function Profile() {
                     </View>
                 </ScrollView>
             </KeyboardAvoidingView>
-        </SafeAreaView>
+        );
+    };
+
+    return (
+        <View style={styles.root}>
+            <StatusBar
+                style={isDark ? "light" : "dark"}
+                translucent
+                backgroundColor="transparent"
+            />
+
+            <MainNavBar
+                navigation={navigation}
+                title={labels.pageTitle}
+                showTitle={showNavTitle}
+                notificationCount={3}
+                showMenu={false}
+            />
+
+            {renderContent()}
+        </View>
     );
 }
 
@@ -753,7 +800,7 @@ const createStyles = (colors, isArabic, metrics) => {
     const avatarRadius = avatarSize / 2;
 
     return StyleSheet.create({
-        safeArea: {
+        root: {
             flex: 1,
             backgroundColor: colors.background,
         },
@@ -778,6 +825,7 @@ const createStyles = (colors, isArabic, metrics) => {
             alignItems: "center",
             justifyContent: "center",
             paddingHorizontal: 24,
+            paddingTop: metrics.topPadding,
             backgroundColor: colors.background,
         },
 
@@ -790,6 +838,7 @@ const createStyles = (colors, isArabic, metrics) => {
         },
 
         header: {
+            marginTop: 10,
             marginBottom: metrics.isTinyScreen ? 12 : 18,
             alignItems: isArabic ? "flex-end" : "flex-start",
         },
