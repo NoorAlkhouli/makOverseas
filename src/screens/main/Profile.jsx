@@ -1,6 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
-import { CommonActions, useNavigation } from "@react-navigation/native";
+import {
+    CommonActions,
+    useNavigation,
+} from "@react-navigation/native";
 import { StatusBar } from "expo-status-bar";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -159,7 +162,13 @@ export default function Profile() {
                 isTinyScreen ? 100 : 120
             ),
             focusedInputOffset: isTinyScreen ? 90 : isSmallScreen ? 110 : 130,
-            avatarSize: isTinyScreen ? 88 : isSmallScreen ? 102 : isLargeScreen ? 124 : 118,
+            avatarSize: isTinyScreen
+                ? 88
+                : isSmallScreen
+                    ? 102
+                    : isLargeScreen
+                        ? 124
+                        : 118,
             pageTitleSize: isTinyScreen ? 24 : isSmallScreen ? 27 : 30,
             cardRadius: isTinyScreen ? 22 : 28,
             sectionRadius: isTinyScreen ? 20 : 24,
@@ -240,47 +249,57 @@ export default function Profile() {
         };
     }, [t]);
 
-    const scrollToFocusedInput = useCallback((inputRef) => {
-        const delay = Platform.OS === "android" ? 320 : 120;
+    const scrollToFocusedInput = useCallback(
+        (inputRef) => {
+            const delay = Platform.OS === "android" ? 320 : 120;
 
-        setTimeout(() => {
-            const scrollNode = findNodeHandle(scrollViewRef.current);
-            const inputNode = findNodeHandle(inputRef.current);
+            setTimeout(() => {
+                const scrollNode = findNodeHandle(scrollViewRef.current);
+                const inputNode = findNodeHandle(inputRef.current);
 
-            if (!scrollNode || !inputNode || !scrollViewRef.current?.scrollTo) {
-                return;
+                if (
+                    !scrollNode ||
+                    !inputNode ||
+                    !scrollViewRef.current?.scrollTo
+                ) {
+                    return;
+                }
+
+                UIManager.measureLayout(
+                    inputNode,
+                    scrollNode,
+                    () => { },
+                    (_x, y) => {
+                        const nextY = Math.max(
+                            0,
+                            y - screenMetrics.focusedInputOffset
+                        );
+
+                        scrollViewRef.current?.scrollTo({
+                            y: nextY,
+                            animated: true,
+                        });
+                    }
+                );
+            }, delay);
+        },
+        [screenMetrics.focusedInputOffset]
+    );
+
+    const handleScroll = useCallback(
+        (event) => {
+            const y = event.nativeEvent.contentOffset.y;
+
+            if (y > 45 && !showNavTitle) {
+                setShowNavTitle(true);
             }
 
-            UIManager.measureLayout(
-                inputNode,
-                scrollNode,
-                () => { },
-                (_x, y) => {
-                    const nextY = Math.max(
-                        0,
-                        y - screenMetrics.focusedInputOffset
-                    );
-
-                    scrollViewRef.current?.scrollTo({
-                        y: nextY,
-                        animated: true,
-                    });
-                }
-            );
-        }, delay);
-    }, [screenMetrics.focusedInputOffset]);
-
-    const handleScroll = useCallback((event) => {
-        const y = event.nativeEvent.contentOffset.y;
-
-        if (y > 45 && !showNavTitle) {
-            setShowNavTitle(true);
-        }
-
-        if (y <= 45 && showNavTitle) {
-            setShowNavTitle(false);
-        }
-    }, [showNavTitle]);
+            if (y <= 45 && showNavTitle) {
+                setShowNavTitle(false);
+            }
+        },
+        [showNavTitle]
+    );
 
     useEffect(() => {
         console.log("[PROFILE DEBUG] state changed:", {
@@ -291,29 +310,32 @@ export default function Profile() {
         });
     }, [fullName, selectedAvatar, hasChanges, profile?.avatar]);
 
-    const loadProfile = useCallback(async ({ refreshing = false } = {}) => {
-        try {
-            if (refreshing) {
-                setIsRefreshing(true);
-            } else {
-                setIsLoading(true);
+    const loadProfile = useCallback(
+        async ({ refreshing = false } = {}) => {
+            try {
+                if (refreshing) {
+                    setIsRefreshing(true);
+                } else {
+                    setIsLoading(true);
+                }
+
+                const nextProfile = await getProfile();
+
+                setProfile(nextProfile);
+                setFullName(nextProfile?.fullName || "");
+                setSelectedAvatar(null);
+            } catch (error) {
+                Alert.alert(
+                    labels.profile,
+                    error?.userMessage || labels.failedLoad
+                );
+            } finally {
+                setIsLoading(false);
+                setIsRefreshing(false);
             }
-
-            const nextProfile = await getProfile();
-
-            setProfile(nextProfile);
-            setFullName(nextProfile?.fullName || "");
-            setSelectedAvatar(null);
-        } catch (error) {
-            Alert.alert(
-                labels.profile,
-                error?.userMessage || labels.failedLoad
-            );
-        } finally {
-            setIsLoading(false);
-            setIsRefreshing(false);
-        }
-    }, [labels.failedLoad, labels.profile]);
+        },
+        [labels.failedLoad, labels.profile]
+    );
 
     useEffect(() => {
         loadProfile();
@@ -343,7 +365,10 @@ export default function Profile() {
                 quality: 0.85,
             });
 
-            console.log("[PROFILE DEBUG] image picker result:", JSON.stringify(result, null, 2));
+            console.log(
+                "[PROFILE DEBUG] image picker result:",
+                JSON.stringify(result, null, 2)
+            );
 
             if (result.canceled) {
                 console.log("[PROFILE DEBUG] image picker canceled");
@@ -365,7 +390,10 @@ export default function Profile() {
                 name: asset.fileName || `avatar-${Date.now()}.jpg`,
             };
 
-            console.log("[PROFILE DEBUG] next selectedAvatar:", nextAvatar);
+            console.log(
+                "[PROFILE DEBUG] next selectedAvatar:",
+                nextAvatar
+            );
 
             setSelectedAvatar(nextAvatar);
         } catch (error) {
@@ -392,7 +420,9 @@ export default function Profile() {
         const normalizedName = fullName.trim();
 
         if (!normalizedName && !selectedAvatar?.uri) {
-            console.log("[PROFILE DEBUG] save stopped: no name and no avatar");
+            console.log(
+                "[PROFILE DEBUG] save stopped: no name and no avatar"
+            );
             Alert.alert(labels.profile, labels.enterNameOrImage);
             return;
         }
@@ -416,11 +446,17 @@ export default function Profile() {
                 avatar: selectedAvatar,
             });
 
-            console.log("[PROFILE DEBUG] updateProfile normalized result:", updatedProfile);
+            console.log(
+                "[PROFILE DEBUG] updateProfile normalized result:",
+                updatedProfile
+            );
 
             const refreshedProfile = await getProfile();
 
-            console.log("[PROFILE DEBUG] refreshed profile after update:", refreshedProfile);
+            console.log(
+                "[PROFILE DEBUG] refreshed profile after update:",
+                refreshedProfile
+            );
 
             setProfile(refreshedProfile);
             setFullName(refreshedProfile?.fullName || "");
@@ -428,7 +464,11 @@ export default function Profile() {
 
             Alert.alert(labels.profile, labels.updated);
         } catch (error) {
-            console.log("[PROFILE DEBUG] handleSave error:", error?.raw || error);
+            console.log(
+                "[PROFILE DEBUG] handleSave error:",
+                error?.raw || error
+            );
+
             Alert.alert(
                 labels.profile,
                 error?.userMessage || labels.failedUpdate
@@ -454,6 +494,7 @@ export default function Profile() {
         try {
             setIsChangingLanguage(true);
             setShowNavTitle(false);
+
             await toggleAppLanguage();
 
             scrollViewRef.current?.scrollTo({
@@ -474,7 +515,10 @@ export default function Profile() {
             try {
                 await logoutSession();
             } catch (error) {
-                console.log("Logout API failed:", error?.raw || error);
+                console.log(
+                    "Logout API failed:",
+                    error?.raw || error
+                );
             }
 
             try {
@@ -484,7 +528,6 @@ export default function Profile() {
             }
 
             await clearStoredSession();
-
             resetNavigationToLogin(navigation);
         } catch (error) {
             console.log("Forced logout cleanup failed:", error);
@@ -492,13 +535,19 @@ export default function Profile() {
             try {
                 disconnectEcho();
             } catch (disconnectError) {
-                console.log("Realtime disconnect fallback failed:", disconnectError);
+                console.log(
+                    "Realtime disconnect fallback failed:",
+                    disconnectError
+                );
             }
 
             try {
                 await clearStoredSession();
             } catch (storageError) {
-                console.log("Forced logout storage cleanup failed:", storageError);
+                console.log(
+                    "Forced logout storage cleanup failed:",
+                    storageError
+                );
             }
 
             resetNavigationToLogin(navigation);
@@ -536,7 +585,10 @@ export default function Profile() {
         if (isLoading) {
             return (
                 <View style={styles.loadingContainer}>
-                    <ActivityIndicator color={colors.primary} size="large" />
+                    <ActivityIndicator
+                        color={colors.primary}
+                        size="large"
+                    />
 
                     <Text style={styles.loadingText}>
                         {labels.loadingProfile}
@@ -565,14 +617,19 @@ export default function Profile() {
                     refreshControl={
                         <RefreshControl
                             refreshing={isRefreshing}
-                            onRefresh={() => loadProfile({ refreshing: true })}
+                            onRefresh={() => {
+                                loadProfile({ refreshing: true });
+                            }}
                             tintColor={colors.primary}
                             colors={[colors.primary]}
                         />
                     }
                 >
                     <View style={styles.header}>
-                        <Text style={styles.title}>{labels.pageTitle}</Text>
+                        <Text style={styles.title}>
+                            {labels.pageTitle}
+                        </Text>
+
                         <Text style={styles.subtitle}>
                             {labels.pageSubtitle}
                         </Text>
@@ -663,7 +720,9 @@ export default function Profile() {
                                 ref={fullNameInputRef}
                                 value={fullName}
                                 onChangeText={setFullName}
-                                onFocus={() => scrollToFocusedInput(fullNameInputRef)}
+                                onFocus={() =>
+                                    scrollToFocusedInput(fullNameInputRef)
+                                }
                                 placeholder={labels.fullNamePlaceholder}
                                 placeholderTextColor={colors.textMuted}
                                 style={styles.input}
@@ -671,7 +730,9 @@ export default function Profile() {
                                 autoCapitalize="words"
                                 returnKeyType="done"
                                 textAlign={isArabic ? "right" : "left"}
-                                writingDirection={isArabic ? "rtl" : "ltr"}
+                                writingDirection={
+                                    isArabic ? "rtl" : "ltr"
+                                }
                             />
                         </View>
 
@@ -679,13 +740,16 @@ export default function Profile() {
                             activeOpacity={0.85}
                             style={[
                                 styles.saveButton,
-                                (!hasChanges || isSaving) && styles.disabledButton,
+                                (!hasChanges || isSaving) &&
+                                styles.disabledButton,
                             ]}
                             onPress={handleSave}
                             disabled={!hasChanges || isSaving}
                         >
                             {isSaving ? (
-                                <ActivityIndicator color={colors.darkText} />
+                                <ActivityIndicator
+                                    color={colors.darkText}
+                                />
                             ) : (
                                 <Text style={styles.saveButtonText}>
                                     {labels.saveChanges}
@@ -704,6 +768,7 @@ export default function Profile() {
                                 <Text style={styles.settingTitle}>
                                     {labels.appTheme}
                                 </Text>
+
                                 <Text style={styles.settingDescription}>
                                     {labels.currentTheme}: {activeTheme}
                                 </Text>
@@ -715,7 +780,9 @@ export default function Profile() {
                                 onPress={toggleTheme}
                             >
                                 <Text style={styles.settingButtonText}>
-                                    {isDark ? labels.light : labels.dark}
+                                    {isDark
+                                        ? labels.light
+                                        : labels.dark}
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -727,6 +794,7 @@ export default function Profile() {
                                 <Text style={styles.settingTitle}>
                                     {labels.language}
                                 </Text>
+
                                 <Text style={styles.settingDescription}>
                                     {labels.currentLanguage}
                                 </Text>
@@ -739,7 +807,9 @@ export default function Profile() {
                                 disabled={isChangingLanguage}
                             >
                                 {isChangingLanguage ? (
-                                    <ActivityIndicator color={colors.textPrimary} />
+                                    <ActivityIndicator
+                                        color={colors.textPrimary}
+                                    />
                                 ) : (
                                     <Text style={styles.settingButtonText}>
                                         {labels.switchLanguage}
@@ -761,7 +831,9 @@ export default function Profile() {
                             disabled={isLoggingOut}
                         >
                             {isLoggingOut ? (
-                                <ActivityIndicator color={colors.danger} />
+                                <ActivityIndicator
+                                    color={colors.danger}
+                                />
                             ) : (
                                 <Text style={styles.logoutButtonText}>
                                     {labels.logout}
@@ -786,7 +858,6 @@ export default function Profile() {
                 navigation={navigation}
                 title={labels.pageTitle}
                 showTitle={showNavTitle}
-                notificationCount={3}
                 showMenu={false}
             />
 

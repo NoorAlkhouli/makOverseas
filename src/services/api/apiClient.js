@@ -11,6 +11,14 @@ const STORAGE_KEYS = {
 
 const DEFAULT_TIMEOUT = 30000;
 
+/**
+ * Socket ID provider
+ * ما منستورد echoClient هون حتى ما نعمل circular dependency.
+ * echoClient.js رح يسجل provider بعدين:
+ * apiClient.setSocketIdProvider(() => getEchoSocketId())
+ */
+let socketIdProvider = null;
+
 class ApiError extends Error {
     constructor({
         message,
@@ -55,6 +63,20 @@ const getStoredLanguage = async () => {
     return language || 'en';
 };
 
+const getCurrentSocketId = () => {
+    if (typeof socketIdProvider !== 'function') {
+        return null;
+    }
+
+    try {
+        const socketId = socketIdProvider();
+        return socketId || null;
+    } catch (error) {
+        console.log('[API] Failed to read Echo socket id:', error?.message || error);
+        return null;
+    }
+};
+
 /**
  * هون منحوّل أخطاء السيرفر لرسائل مفهومة للمستخدم
  * مهم: ما منرمي رسالة تقنية للمستخدم
@@ -92,6 +114,27 @@ const buildUserMessage = ({ status, code, serverMessage, isNetworkError }) => {
 
     if (code === 'CONVERSATION_BLOCK_FORBIDDEN') {
         return 'لا تملكين صلاحية حظر أو إلغاء حظر هذه المحادثة.';
+    }
+
+    if (code === 'CONVERSATION_NOT_AVAILABLE') {
+        return 'هذه الدردشة غير متاحة حالياً.';
+    }
+
+    if (code === 'MESSAGE_NOT_FOUND') {
+        return 'الرسالة غير موجودة أو تم حذفها.';
+    }
+
+    if (code === 'MESSAGE_ALREADY_DELETED') {
+        return 'هذه الرسالة محذوفة مسبقاً.';
+    }
+
+    // Quote errors
+    if (code === 'QUOTE_NOT_RESPONDABLE') {
+        return 'لا يمكن تنفيذ هذا الإجراء على هذا العرض حالياً.';
+    }
+
+    if (code === 'QUOTE_EXPIRED') {
+        return 'انتهت صلاحية هذا العرض.';
     }
 
     // Channel errors
@@ -140,9 +183,13 @@ const buildUserMessage = ({ status, code, serverMessage, isNetworkError }) => {
  * error.status
  */
 const normalizeApiError = error => {
-    if (!error.response) {
+    if (error instanceof ApiError) {
+        return error;
+    }
+
+    if (!error?.response) {
         return new ApiError({
-            message: error.message || 'Network error',
+            message: error?.message || 'Network error',
             userMessage: buildUserMessage({ isNetworkError: true }),
             status: null,
             code: 'NETWORK_ERROR',
@@ -185,6 +232,9 @@ api.interceptors.request.use(
         const token = await getStoredToken();
         const deviceId = await getStoredDeviceId();
         const language = await getStoredLanguage();
+        const socketId = getCurrentSocketId();
+
+        config.headers = config.headers || {};
 
         config.headers.Accept = 'application/json';
         config.headers['Accept-Language'] = language;
@@ -192,6 +242,10 @@ api.interceptors.request.use(
         /**
          * إذا الطلب FormData يعني upload image/file
          * غير هيك JSON عادي
+         *
+         * مهم:
+         * مع FormData لا نحط Content-Type يدوي
+         * لأن React Native لازم يضيف boundary لحاله.
          */
         if (config.data instanceof FormData) {
             delete config.headers['Content-Type'];
@@ -204,6 +258,8 @@ api.interceptors.request.use(
          */
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
+        } else {
+            delete config.headers.Authorization;
         }
 
         /**
@@ -212,6 +268,19 @@ api.interceptors.request.use(
          */
         if (deviceId) {
             config.headers['X-Device-ID'] = deviceId;
+        } else {
+            delete config.headers['X-Device-ID'];
+        }
+
+        /**
+         * مهم للـ realtime
+         * Laravel Echo / Pusher socket id
+         * السيرفر يستخدمه مع toOthers()
+         */
+        if (socketId) {
+            config.headers['X-Socket-ID'] = socketId;
+        } else {
+            delete config.headers['X-Socket-ID'];
         }
 
         return config;
@@ -316,9 +385,22 @@ export const apiClient = {
     setLanguage: async language => {
         await AsyncStorage.setItem(STORAGE_KEYS.APP_LANGUAGE, language || 'en');
     },
+
+    getLanguage: getStoredLanguage,
+
+    setSocketIdProvider: provider => {
+        socketIdProvider = typeof provider === 'function' ? provider : null;
+    },
+
+    clearSocketIdProvider: () => {
+        socketIdProvider = null;
+    },
+
+    getSocketId: getCurrentSocketId,
+
+    raw: api,
 };
 
 export { API_BASE_URL, STORAGE_KEYS, ApiError };
 
-// ضفت default export حتى تقدري تستورديه بسهولة بأي service
 export default apiClient;

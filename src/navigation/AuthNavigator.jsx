@@ -1,16 +1,17 @@
-import React from 'react';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import React from "react";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
-import SplashScreen from '../screens/auth/SplashScreen';
-import Login from '../screens/auth/Login';
-import AccessCode from '../screens/auth/AccessCode';
+import SplashScreen from "../screens/auth/SplashScreen";
+import Login from "../screens/auth/Login";
+import AccessCode from "../screens/auth/AccessCode";
 
-import MainTabsNavigator from './MainTabsNavigator';
-import IndividualChat from '../screens/main/IndividualChat';
-import IndividualChatProfile from '../screens/main/IndividualChatProfile';
+import MainTabsNavigator from "./MainTabsNavigator";
+import IndividualChat from "../screens/main/IndividualChat";
+import IndividualChatProfile from "../screens/main/IndividualChatProfile";
 import ChannelChat from "../components/ChannelChat";
 
-import { AppRealtimeProvider } from '../context/AppRealtimeProvider';
+import { AppRealtimeProvider } from "../context/AppRealtimeProvider";
+import { NotificationCountProvider } from "../context/NotificationCountProvider";
 
 const RootStack = createNativeStackNavigator();
 const AppStack = createNativeStackNavigator();
@@ -18,32 +19,34 @@ const AppStack = createNativeStackNavigator();
 function AuthenticatedAppNavigator() {
     return (
         <AppRealtimeProvider>
-            <AppStack.Navigator
-                initialRouteName="MainTabs"
-                screenOptions={{
-                    headerShown: false,
-                }}
-            >
-                <AppStack.Screen
-                    name="MainTabs"
-                    component={MainTabsNavigator}
-                />
+            <NotificationCountProvider>
+                <AppStack.Navigator
+                    initialRouteName="MainTabs"
+                    screenOptions={{
+                        headerShown: false,
+                    }}
+                >
+                    <AppStack.Screen
+                        name="MainTabs"
+                        component={MainTabsNavigator}
+                    />
 
-                <AppStack.Screen
-                    name="IndividualChat"
-                    component={IndividualChat}
-                />
+                    <AppStack.Screen
+                        name="IndividualChat"
+                        component={IndividualChat}
+                    />
 
-                <AppStack.Screen
-                    name="IndividualChatProfile"
-                    component={IndividualChatProfile}
-                />
+                    <AppStack.Screen
+                        name="IndividualChatProfile"
+                        component={IndividualChatProfile}
+                    />
 
-                <AppStack.Screen
-                    name="ChannelChat"
-                    component={ChannelChat}
-                />
-            </AppStack.Navigator>
+                    <AppStack.Screen
+                        name="ChannelChat"
+                        component={ChannelChat}
+                    />
+                </AppStack.Navigator>
+            </NotificationCountProvider>
         </AppRealtimeProvider>
     );
 }

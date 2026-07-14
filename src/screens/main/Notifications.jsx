@@ -1,10 +1,13 @@
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect } from "@react-navigation/native";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+    ActivityIndicator,
     Platform,
+    RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
@@ -13,143 +16,331 @@ import {
 } from "react-native";
 
 import MainNavBar from "@/src/components/MainNavBar";
+import { useAppRealtime } from "@/src/context/AppRealtimeProvider";
+import { useNotificationCount } from "@/src/context/NotificationCountProvider";
 import { LANGUAGE_STORAGE_KEY } from "@/src/i18n";
+import apiClient from "@/src/services/api/apiClient";
+import notificationService from "@/src/services/api/notificationService";
 import {
     getRowDirectionStyle,
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 
-const FALLBACK_NOTIFICATIONS = [
-    {
-        id: "1",
-        group: "today",
-        type: "message",
-        titleKey: "notifications.items.newMessage.title",
-        bodyKey: "notifications.items.newMessage.body",
-        timeKey: "notifications.times.twoHoursAgo",
-        unread: true,
+const NOTIFICATION_VISUALS = {
+    2: {
         icon: "message-circle",
         iconType: "feather",
         colorKey: "notificationMessage",
     },
-    {
-        id: "2",
-        group: "today",
-        type: "channel",
-        titleKey: "notifications.items.companyNews.title",
-        bodyKey: "notifications.items.companyNews.body",
-        timeKey: "notifications.times.fourHoursAgo",
-        unread: true,
+    3: {
+        icon: "phone-incoming",
+        iconType: "feather",
+        colorKey: "notificationMessage",
+    },
+    4: {
+        icon: "phone-missed",
+        iconType: "feather",
+        colorKey: "notificationMessage",
+    },
+    5: {
         icon: "newspaper-variant-outline",
         iconType: "material",
         colorKey: "notificationCompanyNews",
-        // badgeKey: "notifications.followedChannel",
     },
-    {
-        id: "3",
-        group: "today",
-        type: "exchange",
-        titleKey: "notifications.items.exchangeRates.title",
-        bodyKey: "notifications.items.exchangeRates.body",
-        timeKey: "notifications.times.sixHoursAgo",
-        unread: false,
-        icon: "chart-line",
-        iconType: "material",
-        colorKey: "notificationExchangeRates",
-        // badgeKey: "notifications.followedChannel",
-    },
-    {
-        id: "4",
-        group: "yesterday",
-        type: "approval",
-        titleKey: "notifications.items.accountActivated.title",
-        bodyKey: "notifications.items.accountActivated.body",
-        timeKey: "notifications.times.yesterday",
-        unread: false,
+    6: {
         icon: "check-circle",
         iconType: "feather",
         colorKey: "notificationApproval",
     },
-    {
-        id: "5",
-        group: "yesterday",
-        type: "message",
-        titleKey: "notifications.items.chatGroup.title",
-        bodyKey: "notifications.items.chatGroup.body",
-        timeKey: "notifications.times.yesterday",
-        unread: true,
-        icon: "users",
-        iconType: "feather",
-        colorKey: "notificationMessage",
-    },
-    {
-        id: "6",
-        group: "earlier",
-        type: "channel",
-        titleKey: "notifications.items.shippingRates.title",
-        bodyKey: "notifications.items.shippingRates.body",
-        timeKey: "notifications.times.twoDaysAgo",
-        unread: false,
-        icon: "radio",
-        iconType: "feather",
-        colorKey: "notificationShippingRates",
-        // badgeKey: "notifications.followedChannel",
-    },
-];
+};
 
+const DEFAULT_NOTIFICATION_VISUAL = {
+    icon: "bell",
+    iconType: "feather",
+    colorKey: "primary",
+};
 
-async function fetchNotificationsFromApi() {
-    // هون بعدين بتحطي طلب الـ API الحقيقي.
-    // مثال لاحقاً:
-    // const response = await api.get("/notifications");
-    // return response.data;
+const getCalendarDayNumber = (value) => {
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+};
+
+const getNotificationGroup = (createdAt) => {
+    const today = getCalendarDayNumber(new Date());
+    const createdDay = getCalendarDayNumber(createdAt);
+
+    if (createdDay === null) {
+        return "earlier";
+    }
+
+    const dayDifference = Math.round((today - createdDay) / 86400000);
+
+    if (dayDifference <= 0) {
+        return "today";
+    }
+
+    if (dayDifference === 1) {
+        return "yesterday";
+    }
+
+    return "earlier";
+};
+
+const formatNotificationTime = (createdAt, isArabic) => {
+    const date = new Date(createdAt);
+
+    if (Number.isNaN(date.getTime())) {
+        return "";
+    }
+
+    const locale = isArabic ? "ar" : "en";
+    const group = getNotificationGroup(createdAt);
+
+    if (group === "today" || group === "yesterday") {
+        return new Intl.DateTimeFormat(locale, {
+            hour: "numeric",
+            minute: "2-digit",
+        }).format(date);
+    }
+
+    return new Intl.DateTimeFormat(locale, {
+        day: "numeric",
+        month: "short",
+    }).format(date);
+};
+
+const normalizeNotification = (notification, isArabic) => {
+    const visual =
+        NOTIFICATION_VISUALS[notification?.type] ?? DEFAULT_NOTIFICATION_VISUAL;
+
+    return {
+        ...notification,
+        id: String(notification.id),
+        title: notification.title || "",
+        body: notification.body || "",
+        unread: !notification.read_at,
+        group: getNotificationGroup(notification.created_at),
+        timeText: formatNotificationTime(notification.created_at, isArabic),
+        ...visual,
+    };
+};
+
+const getRealtimeNotification = (payload) => {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    if (payload.notification?.id) {
+        return payload.notification;
+    }
+
+    if (payload.data?.notification?.id) {
+        return payload.data.notification;
+    }
+
+    if (payload.id && (payload.title || payload.type)) {
+        return payload;
+    }
+
+    if (payload.data?.id && (payload.data?.title || payload.data?.type)) {
+        return payload.data;
+    }
 
     return null;
-}
+};
+
+const getRealtimeReadState = (payload) => {
+    if (!payload || typeof payload !== "object") {
+        return null;
+    }
+
+    if (
+        payload.all !== undefined ||
+        Array.isArray(payload.ids) ||
+        payload.unread_count !== undefined
+    ) {
+        return payload;
+    }
+
+    if (
+        payload.data?.all !== undefined ||
+        Array.isArray(payload.data?.ids) ||
+        payload.data?.unread_count !== undefined
+    ) {
+        return payload.data;
+    }
+
+    return null;
+};
 
 export default function Notifications({ navigation }) {
     const { t, i18n } = useTranslation();
     const isArabic = i18n.language === "ar";
+    const {
+        latestNotificationEvent,
+        latestNotificationReadStateEvent,
+    } = useAppRealtime();
+    const {
+        notificationCount,
+        setNotificationCount,
+        decrementNotificationCount,
+        markAllNotificationsReadLocally,
+    } = useNotificationCount();
 
     const [showNavTitle, setShowNavTitle] = useState(false);
-    const [notifications, setNotifications] = useState(FALLBACK_NOTIFICATIONS);
+    const [notifications, setNotifications] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
+    const [isMarkingAll, setIsMarkingAll] = useState(false);
+    const [openingNotificationId, setOpeningNotificationId] = useState(null);
+    const [errorMessage, setErrorMessage] = useState("");
 
     const mainScrollRef = useRef(null);
+    const notificationIdsRef = useRef(new Set());
+    const handledNotificationEventRef = useRef(null);
+    const handledReadStateEventRef = useRef(null);
 
     const { colors, isDark } = useAppTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
-    const unreadCount = notifications.filter((item) => item.unread).length;
-
-    useEffect(() => {
-        let isMounted = true;
-
-        const loadNotifications = async () => {
+    const loadNotifications = useCallback(
+        async ({ refreshing = false } = {}) => {
             try {
-                setIsLoading(true);
+                setErrorMessage("");
 
-                const apiNotifications = await fetchNotificationsFromApi();
-
-                if (isMounted && Array.isArray(apiNotifications) && apiNotifications.length > 0) {
-                    setNotifications(apiNotifications);
+                if (refreshing) {
+                    setIsRefreshing(true);
+                } else {
+                    setIsLoading(true);
                 }
+
+                const result = await notificationService.getNotifications({
+                    page: 1,
+                    perPage: 100,
+                });
+
+                const nextNotifications = result.items.map((item) =>
+                    normalizeNotification(item, isArabic),
+                );
+
+                notificationIdsRef.current = new Set(
+                    nextNotifications.map((item) => String(item.id)),
+                );
+
+                setNotifications(nextNotifications);
+                setNotificationCount(result.unreadCount);
             } catch (error) {
                 console.log("Failed to load notifications:", error);
+                setErrorMessage(
+                    error?.userMessage ||
+                    (isArabic
+                        ? "تعذّر تحميل الإشعارات. حاولي مرة ثانية."
+                        : "Couldn't load notifications. Please try again."),
+                );
             } finally {
-                if (isMounted) {
-                    setIsLoading(false);
-                }
+                setIsLoading(false);
+                setIsRefreshing(false);
             }
-        };
+        },
+        [isArabic, setNotificationCount],
+    );
 
-        loadNotifications();
+    useFocusEffect(
+        useCallback(() => {
+            loadNotifications();
+        }, [loadNotifications]),
+    );
 
-        return () => {
-            isMounted = false;
-        };
-    }, []);
+    useEffect(() => {
+        if (
+            !latestNotificationEvent ||
+            handledNotificationEventRef.current === latestNotificationEvent
+        ) {
+            return;
+        }
+
+        handledNotificationEventRef.current = latestNotificationEvent;
+
+        const realtimeNotification = getRealtimeNotification(
+            latestNotificationEvent,
+        );
+
+        if (!realtimeNotification?.id) {
+            return;
+        }
+
+        const normalizedNotification = normalizeNotification(
+            realtimeNotification,
+            isArabic,
+        );
+        const notificationId = String(normalizedNotification.id);
+
+        notificationIdsRef.current.add(notificationId);
+
+        setNotifications((currentNotifications) => {
+            const withoutDuplicate = currentNotifications.filter(
+                (item) => String(item.id) !== notificationId,
+            );
+
+            return [normalizedNotification, ...withoutDuplicate];
+        });
+
+        // العداد المشترك يتحدث من NotificationCountProvider.
+    }, [isArabic, latestNotificationEvent]);
+
+    useEffect(() => {
+        if (
+            !latestNotificationReadStateEvent ||
+            handledReadStateEventRef.current === latestNotificationReadStateEvent
+        ) {
+            return;
+        }
+
+        handledReadStateEventRef.current = latestNotificationReadStateEvent;
+
+        const readState = getRealtimeReadState(
+            latestNotificationReadStateEvent,
+        );
+
+        if (!readState) {
+            return;
+        }
+
+        const markAllAsRead =
+            readState.all === true ||
+            readState.all === 1 ||
+            readState.all === "1";
+        const readIds = new Set(
+            (Array.isArray(readState.ids) ? readState.ids : []).map(String),
+        );
+        const readAt = readState.read_at || new Date().toISOString();
+
+        setNotifications((currentNotifications) =>
+            currentNotifications.map((item) => {
+                if (!markAllAsRead && !readIds.has(String(item.id))) {
+                    return item;
+                }
+
+                return {
+                    ...item,
+                    unread: false,
+                    read_at: item.read_at || readAt,
+                };
+            }),
+        );
+
+        const realtimeUnreadCount = Number(readState.unread_count);
+
+        if (Number.isFinite(realtimeUnreadCount)) {
+            setNotificationCount(realtimeUnreadCount);
+        }
+    }, [latestNotificationReadStateEvent, setNotificationCount]);
 
     const groupedNotifications = useMemo(
         () => ({
@@ -157,7 +348,7 @@ export default function Notifications({ navigation }) {
             yesterday: notifications.filter((item) => item.group === "yesterday"),
             earlier: notifications.filter((item) => item.group === "earlier"),
         }),
-        [notifications]
+        [notifications],
     );
 
     const toggleLanguage = async () => {
@@ -166,6 +357,7 @@ export default function Notifications({ navigation }) {
         setShowNavTitle(false);
 
         await AsyncStorage.setItem(LANGUAGE_STORAGE_KEY, nextLanguage);
+        await apiClient.setLanguage(nextLanguage);
         await i18n.changeLanguage(nextLanguage);
 
         setTimeout(() => {
@@ -188,35 +380,152 @@ export default function Notifications({ navigation }) {
         }
     };
 
-    const handleMarkAllAsRead = () => {
-        setNotifications((currentNotifications) =>
-            currentNotifications.map((item) => ({
-                ...item,
-                unread: false,
-            }))
-        );
-    };
-
-    const handleNotificationPress = (notification) => {
-        setNotifications((currentNotifications) =>
-            currentNotifications.map((item) =>
-                item.id === notification.id ? { ...item, unread: false } : item
-            )
-        );
-
-        if (notification.type === "message") {
-            navigation.navigate("Chat");
+    const handleMarkAllAsRead = async () => {
+        if (isMarkingAll || notificationCount === 0) {
             return;
         }
 
-        if (notification.type === "channel" || notification.type === "exchange") {
-            navigation.navigate("Channels");
+        try {
+            setIsMarkingAll(true);
+            setErrorMessage("");
+
+            const result = await notificationService.markAllAsRead();
+            const readAt = new Date().toISOString();
+
+            setNotifications((currentNotifications) =>
+                currentNotifications.map((item) => ({
+                    ...item,
+                    unread: false,
+                    read_at: item.read_at || readAt,
+                })),
+            );
+            markAllNotificationsReadLocally(result.unreadCount);
+        } catch (error) {
+            console.log("Failed to mark all notifications as read:", error);
+            setErrorMessage(
+                error?.userMessage ||
+                (isArabic
+                    ? "تعذّر تعليم الإشعارات كمقروءة."
+                    : "Couldn't mark notifications as read."),
+            );
+        } finally {
+            setIsMarkingAll(false);
         }
     };
 
-    const handleNotificationSettingsPress = () => {
-        navigation.navigate("NotificationSettings");
+    const navigateFromNotification = (notification) => {
+        const action = notification?.action || {};
+        const notificationData = notification?.data || {};
+        const actionKey = action.key;
+
+        const params = {
+            notificationId: notification.id,
+            notificationAction: action,
+            conversationId:
+                action.conversation_id ?? notificationData.conversation_id ?? null,
+            messageId: action.message_id ?? notificationData.message_id ?? null,
+            quoteId: action.quote_id ?? notificationData.quote_id ?? null,
+            callId: action.call_id ?? notificationData.call_id ?? null,
+            channelId: action.channel_id ?? notificationData.channel_id ?? null,
+            postId: action.post_id ?? notificationData.post_id ?? null,
+        };
+
+        if (
+            actionKey === "open_conversation" ||
+            actionKey === "open_message" ||
+            actionKey === "open_quote"
+        ) {
+            if (!params.conversationId) {
+                navigation.navigate("Chat", params);
+                return;
+            }
+
+            const authenticatedAppNavigation = navigation.getParent?.();
+
+            if (!authenticatedAppNavigation) {
+                console.log(
+                    "Authenticated app navigator is unavailable for notification:",
+                    params,
+                );
+                return;
+            }
+
+            authenticatedAppNavigation.navigate("IndividualChat", {
+                ...params,
+                conversation_id: params.conversationId,
+                message_id: params.messageId,
+                quote_id: params.quoteId,
+            });
+            return;
+        }
+
+        if (actionKey === "open_call") {
+            navigation.navigate("Calls", params);
+            return;
+        }
+
+        if (actionKey === "open_channel" || actionKey === "open_channel_post") {
+            navigation.navigate("Channels", {
+                ...params,
+                channel_id: params.channelId,
+                post_id: params.postId,
+            });
+            return;
+        }
+
+        if (actionKey === "open_home") {
+            navigation.navigate("Home", params);
+            return;
+        }
+
+        if (actionKey === "open_profile") {
+            navigation.navigate("Profile", params);
+        }
     };
+
+    const handleNotificationPress = async (notification) => {
+        if (openingNotificationId) {
+            return;
+        }
+
+        const wasUnread = notification.unread;
+
+        try {
+            setOpeningNotificationId(notification.id);
+            setErrorMessage("");
+
+            const clickedNotification = await notificationService.click(
+                notification.id,
+            );
+            const normalizedNotification = normalizeNotification(
+                clickedNotification || notification,
+                isArabic,
+            );
+
+            setNotifications((currentNotifications) =>
+                currentNotifications.map((item) =>
+                    item.id === notification.id ? normalizedNotification : item,
+                ),
+            );
+
+            if (wasUnread) {
+                decrementNotificationCount(notification.id);
+            }
+
+            navigateFromNotification(normalizedNotification);
+        } catch (error) {
+            console.log("Failed to open notification:", error);
+            setErrorMessage(
+                error?.userMessage ||
+                (isArabic
+                    ? "تعذّر فتح الإشعار. حاولي مرة ثانية."
+                    : "Couldn't open the notification. Please try again."),
+            );
+        } finally {
+            setOpeningNotificationId(null);
+        }
+    };
+
     return (
         <View style={styles.root}>
             <StatusBar
@@ -229,7 +538,6 @@ export default function Notifications({ navigation }) {
                 navigation={navigation}
                 title={t("notifications.navTitle")}
                 showTitle={showNavTitle}
-                notificationCount={unreadCount}
                 onToggleLanguage={toggleLanguage}
                 menuItems={[
                     {
@@ -249,6 +557,14 @@ export default function Notifications({ navigation }) {
                 keyboardShouldPersistTaps="handled"
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={() => loadNotifications({ refreshing: true })}
+                        tintColor={colors.primary}
+                        colors={[colors.primary]}
+                    />
+                }
             >
                 <View style={[styles.headerBox, getRowDirectionStyle(isArabic)]}>
                     <TouchableOpacity
@@ -277,19 +593,26 @@ export default function Notifications({ navigation }) {
                 <View style={[styles.actionsRow, getRowDirectionStyle(isArabic)]}>
                     <TouchableOpacity
                         activeOpacity={0.85}
-                        style={[styles.actionButton, getRowDirectionStyle(isArabic)]}
+                        disabled={isMarkingAll || notificationCount === 0}
+                        style={[
+                            styles.actionButton,
+                            (isMarkingAll || notificationCount === 0) &&
+                            styles.actionButtonDisabled,
+                            getRowDirectionStyle(isArabic),
+                        ]}
                         onPress={handleMarkAllAsRead}
                     >
                         <View style={styles.actionIconCircle}>
-                            <Feather name="check" size={17} color={colors.textPrimary} />
+                            {isMarkingAll ? (
+                                <ActivityIndicator size="small" color={colors.textPrimary} />
+                            ) : (
+                                <Feather name="check" size={17} color={colors.textPrimary} />
+                            )}
                         </View>
 
                         <Text
                             numberOfLines={1}
-                            style={[
-                                styles.actionButtonText,
-                                getTextDirectionStyle(isArabic),
-                            ]}
+                            style={[styles.actionButtonText, getTextDirectionStyle(isArabic)]}
                         >
                             {t("notifications.markAllAsRead")}
                         </Text>
@@ -302,19 +625,12 @@ export default function Notifications({ navigation }) {
                         onPress={() => console.log("Open notification settings")}
                     >
                         <View style={styles.actionIconCircle}>
-                            <Feather
-                                name="settings"
-                                size={17}
-                                color={colors.textPrimary}
-                            />
+                            <Feather name="settings" size={17} color={colors.textPrimary} />
                         </View>
 
                         <Text
                             numberOfLines={1}
-                            style={[
-                                styles.actionButtonText,
-                                getTextDirectionStyle(isArabic),
-                            ]}
+                            style={[styles.actionButtonText, getTextDirectionStyle(isArabic)]}
                         >
                             {t("notifications.notificationSettings")}
                         </Text>
@@ -327,35 +643,78 @@ export default function Notifications({ navigation }) {
                     </TouchableOpacity>
                 </View>
 
-                <NotificationGroup
-                    title={t("notifications.groups.today")}
-                    data={groupedNotifications.today}
-                    styles={styles}
-                    colors={colors}
-                    isArabic={isArabic}
-                    t={t}
-                    onPress={handleNotificationPress}
-                />
+                {!!errorMessage && (
+                    <View style={styles.errorBox}>
+                        <Text style={[styles.errorText, getTextDirectionStyle(isArabic)]}>
+                            {errorMessage}
+                        </Text>
 
-                <NotificationGroup
-                    title={t("notifications.groups.yesterday")}
-                    data={groupedNotifications.yesterday}
-                    styles={styles}
-                    colors={colors}
-                    isArabic={isArabic}
-                    t={t}
-                    onPress={handleNotificationPress}
-                />
+                        <TouchableOpacity
+                            activeOpacity={0.85}
+                            style={styles.retryButton}
+                            onPress={() => loadNotifications()}
+                        >
+                            <Text style={styles.retryButtonText}>
+                                {isArabic ? "إعادة المحاولة" : "Try again"}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
 
-                <NotificationGroup
-                    title={t("notifications.groups.earlier")}
-                    data={groupedNotifications.earlier}
-                    styles={styles}
-                    colors={colors}
-                    isArabic={isArabic}
-                    t={t}
-                    onPress={handleNotificationPress}
-                />
+                {isLoading && notifications.length === 0 ? (
+                    <View style={styles.loadingBox}>
+                        <ActivityIndicator size="large" color={colors.primary} />
+                        <Text style={styles.loadingText}>
+                            {isArabic
+                                ? "جارٍ تحميل الإشعارات..."
+                                : "Loading notifications..."}
+                        </Text>
+                    </View>
+                ) : notifications.length === 0 && !errorMessage ? (
+                    <View style={styles.emptyBox}>
+                        <Feather name="bell-off" size={34} color={colors.textMuted} />
+                        <Text style={styles.emptyTitle}>
+                            {isArabic ? "لا توجد إشعارات" : "No notifications"}
+                        </Text>
+                        <Text style={styles.emptyText}>
+                            {isArabic
+                                ? "ستظهر إشعاراتك الجديدة هنا."
+                                : "Your new notifications will appear here."}
+                        </Text>
+                    </View>
+                ) : (
+                    <>
+                        <NotificationGroup
+                            title={t("notifications.groups.today")}
+                            data={groupedNotifications.today}
+                            styles={styles}
+                            colors={colors}
+                            isArabic={isArabic}
+                            openingNotificationId={openingNotificationId}
+                            onPress={handleNotificationPress}
+                        />
+
+                        <NotificationGroup
+                            title={t("notifications.groups.yesterday")}
+                            data={groupedNotifications.yesterday}
+                            styles={styles}
+                            colors={colors}
+                            isArabic={isArabic}
+                            openingNotificationId={openingNotificationId}
+                            onPress={handleNotificationPress}
+                        />
+
+                        <NotificationGroup
+                            title={t("notifications.groups.earlier")}
+                            data={groupedNotifications.earlier}
+                            styles={styles}
+                            colors={colors}
+                            isArabic={isArabic}
+                            openingNotificationId={openingNotificationId}
+                            onPress={handleNotificationPress}
+                        />
+                    </>
+                )}
 
                 <View style={[styles.noteBox, getRowDirectionStyle(isArabic)]}>
                     <Feather
@@ -365,12 +724,7 @@ export default function Notifications({ navigation }) {
                         style={styles.noteIcon}
                     />
 
-                    <Text
-                        style={[
-                            styles.noteText,
-                            getTextDirectionStyle(isArabic),
-                        ]}
-                    >
+                    <Text style={[styles.noteText, getTextDirectionStyle(isArabic)]}>
                         {t("notifications.followNote")}
                     </Text>
                 </View>
@@ -385,7 +739,7 @@ function NotificationGroup({
     styles,
     colors,
     isArabic,
-    t,
+    openingNotificationId,
     onPress,
 }) {
     if (!data.length) {
@@ -405,7 +759,7 @@ function NotificationGroup({
                     styles={styles}
                     colors={colors}
                     isArabic={isArabic}
-                    t={t}
+                    isOpening={openingNotificationId === item.id}
                     onPress={() => onPress(item)}
                 />
             ))}
@@ -413,14 +767,24 @@ function NotificationGroup({
     );
 }
 
-function NotificationCard({ item, styles, colors, isArabic, t, onPress }) {
+function NotificationCard({
+    item,
+    styles,
+    colors,
+    isArabic,
+    isOpening,
+    onPress,
+}) {
     const notificationColor = colors[item.colorKey] || colors.primary;
+
     return (
         <TouchableOpacity
             activeOpacity={0.88}
+            disabled={isOpening}
             style={[
                 styles.notificationCard,
                 item.unread && styles.notificationCardUnread,
+                isOpening && styles.notificationCardOpening,
                 getRowDirectionStyle(isArabic),
             ]}
             onPress={onPress}
@@ -454,35 +818,19 @@ function NotificationCard({ item, styles, colors, isArabic, t, onPress }) {
                                     getTextDirectionStyle(isArabic),
                                 ]}
                             >
-                                {t(item.titleKey)}
+                                {item.title}
                             </Text>
-
-                            {/* {!!item.badgeKey && (
-                                <View style={styles.badge}>
-                                    <Text numberOfLines={1} style={styles.badgeText}>
-                                        {t(item.badgeKey)}
-                                    </Text>
-                                </View>
-                            )} */}
                         </View>
 
                         <Text
                             numberOfLines={2}
-                            style={[
-                                styles.notificationBody,
-                                getTextDirectionStyle(isArabic),
-                            ]}
+                            style={[styles.notificationBody, getTextDirectionStyle(isArabic)]}
                         >
-                            {t(item.bodyKey)}
+                            {item.body}
                         </Text>
                     </View>
 
-                    <View
-                        style={[
-                            styles.timeBox,
-                            isArabic && styles.timeBoxArabic,
-                        ]}
-                    >
+                    <View style={[styles.timeBox, isArabic && styles.timeBoxArabic]}>
                         <Text
                             numberOfLines={1}
                             adjustsFontSizeToFit
@@ -492,14 +840,18 @@ function NotificationCard({ item, styles, colors, isArabic, t, onPress }) {
                                 isArabic && styles.notificationTimeArabic,
                             ]}
                         >
-                            {t(item.timeKey)}
+                            {item.timeText}
                         </Text>
 
-                        <Feather
-                            name={isArabic ? "chevron-left" : "chevron-right"}
-                            size={18}
-                            color={colors.textSecondary}
-                        />
+                        {isOpening ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                            <Feather
+                                name={isArabic ? "chevron-left" : "chevron-right"}
+                                size={18}
+                                color={colors.textSecondary}
+                            />
+                        )}
                     </View>
                 </View>
             </View>
@@ -584,6 +936,10 @@ const createStyles = (colors) =>
             gap: 4,
         },
 
+        actionButtonDisabled: {
+            opacity: 0.55,
+        },
+
         actionIconCircle: {
             width: 31,
             height: 31,
@@ -628,6 +984,10 @@ const createStyles = (colors) =>
 
         notificationCardUnread: {
             borderColor: colors.primary,
+        },
+
+        notificationCardOpening: {
+            opacity: 0.7,
         },
 
         unreadDotBox: {
@@ -727,6 +1087,80 @@ const createStyles = (colors) =>
 
         notificationTimeArabic: {
             textAlign: "left",
+        },
+
+        loadingBox: {
+            minHeight: 220,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 14,
+        },
+
+        loadingText: {
+            color: colors.textSecondary,
+            fontSize: 14,
+            fontWeight: "700",
+        },
+
+        emptyBox: {
+            minHeight: 220,
+            borderRadius: 18,
+            borderWidth: 1,
+            borderColor: colors.borderSoft,
+            backgroundColor: colors.cardStrong,
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 24,
+            gap: 9,
+            marginBottom: 18,
+        },
+
+        emptyTitle: {
+            color: colors.textPrimary,
+            fontSize: 17,
+            fontWeight: "900",
+            textAlign: "center",
+        },
+
+        emptyText: {
+            color: colors.textSecondary,
+            fontSize: 13,
+            lineHeight: 20,
+            fontWeight: "600",
+            textAlign: "center",
+        },
+
+        errorBox: {
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: colors.notificationApproval || colors.primary,
+            backgroundColor: colors.cardStrong,
+            padding: 14,
+            gap: 10,
+            marginBottom: 16,
+        },
+
+        errorText: {
+            color: colors.textPrimary,
+            fontSize: 13,
+            lineHeight: 20,
+            fontWeight: "700",
+        },
+
+        retryButton: {
+            minHeight: 38,
+            borderRadius: 11,
+            backgroundColor: colors.primary,
+            alignItems: "center",
+            justifyContent: "center",
+            paddingHorizontal: 16,
+            alignSelf: "flex-start",
+        },
+
+        retryButtonText: {
+            color: colors.background,
+            fontSize: 13,
+            fontWeight: "900",
         },
 
         noteBox: {

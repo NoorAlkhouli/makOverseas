@@ -98,6 +98,34 @@ const normalizeAvatarUrl = (value) => {
     return null;
 };
 
+const getProfilePayload = (response) => {
+    return (
+        response?.data?.data?.user ||
+        response?.data?.data?.profile ||
+        response?.data?.data ||
+        response?.data?.user ||
+        response?.data?.profile ||
+        response?.data ||
+        response?.user ||
+        response?.profile ||
+        response ||
+        null
+    );
+};
+
+const getCurrentUserIdFromProfile = (profile) => {
+    return normalizeId(
+        profile?.id ||
+        profile?.user_id ||
+        profile?.userId ||
+        profile?.user?.id ||
+        profile?.profile?.id ||
+        profile?.profile?.user_id ||
+        profile?.profile?.userId ||
+        null
+    );
+};
+
 const getItemsFromResponse = (response) => {
     const data =
         response?.data?.data ||
@@ -292,6 +320,18 @@ const uniqueMembers = (members = []) => {
     });
 };
 
+const excludeCurrentUserFromMembers = (members = [], currentUserId = null) => {
+    const normalizedCurrentUserId = normalizeId(currentUserId);
+
+    if (!normalizedCurrentUserId) {
+        return members;
+    }
+
+    return members.filter(
+        (member) => String(member?.userId) !== String(normalizedCurrentUserId)
+    );
+};
+
 export default function CreateGroupChatModal({
     visible,
     colors,
@@ -310,6 +350,7 @@ export default function CreateGroupChatModal({
     const [isSearchingCustomers, setIsSearchingCustomers] = useState(false);
     const [isCreating, setIsCreating] = useState(false);
     const [errorMessage, setErrorMessage] = useState("");
+    const [currentUserId, setCurrentUserId] = useState(null);
     const customerSearchTimerRef = useRef(null);
 
     const styles = useMemo(() => createStyles(colors), [colors]);
@@ -370,6 +411,52 @@ export default function CreateGroupChatModal({
             : "Could not create the group. Please try again.",
     };
 
+    useEffect(() => {
+        if (!visible) {
+            setCurrentUserId(null);
+            return;
+        }
+
+        let isMounted = true;
+
+        const loadCurrentUser = async () => {
+            try {
+                const response = await chatService.getProfile();
+                const profile = getProfilePayload(response);
+                const profileUserId = getCurrentUserIdFromProfile(profile);
+
+                if (isMounted) {
+                    setCurrentUserId(profileUserId);
+                }
+            } catch (error) {
+                console.log("Load current user for group modal error:", error?.raw || error);
+
+                if (isMounted) {
+                    setCurrentUserId(null);
+                }
+            }
+        };
+
+        loadCurrentUser();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [visible]);
+
+    useEffect(() => {
+        const normalizedCurrentUserId = normalizeId(currentUserId);
+
+        if (!normalizedCurrentUserId) {
+            return;
+        }
+
+        setSelectedMembers((currentMembers) =>
+            currentMembers.filter(
+                (member) => String(member?.userId) !== String(normalizedCurrentUserId)
+            )
+        );
+    }, [currentUserId]);
 
     useEffect(() => {
         if (!visible) {
@@ -407,10 +494,13 @@ export default function CreateGroupChatModal({
                 setErrorMessage("");
 
                 const response = await employeeService.listEmployees();
-                const normalizedEmployees = uniqueMembers(
-                    getItemsFromResponse(response)
-                        .map((item) => normalizeMember(item, "employee", isArabic))
-                        .filter(Boolean)
+                const normalizedEmployees = excludeCurrentUserFromMembers(
+                    uniqueMembers(
+                        getItemsFromResponse(response)
+                            .map((item) => normalizeMember(item, "employee", isArabic))
+                            .filter(Boolean)
+                    ),
+                    currentUserId
                 );
 
                 if (isMounted) {
@@ -440,7 +530,7 @@ export default function CreateGroupChatModal({
         return () => {
             isMounted = false;
         };
-    }, [visible, isArabic]);
+    }, [visible, isArabic, currentUserId]);
 
     useEffect(() => {
         if (!visible) {
@@ -465,10 +555,13 @@ export default function CreateGroupChatModal({
         customerSearchTimerRef.current = setTimeout(async () => {
             try {
                 const response = await chatService.searchCustomers(cleanCustomerSearch);
-                const normalizedCustomers = uniqueMembers(
-                    getItemsFromResponse(response)
-                        .map((item) => normalizeMember(item, "customer", isArabic))
-                        .filter(Boolean)
+                const normalizedCustomers = excludeCurrentUserFromMembers(
+                    uniqueMembers(
+                        getItemsFromResponse(response)
+                            .map((item) => normalizeMember(item, "customer", isArabic))
+                            .filter(Boolean)
+                    ),
+                    currentUserId
                 );
 
                 if (!isCancelled) {
@@ -495,7 +588,13 @@ export default function CreateGroupChatModal({
                 customerSearchTimerRef.current = null;
             }
         };
-    }, [visible, cleanCustomerSearch, isValidCustomerSearch, isArabic]);
+    }, [
+        visible,
+        cleanCustomerSearch,
+        isValidCustomerSearch,
+        isArabic,
+        currentUserId,
+    ]);
 
     const resetForm = () => {
         setGroupTitle("");
@@ -517,6 +616,13 @@ export default function CreateGroupChatModal({
 
     const toggleMember = (member) => {
         if (!member?.userId || isCreating) {
+            return;
+        }
+
+        if (
+            currentUserId &&
+            String(member.userId) === String(currentUserId)
+        ) {
             return;
         }
 
@@ -562,7 +668,8 @@ export default function CreateGroupChatModal({
 
         const participantIds = uniqueMembers(selectedMembers)
             .map((member) => Number(member.userId))
-            .filter((id) => Number.isInteger(id) && id > 0);
+            .filter((id) => Number.isInteger(id) && id > 0)
+            .filter((id) => !currentUserId || String(id) !== String(currentUserId));
 
         if (participantIds.length === 0) {
             setErrorMessage(text.requiredMembers);

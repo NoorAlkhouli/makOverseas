@@ -3,11 +3,42 @@ import { getEcho } from './echoClient';
 let userChannel = null;
 let subscribedUserId = null;
 
-// جديد: كل listener محفوظ في Map حسب مفتاح فريد
+// كل listener محفوظ في Map حسب مفتاح فريد
 const userListeners = new Map();
+
+const REALTIME_DEBUG = __DEV__;
+
+function logUserRealtime(...args) {
+    if (REALTIME_DEBUG) {
+        console.log('[User Realtime]', ...args);
+    }
+}
 
 function getListenerKey(listenerKey) {
     return listenerKey || `listener-${Date.now()}-${Math.random()}`;
+}
+
+function normalizeId(value) {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+
+    return String(value);
+}
+
+function safeNotify(callback, payload, callbackName) {
+    if (typeof callback !== 'function') {
+        return;
+    }
+
+    try {
+        callback(payload);
+    } catch (error) {
+        console.log('[User Realtime] Listener callback failed:', {
+            callbackName,
+            error,
+        });
+    }
 }
 
 // تسجيل listener جديد
@@ -38,11 +69,97 @@ function registerUserChannelListener({
 function notifyUserListeners(callbackName, payload) {
     userListeners.forEach((listener) => {
         const callback = listener?.[callbackName];
-
-        if (typeof callback === 'function') {
-            callback(payload);
-        }
+        safeNotify(callback, payload, callbackName);
     });
+}
+
+function bindUserEvent(channel, eventNames, logName, callbackName) {
+    eventNames.forEach((eventName) => {
+        channel.listen(eventName, (payload) => {
+            logUserRealtime(`${logName} received:`, payload);
+            notifyUserListeners(callbackName, payload);
+        });
+    });
+}
+
+function bindUserChannelEvents(channel) {
+    bindUserEvent(
+        channel,
+        [
+            '.ConversationUpdated',
+            'ConversationUpdated',
+            '.conversation.updated',
+            'conversation.updated',
+        ],
+        'ConversationUpdated',
+        'onConversationUpdated'
+    );
+
+    bindUserEvent(
+        channel,
+        [
+            '.ConversationBlockUpdated',
+            'ConversationBlockUpdated',
+            '.conversation.block_updated',
+            'conversation.block_updated',
+            '.conversation.block.updated',
+            'conversation.block.updated',
+        ],
+        'ConversationBlockUpdated',
+        'onConversationBlockUpdated'
+    );
+
+    bindUserEvent(
+        channel,
+        [
+            '.notification.received',
+            'notification.received',
+            '.NotificationReceived',
+            'NotificationReceived',
+        ],
+        'NotificationReceived',
+        'onNotificationReceived'
+    );
+
+    bindUserEvent(
+        channel,
+        [
+            '.notification.read_state_changed',
+            'notification.read_state_changed',
+            '.notification.read.state.changed',
+            'notification.read.state.changed',
+            '.NotificationReadStateChanged',
+            'NotificationReadStateChanged',
+        ],
+        'NotificationReadStateChanged',
+        'onNotificationReadStateChanged'
+    );
+
+    bindUserEvent(
+        channel,
+        [
+            '.call.initiated',
+            'call.initiated',
+            '.CallInitiated',
+            'CallInitiated',
+        ],
+        'CallInitiated',
+        'onCallInitiated'
+    );
+
+    bindUserEvent(
+        channel,
+        [
+            '.call.status_updated',
+            'call.status_updated',
+            '.call.status.updated',
+            'call.status.updated',
+            '.CallStatusUpdated',
+            'CallStatusUpdated',
+        ],
+        'CallStatusUpdated',
+        'onCallStatusUpdated'
+    );
 }
 
 export function subscribeToUserChannel({
@@ -62,7 +179,9 @@ export function subscribeToUserChannel({
         return null;
     }
 
-    if (!userId) {
+    const normalizedUserId = normalizeId(userId);
+
+    if (!normalizedUserId) {
         console.log('[User Realtime] userId is missing.');
         return null;
     }
@@ -77,54 +196,39 @@ export function subscribeToUserChannel({
         onCallStatusUpdated,
     });
 
-    if (subscribedUserId === userId && userChannel) {
-        console.log('[User Realtime] Already subscribed to user channel:', userId);
+    if (subscribedUserId === normalizedUserId && userChannel) {
+        logUserRealtime('Already subscribed to user channel:', normalizedUserId);
+
         return {
             channel: userChannel,
             listenerKey: registeredListenerKey,
         };
     }
 
-    if (subscribedUserId && subscribedUserId !== userId) {
+    if (subscribedUserId && subscribedUserId !== normalizedUserId) {
         leaveUserChannel(subscribedUserId);
     }
 
-    const channelName = `user.${userId}`;
+    const channelName = `user.${normalizedUserId}`;
 
-    console.log('[User Realtime] Subscribing to:', channelName);
+    logUserRealtime('Subscribing to:', channelName);
 
     userChannel = echo.private(channelName);
 
     userChannel
         .subscribed(() => {
-            console.log('[User Realtime] Subscribed successfully ✅', channelName);
+            logUserRealtime('Subscribed successfully ✅', channelName);
         })
-        .error(error => {
+        .error((error) => {
             console.log('[User Realtime] Subscription error ❌', {
                 channel: channelName,
                 error,
             });
-        })
-        .listen('.ConversationUpdated', payload => {
-            notifyUserListeners('onConversationUpdated', payload);
-        })
-        .listen('.ConversationBlockUpdated', payload => {
-            notifyUserListeners('onConversationBlockUpdated', payload);
-        })
-        .listen('.notification.received', payload => {
-            notifyUserListeners('onNotificationReceived', payload);
-        })
-        .listen('.notification.read_state_changed', payload => {
-            notifyUserListeners('onNotificationReadStateChanged', payload);
-        })
-        .listen('.call.initiated', payload => {
-            notifyUserListeners('onCallInitiated', payload);
-        })
-        .listen('.call.status_updated', payload => {
-            notifyUserListeners('onCallStatusUpdated', payload);
         });
 
-    subscribedUserId = userId;
+    bindUserChannelEvents(userChannel);
+
+    subscribedUserId = normalizedUserId;
 
     return {
         channel: userChannel,
@@ -134,21 +238,40 @@ export function subscribeToUserChannel({
 
 // إزالة listener فقط
 export function unsubscribeUserChannelListener(listenerKey) {
-    if (!listenerKey) return;
+    if (!listenerKey) {
+        return;
+    }
 
     userListeners.delete(listenerKey);
 }
 
-// ترك القناة بالكامل
-export function leaveUserChannel(userId) {
-    const echo = getEcho({ silent: true });
+export function clearUserRealtimeListeners() {
+    userListeners.clear();
+}
 
-    if (!userId) {
+// ترك القناة الحالية بالكامل
+export function leaveCurrentUserChannel() {
+    if (!subscribedUserId) {
+        userChannel = null;
+        userListeners.clear();
         return;
     }
 
+    leaveUserChannel(subscribedUserId);
+}
+
+// ترك القناة بالكامل
+export function leaveUserChannel(userId) {
+    const normalizedUserId = normalizeId(userId);
+
+    if (!normalizedUserId) {
+        return;
+    }
+
+    const echo = getEcho({ silent: true });
+
     if (!echo) {
-        if (subscribedUserId === userId) {
+        if (subscribedUserId === normalizedUserId) {
             subscribedUserId = null;
             userChannel = null;
             userListeners.clear();
@@ -157,15 +280,30 @@ export function leaveUserChannel(userId) {
         return;
     }
 
-    const channelName = `user.${userId}`;
+    const channelName = `user.${normalizedUserId}`;
 
-    console.log('[User Realtime] Leaving:', channelName);
+    logUserRealtime('Leaving:', channelName);
 
-    echo.leave(channelName);
+    try {
+        echo.leave(channelName);
+    } catch (error) {
+        console.log('[User Realtime] Leave ignored after error:', {
+            channel: channelName,
+            error,
+        });
+    }
 
-    if (subscribedUserId === userId) {
+    if (subscribedUserId === normalizedUserId) {
         subscribedUserId = null;
         userChannel = null;
         userListeners.clear();
     }
+}
+
+export function getCurrentUserChannel() {
+    return userChannel;
+}
+
+export function getSubscribedUserId() {
+    return subscribedUserId;
 }

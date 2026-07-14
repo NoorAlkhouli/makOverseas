@@ -3,6 +3,7 @@ import {
     getRowDirectionStyle,
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
+import { changeAppLanguage } from "@/src/i18n";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import {
@@ -12,13 +13,14 @@ import {
     useAudioRecorder,
     useAudioRecorderState,
 } from "expo-audio";
+import { Audio as LegacyAudio } from "expo-av";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import * as IntentLauncher from "expo-intent-launcher";
 import * as Sharing from "expo-sharing";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     Alert,
@@ -39,7 +41,9 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import ChatPatternBackground from "../../components/ChatPatternBackground";
 import IndividualChatComposer from "../../components/IndividualChatComposer";
 import IndividualChatHeader from "../../components/IndividualChatHeader";
-import IndividualChatMessagesList from "../../components/IndividualChatMessagesList";
+import IndividualChatMessagesList, {
+    stopActiveChatAudioPlayback,
+} from "../../components/IndividualChatMessagesList";
 import { API_BASE_URL } from "../../constants/config/apiConfig";
 import { useAppRealtime } from "../../context/AppRealtimeProvider";
 import chatService from "../../services/api/chatService";
@@ -75,6 +79,38 @@ const formatAudioDuration = (milliseconds = 0) => {
     return `${minutes}:${String(seconds).padStart(2, "0")}`;
 };
 
+const millisecondsToDurationSeconds = (milliseconds = 0) => {
+    const numericMilliseconds = Number(milliseconds || 0);
+
+    if (!Number.isFinite(numericMilliseconds) || numericMilliseconds <= 0) {
+        return 0;
+    }
+
+    return Number((numericMilliseconds / 1000).toFixed(3));
+};
+
+const getOutgoingAudioDurationSeconds = (source = {}) => {
+    const durationMillis = Number(
+        source.durationMillis ??
+        source.duration_millis ??
+        source.audioDurationMillis ??
+        source.audio_duration_millis ??
+        0
+    );
+
+    if (Number.isFinite(durationMillis) && durationMillis > 0) {
+        return millisecondsToDurationSeconds(durationMillis);
+    }
+
+    const durationSeconds = Number(source.duration || 0);
+
+    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+        return Number(durationSeconds.toFixed(3));
+    }
+
+    return 0;
+};
+
 const getRecorderUri = (audioRecorder, recorderState) => {
     const candidates = [
         audioRecorder?.uri,
@@ -100,6 +136,73 @@ const getRecorderUri = (audioRecorder, recorderState) => {
 };
 
 const getVoiceRecordingFileName = () => `voice-message-${Date.now()}.m4a`;
+
+const getLocalAudioDurationMillis = async (uri) => {
+    if (!uri) {
+        return 0;
+    }
+
+    let sound = null;
+
+    try {
+        const soundResult = await LegacyAudio.Sound.createAsync(
+            { uri },
+            { shouldPlay: false },
+            null,
+            false
+        );
+
+        sound = soundResult?.sound || null;
+
+        const status = soundResult?.status?.isLoaded
+            ? soundResult.status
+            : await sound?.getStatusAsync?.();
+
+        if (!status?.isLoaded) {
+            return 0;
+        }
+
+        const durationMillis = Number(status.durationMillis || 0);
+
+        return Number.isFinite(durationMillis) && durationMillis > 0
+            ? Math.round(durationMillis)
+            : 0;
+    } catch (error) {
+        console.log("Validate local audio duration error:", error);
+        return 0;
+    } finally {
+        if (sound) {
+            try {
+                await sound.unloadAsync();
+            } catch (error) {
+                console.log("Unload audio validation sound error:", error);
+            }
+        }
+    }
+};
+
+let cachedPdfViewerComponent = undefined;
+
+const getPdfViewerComponent = () => {
+    if (cachedPdfViewerComponent !== undefined) {
+        return cachedPdfViewerComponent;
+    }
+
+    try {
+        // Lazy-load react-native-pdf so the chat screen does not crash when the
+        // current Expo/dev build was created before this native module existed.
+        // In a fresh EAS/dev build, this returns the real PDF viewer.
+        // eslint-disable-next-line global-require
+        const pdfModule = require("react-native-pdf");
+
+        cachedPdfViewerComponent = pdfModule?.default || pdfModule || null;
+        return cachedPdfViewerComponent;
+    } catch (error) {
+        console.log("PDF native viewer is not available in this build:", error);
+        cachedPdfViewerComponent = null;
+        return cachedPdfViewerComponent;
+    }
+};
 
 const getFileIconName = (mimeType = "", fileName = "") => {
     const lowerName = fileName.toLowerCase();
@@ -895,9 +998,87 @@ const getMessageLocalTrackingId = (message) => {
         : null;
 };
 
+const isMessageMarkedRead = (message) => {
+    if (!message) {
+        return false;
+    }
+
+    const deliveryStatus = String(
+        message?.delivery_status ||
+        message?.deliveryStatus ||
+        message?.status ||
+        message?.raw?.delivery_status ||
+        message?.raw?.deliveryStatus ||
+        message?.raw?.status ||
+        ""
+    ).toLowerCase();
+
+    return !!(
+        message?.is_read === true ||
+        message?.isRead === true ||
+        message?.read_at ||
+        message?.readAt ||
+        message?.raw?.is_read === true ||
+        message?.raw?.isRead === true ||
+        message?.raw?.read_at ||
+        message?.raw?.readAt ||
+        deliveryStatus === "read"
+    );
+};
+
+const preserveMessageReadState = (nextMessage, previousMessage = null) => {
+    const readSource = isMessageMarkedRead(nextMessage)
+        ? nextMessage
+        : isMessageMarkedRead(previousMessage)
+            ? previousMessage
+            : null;
+
+    if (!readSource) {
+        return nextMessage;
+    }
+
+    const readAt =
+        nextMessage?.read_at ||
+        nextMessage?.readAt ||
+        nextMessage?.raw?.read_at ||
+        nextMessage?.raw?.readAt ||
+        readSource?.read_at ||
+        readSource?.readAt ||
+        readSource?.raw?.read_at ||
+        readSource?.raw?.readAt ||
+        new Date().toISOString();
+
+    return {
+        ...nextMessage,
+        is_read: true,
+        isRead: true,
+        read_at: readAt,
+        readAt,
+        delivery_status: "read",
+        deliveryStatus: "read",
+        status: "read",
+        raw: nextMessage?.raw
+            ? {
+                ...nextMessage.raw,
+                is_read: true,
+                isRead: true,
+                read_at: nextMessage.raw?.read_at || readAt,
+                readAt: nextMessage.raw?.readAt || readAt,
+                delivery_status: "read",
+                deliveryStatus: "read",
+            }
+            : nextMessage?.raw,
+    };
+};
+
 const preserveLocalTrackingOnSentMessage = (sentMessage, previousMessage) => {
+    const messageWithReadState = preserveMessageReadState(
+        sentMessage,
+        previousMessage
+    );
+
     if (!previousMessage) {
-        return sentMessage;
+        return messageWithReadState;
     }
 
     const localTrackingId =
@@ -907,14 +1088,14 @@ const preserveLocalTrackingOnSentMessage = (sentMessage, previousMessage) => {
             : null);
 
     if (!localTrackingId) {
-        return sentMessage;
+        return messageWithReadState;
     }
 
     return {
-        ...sentMessage,
-        local_id: sentMessage?.local_id || localTrackingId,
-        localId: sentMessage?.localId || localTrackingId,
-        tempId: sentMessage?.tempId || localTrackingId,
+        ...messageWithReadState,
+        local_id: messageWithReadState?.local_id || localTrackingId,
+        localId: messageWithReadState?.localId || localTrackingId,
+        tempId: messageWithReadState?.tempId || localTrackingId,
     };
 };
 
@@ -1319,6 +1500,202 @@ const getDeletedRealtimeMessageId = (payload) => {
     return String(messageId);
 };
 
+const getMessagesReadConversationId = (payload) => {
+    return getNormalizedChatValue(
+        payload?.conversation_id ||
+        payload?.conversationId ||
+        payload?.conversation?.id ||
+        payload?.data?.conversation_id ||
+        payload?.data?.conversationId ||
+        payload?.data?.conversation?.id ||
+        payload?.item?.conversation_id ||
+        payload?.item?.conversationId ||
+        null
+    );
+};
+
+const getMessagesReadUserId = (payload) => {
+    return getNormalizedChatValue(
+        payload?.user_id ||
+        payload?.userId ||
+        payload?.reader_id ||
+        payload?.readerId ||
+        payload?.read_by ||
+        payload?.readBy ||
+        payload?.user?.id ||
+        payload?.reader?.id ||
+        payload?.data?.user_id ||
+        payload?.data?.userId ||
+        payload?.data?.reader_id ||
+        payload?.data?.readerId ||
+        payload?.data?.user?.id ||
+        payload?.data?.reader?.id ||
+        null
+    );
+};
+
+const getMessagesReadAt = (payload) => {
+    return (
+        payload?.read_at ||
+        payload?.readAt ||
+        payload?.read_at_timestamp ||
+        payload?.readAtTimestamp ||
+        payload?.created_at ||
+        payload?.createdAt ||
+        payload?.data?.read_at ||
+        payload?.data?.readAt ||
+        payload?.data?.created_at ||
+        payload?.data?.createdAt ||
+        new Date().toISOString()
+    );
+};
+
+const normalizeReadMessageId = (value) => {
+    if (value === undefined || value === null || value === "") {
+        return null;
+    }
+
+    if (typeof value === "object") {
+        return getNormalizedChatValue(
+            value?.id ||
+            value?.message_id ||
+            value?.messageId ||
+            value?.uuid ||
+            value?.raw?.id ||
+            null
+        );
+    }
+
+    return getNormalizedChatValue(value);
+};
+
+const getMessagesReadMessageIds = (payload) => {
+    const candidates = [
+        payload?.message_ids,
+        payload?.messageIds,
+        payload?.messages,
+        payload?.read_message_ids,
+        payload?.readMessageIds,
+        payload?.data?.message_ids,
+        payload?.data?.messageIds,
+        payload?.data?.messages,
+        payload?.data?.read_message_ids,
+        payload?.data?.readMessageIds,
+        payload?.item?.message_ids,
+        payload?.item?.messageIds,
+        payload?.item?.messages,
+    ];
+
+    const messageIds = candidates
+        .filter(Array.isArray)
+        .flat()
+        .map(normalizeReadMessageId)
+        .filter(Boolean);
+
+    return Array.from(new Set(messageIds));
+};
+
+const getMessagesReadLastMessageId = (payload) => {
+    return normalizeReadMessageId(
+        payload?.last_message_id ||
+        payload?.lastMessageId ||
+        payload?.last_read_message_id ||
+        payload?.lastReadMessageId ||
+        payload?.message_id ||
+        payload?.messageId ||
+        payload?.data?.last_message_id ||
+        payload?.data?.lastMessageId ||
+        payload?.data?.last_read_message_id ||
+        payload?.data?.lastReadMessageId ||
+        payload?.data?.message_id ||
+        payload?.data?.messageId ||
+        null
+    );
+};
+
+const getComparableMessageNumber = (message) => {
+    const messageId = getComparableMessageId(message);
+    const numericMessageId = Number(messageId);
+
+    return Number.isFinite(numericMessageId) ? numericMessageId : null;
+};
+
+const shouldMarkMessageReadFromEvent = ({
+    message,
+    readMessageIds,
+    lastReadMessageId,
+    readerUserId,
+    viewerIds = [],
+}) => {
+    if (!message || message.isLocal || message.isOptimistic || message.isSending) {
+        return false;
+    }
+
+    if (message.is_mine !== true && message.side !== "me") {
+        return false;
+    }
+
+    const messageId = getComparableMessageId(message);
+    const normalizedMessageId = getNormalizedChatValue(messageId);
+
+    if (!normalizedMessageId) {
+        return false;
+    }
+
+    const normalizedLastReadMessageId = getNormalizedChatValue(lastReadMessageId);
+
+    if (normalizedLastReadMessageId) {
+        const messageNumber = getComparableMessageNumber(message);
+        const lastReadMessageNumber = Number(normalizedLastReadMessageId);
+
+        if (messageNumber !== null && Number.isFinite(lastReadMessageNumber)) {
+            return messageNumber <= lastReadMessageNumber;
+        }
+
+        return String(normalizedMessageId) === String(normalizedLastReadMessageId);
+    }
+
+    if (readMessageIds.length > 0) {
+        return readMessageIds.some(
+            (readMessageId) =>
+                String(readMessageId) === String(normalizedMessageId)
+        );
+    }
+
+    if (!readerUserId) {
+        return false;
+    }
+
+    return !viewerIds
+        .filter((viewerId) => viewerId !== undefined && viewerId !== null && viewerId !== "")
+        .some((viewerId) => String(viewerId) === String(readerUserId));
+};
+
+const markMessageAsRead = (message, readAt) => ({
+    ...message,
+    is_read: true,
+    isRead: true,
+    read_at: message?.read_at || readAt,
+    readAt: message?.readAt || readAt,
+    delivery_status: "read",
+    deliveryStatus: "read",
+    sendStatus: "read",
+    status: message?.status === "sending" || message?.status === "failed"
+        ? message.status
+        : "read",
+    raw: message?.raw
+        ? {
+            ...message.raw,
+            is_read: true,
+            isRead: true,
+            read_at: message.raw?.read_at || readAt,
+            readAt: message.raw?.readAt || readAt,
+            delivery_status: "read",
+            deliveryStatus: "read",
+        }
+        : message?.raw,
+});
+
 const getVisibleShowConversationMessages = (response) => {
     return getShowConversationMessages(response).filter(
         (message) => !isApiMessageDeleted(message)
@@ -1631,26 +2008,31 @@ const getAttachmentName = (attachment, fallback = "attached-file") => {
 };
 
 const getAudioDurationMillisFromMessage = (message, attachment) => {
-    const durationValue =
-        message?.duration_millis ||
-        message?.durationMillis ||
-        message?.audio_duration_millis ||
-        message?.audioDurationMillis ||
-        attachment?.duration_millis ||
-        attachment?.durationMillis ||
-        message?.duration ||
-        attachment?.duration ||
-        0;
+    const durationMillis = Number(
+        message?.durationMillis ??
+        message?.duration_millis ??
+        message?.audioDurationMillis ??
+        message?.audio_duration_millis ??
+        attachment?.durationMillis ??
+        attachment?.duration_millis ??
+        attachment?.audioDurationMillis ??
+        attachment?.audio_duration_millis ??
+        0
+    );
 
-    const numericDuration = Number(durationValue || 0);
+    if (Number.isFinite(durationMillis) && durationMillis > 0) {
+        return Math.round(durationMillis);
+    }
 
-    if (!Number.isFinite(numericDuration) || numericDuration <= 0) {
+    const durationSeconds = Number(
+        message?.duration ?? attachment?.duration ?? 0
+    );
+
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
         return 0;
     }
 
-    return numericDuration > 0 && numericDuration < 1000
-        ? Math.round(numericDuration * 1000)
-        : Math.round(numericDuration);
+    return Math.round(durationSeconds * 1000);
 };
 
 const formatApiMessageTime = (value, isArabic) => {
@@ -1800,6 +2182,13 @@ const normalizeApiMessage = (message, tr, isArabic, knownMessages = []) => {
     const attachmentUri = getAttachmentUri(attachment);
     const body = getApiMessageBody(message);
     const isMine = message?.is_mine === true || message?.sender?.is_me === true;
+    const isRead = isMessageMarkedRead(message);
+    const readAt =
+        message?.read_at ||
+        message?.readAt ||
+        message?.raw?.read_at ||
+        message?.raw?.readAt ||
+        null;
     const replySource =
         message?.reply_to_message ||
         message?.reply_to ||
@@ -1815,6 +2204,19 @@ const normalizeApiMessage = (message, tr, isArabic, knownMessages = []) => {
         time: formatApiMessageTime(message?.created_at || message?.sent_at || message?.time, isArabic),
         is_mine: isMine,
         is_deleted: message?.is_deleted === true || !!message?.deleted_at,
+        is_read: isRead,
+        isRead,
+        read_at: readAt,
+        readAt,
+        delivery_status: isRead
+            ? "read"
+            : message?.delivery_status || message?.deliveryStatus || message?.status || "sent",
+        deliveryStatus: isRead
+            ? "read"
+            : message?.deliveryStatus || message?.delivery_status || message?.status || "sent",
+        status: isRead
+            ? "read"
+            : message?.status || message?.delivery_status || message?.deliveryStatus || "sent",
         raw: message,
         replyToMessage: normalizeApiReplyMessage(replySource, tr, knownMessages),
         reply_to_message_id: message?.reply_to_message_id || replySource?.id || null,
@@ -1907,6 +2309,7 @@ const createOptimisticMessage = ({
     type = 1,
     body = "",
     attachment,
+    duration,
     localReplyMessage,
     tr,
 }) => {
@@ -1972,11 +2375,9 @@ const createOptimisticMessage = ({
     }
 
     if (localType === "audio") {
-        const durationMillis = Number(
-            attachment?.durationMillis ||
-            attachment?.duration_millis ||
-            0
-        );
+        const durationSeconds =
+            Number(duration) || getOutgoingAudioDurationSeconds(attachment);
+        const durationMillis = Math.round(durationSeconds * 1000);
 
         return {
             ...baseMessage,
@@ -1989,7 +2390,7 @@ const createOptimisticMessage = ({
             mimeType: attachment?.type || attachment?.mimeType || attachment?.mime_type || "audio/mp4",
             size: attachment?.size || attachment?.fileSize || attachment?.file_size || 0,
             durationMillis: Number.isFinite(durationMillis) ? durationMillis : 0,
-            duration: Math.round((Number.isFinite(durationMillis) ? durationMillis : 0) / 1000),
+            duration: durationSeconds,
             caption: cleanBody,
         };
     }
@@ -2010,16 +2411,22 @@ const markMessageAsFailed = (message) => ({
     delivery_status: "failed",
 });
 
-const markMessageAsSent = (message) => ({
-    ...message,
-    isSending: false,
-    isFailed: false,
-    isLocal: false,
-    isOptimistic: false,
-    sendStatus: "sent",
-    status: "sent",
-    delivery_status: "sent",
-});
+const markMessageAsSent = (message) => {
+    const messageWithReadState = preserveMessageReadState(message, message);
+    const isRead = isMessageMarkedRead(messageWithReadState);
+
+    return {
+        ...messageWithReadState,
+        isSending: false,
+        isFailed: false,
+        isLocal: false,
+        isOptimistic: false,
+        sendStatus: isRead ? "read" : "sent",
+        status: isRead ? "read" : "sent",
+        delivery_status: isRead ? "read" : "sent",
+        deliveryStatus: isRead ? "read" : "sent",
+    };
+};
 
 const getApiMessageTypeFromLocalMessage = (message) => {
     const localType = String(message?.type || "text").toLowerCase();
@@ -2789,6 +3196,53 @@ const getGroupParticipantsCountFromSources = (...sources) => {
     return seenIds.size + anonymousCount;
 };
 
+const getGroupEventConversationId = (event) => {
+    return getNormalizedChatValue(
+        event?.conversation_id ||
+        event?.conversationId ||
+        event?.conversation?.id ||
+        event?.data?.conversation_id ||
+        event?.data?.conversationId ||
+        event?.data?.conversation?.id ||
+        event?.rawPayload?.conversation_id ||
+        event?.rawPayload?.conversationId ||
+        event?.rawPayload?.conversation?.id ||
+        null
+    );
+};
+
+const getGroupEventUserId = (event) => {
+    return getNormalizedChatValue(
+        event?.user_id ||
+        event?.userId ||
+        event?.participant_user_id ||
+        event?.participantUserId ||
+        event?.participant?.user_id ||
+        event?.participant?.userId ||
+        event?.participant?.user?.id ||
+        event?.user?.id ||
+        event?.data?.user_id ||
+        event?.data?.userId ||
+        event?.data?.participant?.user_id ||
+        event?.data?.participant?.user?.id ||
+        event?.rawPayload?.user_id ||
+        event?.rawPayload?.userId ||
+        event?.rawPayload?.participant?.user_id ||
+        event?.rawPayload?.participant?.user?.id ||
+        null
+    );
+};
+
+const getGroupEventConversationPayload = (event) => {
+    return (
+        event?.conversation ||
+        event?.data?.conversation ||
+        event?.rawPayload?.conversation ||
+        event?.rawPayload?.data?.conversation ||
+        null
+    );
+};
+
 const mergeChatProfileInfo = (currentInfo = {}, nextInfo = {}) => ({
     name: nextInfo.name || currentInfo.name || "",
     department: nextInfo.department || currentInfo.department || null,
@@ -2899,9 +3353,41 @@ export default function IndividualChatScreen({ navigation, route }) {
     const [newMessagesCount, setNewMessagesCount] = useState(0);
     const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
     const recorderState = useAudioRecorderState(audioRecorder, 250);
+    const iosRecordingRef = useRef(null);
+    const iosRecordingDurationRef = useRef(0);
+    const [iosRecordingState, setIosRecordingState] = useState({
+        isRecording: false,
+        durationMillis: 0,
+    });
     const isRecordingRef = useRef(false);
     const isCancellingRecordingRef = useRef(false);
     const isStoppingRecordingRef = useRef(false);
+
+    useEffect(() => {
+        return () => {
+            const recording = iosRecordingRef.current;
+            iosRecordingRef.current = null;
+
+            if (!recording) {
+                return;
+            }
+
+            recording.setOnRecordingStatusUpdate(null);
+
+            void recording.stopAndUnloadAsync()
+                .catch((error) => {
+                    console.log("Release iOS voice recorder error:", error);
+                })
+                .finally(() => {
+                    void LegacyAudio.setAudioModeAsync({
+                        allowsRecordingIOS: false,
+                        playsInSilentModeIOS: true,
+                    }).catch((error) => {
+                        console.log("Reset iOS audio mode on unmount error:", error);
+                    });
+                });
+        };
+    }, []);
 
     const {
         colors: appColors,
@@ -3055,8 +3541,14 @@ export default function IndividualChatScreen({ navigation, route }) {
         return tr("groupChat", isArabic ? "محادثة جماعية" : "Group chat");
     }, [groupParticipantsCount, isArabic, isGroupConversation]);
     const hasMessage = messageText.trim().length > 0;
-    const isRecordingVoice = !!recorderState?.isRecording;
-    const recordingDurationText = formatAudioDuration(recorderState?.durationMillis || 0);
+    const isRecordingVoice = Platform.OS === "ios"
+        ? iosRecordingState.isRecording
+        : !!recorderState?.isRecording;
+    const recordingDurationText = formatAudioDuration(
+        Platform.OS === "ios"
+            ? iosRecordingState.durationMillis
+            : recorderState?.durationMillis || 0
+    );
 
     const isCompactScreen = width < 390;
     const isVeryCompactScreen = width < 350;
@@ -3441,6 +3933,52 @@ export default function IndividualChatScreen({ navigation, route }) {
         );
     };
 
+    const markMessagesReadFromEvent = (readEvent) => {
+        const normalizedConversationId = getNormalizedChatValue(conversationId);
+        const readConversationId = getMessagesReadConversationId(readEvent);
+
+        if (
+            normalizedConversationId &&
+            readConversationId &&
+            String(normalizedConversationId) !== String(readConversationId)
+        ) {
+            return;
+        }
+
+        const readerUserId = getMessagesReadUserId(readEvent);
+        const normalizedCurrentUserId = getNormalizedChatValue(currentUserId);
+
+        if (
+            readerUserId &&
+            normalizedCurrentUserId &&
+            String(readerUserId) === String(normalizedCurrentUserId)
+        ) {
+            return;
+        }
+
+        const readMessageIds = getMessagesReadMessageIds(readEvent);
+        const lastReadMessageId = getMessagesReadLastMessageId(readEvent);
+        const readAt = getMessagesReadAt(readEvent);
+
+        if (!readerUserId && readMessageIds.length === 0 && !lastReadMessageId) {
+            return;
+        }
+
+        setMessages((prevMessages) =>
+            prevMessages.map((message) =>
+                shouldMarkMessageReadFromEvent({
+                    message,
+                    readMessageIds,
+                    lastReadMessageId,
+                    readerUserId,
+                    viewerIds: currentViewerIds,
+                })
+                    ? markMessageAsRead(message, readAt)
+                    : message
+            )
+        );
+    };
+
     const showCopyToast = () => {
         if (copyToastTimerRef.current) {
             clearTimeout(copyToastTimerRef.current);
@@ -3693,6 +4231,139 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
     }, [latestConversationBlockEvent, conversationId]);
 
+
+    const refreshGroupConversationSnapshot = useCallback(async () => {
+        const normalizedConversationId = getNormalizedChatValue(conversationId);
+
+        if (!normalizedConversationId) {
+            return;
+        }
+
+        try {
+            const response = await chatService.showConversation(normalizedConversationId, {
+                page: 1,
+                per_page: SHOW_CONVERSATION_MESSAGES_PER_PAGE,
+            });
+
+            const showConversationObject = getShowConversationObject(response);
+
+            if (!showConversationObject) {
+                return;
+            }
+
+            const nextChatProfileInfo = getChatProfileInfoFromSources(
+                showConversationObject,
+                showConversationObject?.target_user,
+                showConversationObject?.targetUser,
+                showConversationObject?.other_participant,
+                showConversationObject?.participant,
+                showConversationObject?.employee,
+                showConversationObject?.customer,
+                showConversationObject?.user,
+                employee,
+                conversation,
+                route?.params?.customer,
+                route?.params
+            );
+
+            setChatProfileInfo((currentInfo) =>
+                mergeChatProfileInfo(currentInfo, nextChatProfileInfo)
+            );
+
+            const nextConversationId =
+                getConversationIdFromShowConversationObject(showConversationObject) ||
+                normalizedConversationId;
+
+            const nextIsGroup = getIsGroupFromConversationObject(
+                showConversationObject,
+                isGroupConversation
+            );
+
+            const nextTargetUserId = nextIsGroup
+                ? null
+                : getTargetUserIdFromShowConversationObject(
+                    showConversationObject,
+                    targetUserId
+                );
+
+            const nextGroupParticipantsCount = getGroupParticipantsCountFromSources(
+                showConversationObject,
+                showConversationObject?.raw,
+                showConversationObject?.meta,
+                conversation,
+                employee,
+                route?.params
+            );
+
+            setGroupParticipantsCount(nextGroupParticipantsCount);
+
+            const nextCanSendValue = getConversationCanSendMessageFromSources(
+                showConversationObject,
+                showConversationObject?.raw,
+                showConversationObject?.meta,
+                showConversationObject?.permissions,
+                conversation,
+                employee,
+                route?.params
+            );
+
+            const nextBlockInfo = getConversationBlockInfoFromSources(
+                showConversationObject,
+                showConversationObject?.raw,
+                showConversationObject?.meta,
+                showConversationObject?.permissions,
+                conversation,
+                employee,
+                route?.params
+            );
+
+            const nextCanBlockValue = getConversationCanBlockFromSources(
+                showConversationObject,
+                showConversationObject?.raw,
+                showConversationObject?.meta,
+                showConversationObject?.permissions,
+                conversation,
+                employee,
+                route?.params
+            );
+
+            setIsBlocked(nextBlockInfo.isBlocked);
+
+            setCanSendMessage(
+                nextCanSendValue === null ? !nextBlockInfo.isBlocked : nextCanSendValue
+            );
+
+            setCanBlockConversation(
+                !nextIsGroup &&
+                (
+                    canRoleBlockConversations(currentUserRole) ||
+                    nextCanBlockValue === true
+                )
+            );
+
+            setResolvedChatConfig({
+                conversationId: nextConversationId,
+                isGroup: nextIsGroup,
+                targetUserId: nextTargetUserId,
+            });
+
+            if (nextConversationId) {
+                setActiveConversationId(nextConversationId);
+            }
+        } catch (error) {
+            console.log("Refresh group conversation snapshot error:", error?.raw || error);
+        }
+    }, [
+        conversationId,
+        isGroupConversation,
+        targetUserId,
+        employee,
+        conversation,
+        route?.params,
+        currentUserRole,
+    ]); subscribeToConversationChannel
+
+
     useEffect(() => {
         const normalizedConversationId = getNormalizedChatValue(conversationId);
 
@@ -3799,7 +4470,12 @@ export default function IndividualChatScreen({ navigation, route }) {
                         if (existingIndex !== -1) {
                             return prevMessages.map((message, index) =>
                                 index === existingIndex && shouldKeepMessageAsMine(message)
-                                    ? markMessageAsSent(forceMessageAsMine(normalizedMessage))
+                                    ? markMessageAsSent(
+                                        preserveLocalTrackingOnSentMessage(
+                                            forceMessageAsMine(normalizedMessage),
+                                            message
+                                        )
+                                    )
                                     : message
                             );
                         }
@@ -3849,7 +4525,12 @@ export default function IndividualChatScreen({ navigation, route }) {
                     if (existingIndex !== -1) {
                         return prevMessages.map((message, index) =>
                             index === existingIndex
-                                ? markMessageAsSent(preparedMessage)
+                                ? markMessageAsSent(
+                                    preserveLocalTrackingOnSentMessage(
+                                        preparedMessage,
+                                        message
+                                    )
+                                )
                                 : message
                         );
                     }
@@ -3911,7 +4592,12 @@ export default function IndividualChatScreen({ navigation, route }) {
                         }
 
                         return shouldKeepMessageAsMine(message)
-                            ? markMessageAsSent(forceMessageAsMine(preparedMessage))
+                            ? markMessageAsSent(
+                                preserveLocalTrackingOnSentMessage(
+                                    forceMessageAsMine(preparedMessage),
+                                    message
+                                )
+                            )
                             : preparedMessage;
                     })
                 );
@@ -3927,6 +4613,10 @@ export default function IndividualChatScreen({ navigation, route }) {
 
             onMessageDeletedForEveryone: (deleteEvent) => {
                 removeDeletedMessageFromState(getDeletedRealtimeMessageId(deleteEvent));
+            },
+
+            onMessagesRead: (readEvent) => {
+                markMessagesReadFromEvent(readEvent);
             },
 
             onTyping: (typingEvent) => {
@@ -4018,12 +4708,234 @@ export default function IndividualChatScreen({ navigation, route }) {
                     typingTimeoutRef.current = null;
                 }, 2800);
             },
+            onGroupParticipantAdded: (groupEvent) => {
+                const eventConversationId = getGroupEventConversationId(groupEvent);
+
+                if (
+                    eventConversationId &&
+                    String(eventConversationId) !== String(normalizedConversationId)
+                ) {
+                    return;
+                }
+
+                setGroupParticipantsCount((currentCount) => {
+                    const numericCount = Number(currentCount || 0);
+
+                    return Number.isFinite(numericCount)
+                        ? Math.max(1, numericCount + 1)
+                        : 1;
+                });
+
+                void refreshGroupConversationSnapshot();
+            },
+
+            onGroupParticipantRemoved: (groupEvent) => {
+                const eventConversationId = getGroupEventConversationId(groupEvent);
+
+                if (
+                    eventConversationId &&
+                    String(eventConversationId) !== String(normalizedConversationId)
+                ) {
+                    return;
+                }
+
+                const removedUserId = getGroupEventUserId(groupEvent);
+                const normalizedCurrentUserId = getNormalizedChatValue(currentUserId);
+                const normalizedProfileUserId = getNormalizedChatValue(currentProfileUserId);
+
+                const wasCurrentUserRemoved =
+                    removedUserId &&
+                    (
+                        String(removedUserId) === String(normalizedCurrentUserId) ||
+                        String(removedUserId) === String(normalizedProfileUserId)
+                    );
+
+                if (wasCurrentUserRemoved) {
+                    Alert.alert(
+                        tr("groupRemovedTitle", isArabic ? "تمت إزالتك من الغروب" : "Removed from group"),
+                        tr(
+                            "groupRemovedMessage",
+                            isArabic
+                                ? "لم يعد لديك وصول لهذه المحادثة."
+                                : "You no longer have access to this conversation."
+                        ),
+                        [
+                            {
+                                text: tr("ok", "OK"),
+                                onPress: () => {
+                                    leaveConversationChannel(normalizedConversationId);
+                                    navigation.goBack();
+                                },
+                            },
+                        ]
+                    );
+
+                    return;
+                }
+
+                setGroupParticipantsCount((currentCount) => {
+                    const numericCount = Number(currentCount || 0);
+
+                    return Number.isFinite(numericCount)
+                        ? Math.max(0, numericCount - 1)
+                        : 0;
+                });
+
+                void refreshGroupConversationSnapshot();
+            },
+
+            onGroupParticipantLeft: (groupEvent) => {
+                const eventConversationId = getGroupEventConversationId(groupEvent);
+
+                if (
+                    eventConversationId &&
+                    String(eventConversationId) !== String(normalizedConversationId)
+                ) {
+                    return;
+                }
+
+                const leftUserId = getGroupEventUserId(groupEvent);
+                const normalizedCurrentUserId = getNormalizedChatValue(currentUserId);
+                const normalizedProfileUserId = getNormalizedChatValue(currentProfileUserId);
+
+                const didCurrentUserLeave =
+                    leftUserId &&
+                    (
+                        String(leftUserId) === String(normalizedCurrentUserId) ||
+                        String(leftUserId) === String(normalizedProfileUserId)
+                    );
+
+                if (didCurrentUserLeave) {
+                    leaveConversationChannel(normalizedConversationId);
+                    navigation.goBack();
+                    return;
+                }
+
+                setGroupParticipantsCount((currentCount) => {
+                    const numericCount = Number(currentCount || 0);
+
+                    return Number.isFinite(numericCount)
+                        ? Math.max(0, numericCount - 1)
+                        : 0;
+                });
+
+                void refreshGroupConversationSnapshot();
+            },
+
+            onGroupDeleted: (groupEvent) => {
+                const eventConversationId = getGroupEventConversationId(groupEvent);
+
+                if (
+                    eventConversationId &&
+                    String(eventConversationId) !== String(normalizedConversationId)
+                ) {
+                    return;
+                }
+
+                Alert.alert(
+                    tr("groupDeletedTitle", isArabic ? "تم حذف الغروب" : "Group deleted"),
+                    tr(
+                        "groupDeletedMessage",
+                        isArabic
+                            ? "تم حذف هذه المحادثة الجماعية."
+                            : "This group conversation has been deleted."
+                    ),
+                    [
+                        {
+                            text: tr("ok", "OK"),
+                            onPress: () => {
+                                leaveConversationChannel(normalizedConversationId);
+                                navigation.goBack();
+                            },
+                        },
+                    ]
+                );
+            },
+
+            onConversationRemoved: (groupEvent) => {
+                const eventConversationId = getGroupEventConversationId(groupEvent);
+
+                if (
+                    eventConversationId &&
+                    String(eventConversationId) !== String(normalizedConversationId)
+                ) {
+                    return;
+                }
+
+                leaveConversationChannel(normalizedConversationId);
+                navigation.goBack();
+            },
+
+            onGroupOwnershipTransferred: (groupEvent) => {
+                const eventConversationId = getGroupEventConversationId(groupEvent);
+
+                if (
+                    eventConversationId &&
+                    String(eventConversationId) !== String(normalizedConversationId)
+                ) {
+                    return;
+                }
+
+                void refreshGroupConversationSnapshot();
+            },
+
+            onConversationUpdated: (groupEvent) => {
+                const eventConversationId = getGroupEventConversationId(groupEvent);
+                const nextConversationPayload = getGroupEventConversationPayload(groupEvent);
+
+                if (
+                    eventConversationId &&
+                    String(eventConversationId) !== String(normalizedConversationId)
+                ) {
+                    return;
+                }
+
+                if (nextConversationPayload) {
+                    const nextChatProfileInfo = getChatProfileInfoFromSources(
+                        nextConversationPayload,
+                        nextConversationPayload?.target_user,
+                        nextConversationPayload?.targetUser,
+                        nextConversationPayload?.other_participant,
+                        nextConversationPayload?.participant,
+                        nextConversationPayload?.employee,
+                        nextConversationPayload?.customer,
+                        nextConversationPayload?.user
+                    );
+
+                    setChatProfileInfo((currentInfo) =>
+                        mergeChatProfileInfo(currentInfo, nextChatProfileInfo)
+                    );
+
+                    const nextGroupParticipantsCount = getGroupParticipantsCountFromSources(
+                        nextConversationPayload,
+                        nextConversationPayload?.raw,
+                        nextConversationPayload?.meta
+                    );
+
+                    if (nextGroupParticipantsCount > 0) {
+                        setGroupParticipantsCount(nextGroupParticipantsCount);
+                    }
+                }
+
+                void refreshGroupConversationSnapshot();
+            },
         });
 
         return () => {
             leaveConversationChannel(normalizedConversationId);
         };
-    }, [conversationId, currentUserId, employeeName, isArabic, isGroupConversation, targetUserId]);
+    }, [
+        conversationId,
+        currentUserId,
+        currentProfileUserId,
+        currentViewerIds,
+        employeeName,
+        isArabic,
+        isGroupConversation,
+        navigation,
+        refreshGroupConversationSnapshot,
+        targetUserId,
+    ]);
 
 
     useEffect(() => {
@@ -4406,8 +5318,9 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
     };
 
-    const handleChangeLanguage = (value) => {
-        i18n.changeLanguage(value);
+    const handleChangeLanguage = async (value) => {
+        setMenuVisible(false);
+        await changeAppLanguage(value);
     };
 
     const handleChangeTheme = (value) => {
@@ -4520,7 +5433,12 @@ export default function IndividualChatScreen({ navigation, route }) {
                 if (existingIndex !== -1) {
                     return prev.map((item, index) =>
                         index === existingIndex
-                            ? markMessageAsSent(forceMessageAsMine(preparedMessage))
+                            ? markMessageAsSent(
+                                preserveLocalTrackingOnSentMessage(
+                                    forceMessageAsMine(preparedMessage),
+                                    item
+                                )
+                            )
                             : item
                     );
                 }
@@ -4565,6 +5483,7 @@ export default function IndividualChatScreen({ navigation, route }) {
         type = 1,
         body = "",
         attachment,
+        duration,
         replyToMessageId,
         localReplyMessage,
     } = {}) => {
@@ -4596,6 +5515,7 @@ export default function IndividualChatScreen({ navigation, route }) {
             type,
             body,
             attachment,
+            duration,
             replyToMessageId,
         };
         const outgoingSignature = getOutgoingMessageSignature(messagePayload);
@@ -4609,6 +5529,7 @@ export default function IndividualChatScreen({ navigation, route }) {
             type,
             body,
             attachment,
+            duration,
             localReplyMessage,
             tr,
         });
@@ -4626,6 +5547,7 @@ export default function IndividualChatScreen({ navigation, route }) {
                     activeTargetUserIdForSend,
                     type,
                     body,
+                    duration,
                     attachment: {
                         uri: attachment?.uri,
                         name: attachment?.name,
@@ -4916,6 +5838,12 @@ export default function IndividualChatScreen({ navigation, route }) {
         if (extension === "wav") return "audio/wav";
         if (extension === "ogg" || extension === "oga") return "audio/ogg";
         if (extension === "amr") return "audio/amr";
+        if (extension === "awb") return "audio/amr-wb";
+        if (extension === "opus") return "audio/opus";
+        if (extension === "caf") return "audio/x-caf";
+        if (extension === "aif" || extension === "aiff") return "audio/aiff";
+        if (extension === "flac") return "audio/flac";
+        if (extension === "mka") return "audio/x-matroska";
         if (extension === "pdf") return "application/pdf";
         if (extension === "txt") return "text/plain";
         if (extension === "csv") return "text/csv";
@@ -4952,7 +5880,11 @@ export default function IndividualChatScreen({ navigation, route }) {
             rawType === "voice_message" ||
             rawType === "voice-message" ||
             mimeType.startsWith("audio/") ||
-            [".m4a", ".mp3", ".aac", ".wav", ".ogg", ".oga", ".amr"].some((extension) => fileName.includes(extension))
+            [
+                ".m4a", ".mp3", ".aac", ".wav", ".ogg", ".oga",
+                ".opus", ".amr", ".awb", ".caf",
+                ".aif", ".aiff", ".flac", ".mka",
+            ].some((extension) => fileName.includes(extension))
         ) {
             return 8;
         }
@@ -5017,6 +5949,22 @@ export default function IndividualChatScreen({ navigation, route }) {
         }
 
         const messageType = inferOutgoingMessageType(mediaItem);
+        const audioDuration =
+            messageType === 8
+                ? getOutgoingAudioDurationSeconds(mediaItem)
+                : undefined;
+
+        if (messageType === 8 && !audioDuration) {
+            Alert.alert(
+                tr("audioDurationMissingTitle", "Audio duration unavailable"),
+                tr(
+                    "audioDurationMissingMessage",
+                    "This audio file cannot be sent because its duration is unavailable."
+                )
+            );
+            return false;
+        }
+
         const attachmentMimeType = inferMimeTypeFromMedia(
             mediaItem,
             messageType === 2
@@ -5043,6 +5991,7 @@ export default function IndividualChatScreen({ navigation, route }) {
         return await sendOutgoingChatMessage({
             type: messageType,
             body: mediaItem.caption || "",
+            duration: audioDuration,
             attachment: {
                 uri: mediaUri,
                 name:
@@ -5065,15 +6014,18 @@ export default function IndividualChatScreen({ navigation, route }) {
             return;
         }
 
-        if (isRecordingRef.current || recorderState?.isRecording || isStoppingRecordingRef.current) {
+        if (isRecordingRef.current || isRecordingVoice || isStoppingRecordingRef.current) {
             return;
         }
+
+        stopActiveChatAudioPlayback();
 
         try {
             Keyboard.dismiss();
 
-            const permissionResult =
-                await AudioModule.requestRecordingPermissionsAsync();
+            const permissionResult = Platform.OS === "ios"
+                ? await LegacyAudio.requestPermissionsAsync()
+                : await AudioModule.requestRecordingPermissionsAsync();
 
             if (!permissionResult.granted) {
                 Alert.alert(
@@ -5086,30 +6038,98 @@ export default function IndividualChatScreen({ navigation, route }) {
                 return;
             }
 
-            await setAudioModeAsync({
-                allowsRecording: true,
-                playsInSilentMode: true,
-            });
+            if (Platform.OS === "ios") {
+                await LegacyAudio.setAudioModeAsync({
+                    allowsRecordingIOS: true,
+                    playsInSilentModeIOS: true,
+                });
 
-            await audioRecorder.prepareToRecordAsync();
-            audioRecorder.record();
+                iosRecordingDurationRef.current = 0;
+
+                const { recording, status } = await LegacyAudio.Recording.createAsync(
+                    LegacyAudio.RecordingOptionsPresets.HIGH_QUALITY,
+                    (nextStatus) => {
+                        if (!nextStatus) {
+                            return;
+                        }
+
+                        const nextDurationMillis = Number(nextStatus.durationMillis || 0);
+
+                        if (Number.isFinite(nextDurationMillis)) {
+                            iosRecordingDurationRef.current = nextDurationMillis;
+                        }
+
+                        setIosRecordingState({
+                            isRecording: nextStatus.isRecording === true,
+                            durationMillis: iosRecordingDurationRef.current,
+                        });
+                    },
+                    100
+                );
+
+                iosRecordingRef.current = recording;
+
+                const initialDurationMillis = Number(status?.durationMillis || 0);
+                iosRecordingDurationRef.current = Number.isFinite(initialDurationMillis)
+                    ? initialDurationMillis
+                    : 0;
+
+                setIosRecordingState({
+                    isRecording: true,
+                    durationMillis: iosRecordingDurationRef.current,
+                });
+            } else {
+                await setAudioModeAsync({
+                    allowsRecording: true,
+                    playsInSilentMode: true,
+                });
+
+                await audioRecorder.prepareToRecordAsync();
+                audioRecorder.record();
+            }
+
             isRecordingRef.current = true;
             isStoppingRecordingRef.current = false;
 
             console.log("[VOICE RECORDING DEBUG] Voice recording started:", {
                 conversationId,
                 targetUserId,
+                recorder: Platform.OS === "ios" ? "expo-av" : "expo-audio",
             });
         } catch (error) {
             isRecordingRef.current = false;
             isStoppingRecordingRef.current = false;
+            const failedIosRecording = iosRecordingRef.current;
+            iosRecordingRef.current = null;
+            iosRecordingDurationRef.current = 0;
+            setIosRecordingState({
+                isRecording: false,
+                durationMillis: 0,
+            });
+
+            if (failedIosRecording) {
+                try {
+                    failedIosRecording.setOnRecordingStatusUpdate(null);
+                    await failedIosRecording.stopAndUnloadAsync();
+                } catch (releaseError) {
+                    console.log("Release iOS recorder after start error:", releaseError);
+                }
+            }
+
             console.log("Voice recording start error:", error);
 
             try {
-                await setAudioModeAsync({
-                    allowsRecording: false,
-                    playsInSilentMode: true,
-                });
+                if (Platform.OS === "ios") {
+                    await LegacyAudio.setAudioModeAsync({
+                        allowsRecordingIOS: false,
+                        playsInSilentModeIOS: true,
+                    });
+                } else {
+                    await setAudioModeAsync({
+                        allowsRecording: false,
+                        playsInSilentMode: true,
+                    });
+                }
             } catch (audioModeError) {
                 console.log("Audio mode reset after start error:", audioModeError);
             }
@@ -5126,27 +6146,60 @@ export default function IndividualChatScreen({ navigation, route }) {
             return;
         }
 
-        if (!isRecordingRef.current && !recorderState?.isRecording) {
+        if (!isRecordingRef.current && !isRecordingVoice) {
             return;
         }
 
         isStoppingRecordingRef.current = true;
 
         let voiceUri = "";
-        let durationMillis = Number(recorderState?.durationMillis || 0);
+        let durationMillis = Platform.OS === "ios"
+            ? Number(iosRecordingDurationRef.current || 0)
+            : Number(recorderState?.durationMillis || 0);
 
         try {
-            await audioRecorder.stop();
+            if (Platform.OS === "ios") {
+                const recording = iosRecordingRef.current;
+
+                if (!recording) {
+                    throw new Error("iOS audio recording object is unavailable");
+                }
+
+                recording.setOnRecordingStatusUpdate(null);
+                const statusBeforeStop = await recording.getStatusAsync();
+                const stoppedStatus = await recording.stopAndUnloadAsync();
+
+                voiceUri = String(recording.getURI() || "").trim();
+                durationMillis = Math.max(
+                    durationMillis,
+                    Number(statusBeforeStop?.durationMillis || 0),
+                    Number(stoppedStatus?.durationMillis || 0)
+                );
+
+                iosRecordingRef.current = null;
+                iosRecordingDurationRef.current = durationMillis;
+                setIosRecordingState({
+                    isRecording: false,
+                    durationMillis,
+                });
+
+                await LegacyAudio.setAudioModeAsync({
+                    allowsRecordingIOS: false,
+                    playsInSilentModeIOS: true,
+                });
+            } else {
+                await audioRecorder.stop();
+                voiceUri = getRecorderUri(audioRecorder, recorderState);
+
+                await setAudioModeAsync({
+                    allowsRecording: false,
+                    playsInSilentMode: true,
+                });
+            }
+
             isRecordingRef.current = false;
 
             await new Promise((resolve) => setTimeout(resolve, 120));
-
-            voiceUri = getRecorderUri(audioRecorder, recorderState);
-
-            await setAudioModeAsync({
-                allowsRecording: false,
-                playsInSilentMode: true,
-            });
 
             if (!voiceUri) {
                 Alert.alert(
@@ -5156,8 +6209,33 @@ export default function IndividualChatScreen({ navigation, route }) {
                 return;
             }
 
+            if (Platform.OS === "ios") {
+                const measuredDurationMillis = await getLocalAudioDurationMillis(voiceUri);
+
+                if (!measuredDurationMillis) {
+                    Alert.alert(
+                        tr("errorTitle", "Something went wrong"),
+                        tr(
+                            "voiceRecordValidationError",
+                            "The voice message was not saved correctly. Please record it again."
+                        )
+                    );
+                    return;
+                }
+
+                durationMillis = measuredDurationMillis;
+                iosRecordingDurationRef.current = measuredDurationMillis;
+            }
+
             if (!Number.isFinite(durationMillis) || durationMillis <= 0) {
-                durationMillis = 1000;
+                Alert.alert(
+                    tr("audioDurationMissingTitle", "Audio duration unavailable"),
+                    tr(
+                        "audioDurationMissingMessage",
+                        "The voice message duration could not be determined. Please record it again."
+                    )
+                );
+                return;
             }
 
             if (durationMillis < 500) {
@@ -5175,6 +6253,7 @@ export default function IndividualChatScreen({ navigation, route }) {
 
             const voiceSize = await getLocalAttachmentSize(voiceUri);
             const voiceFileName = getVoiceRecordingFileName();
+            const durationSeconds = millisecondsToDurationSeconds(durationMillis);
 
             console.log("[VOICE RECORDING DEBUG] Sending voice message:", {
                 conversationId,
@@ -5183,11 +6262,13 @@ export default function IndividualChatScreen({ navigation, route }) {
                 voiceFileName,
                 voiceSize,
                 durationMillis,
+                durationSeconds,
             });
 
             const sentSuccessfully = await sendOutgoingChatMessage({
                 type: 8,
                 body: "",
+                duration: durationSeconds,
                 attachment: {
                     uri: voiceUri,
                     name: voiceFileName,
@@ -5200,8 +6281,6 @@ export default function IndividualChatScreen({ navigation, route }) {
                     fileSize: voiceSize,
                     file_size: voiceSize,
                     durationMillis,
-                    duration_millis: durationMillis,
-                    duration: Math.round(durationMillis / 1000),
                 },
                 replyToMessageId,
                 localReplyMessage: currentReplyingToMessage,
@@ -5214,6 +6293,23 @@ export default function IndividualChatScreen({ navigation, route }) {
             });
         } catch (error) {
             isRecordingRef.current = false;
+            const failedIosRecording = iosRecordingRef.current;
+            iosRecordingRef.current = null;
+            iosRecordingDurationRef.current = 0;
+            setIosRecordingState({
+                isRecording: false,
+                durationMillis: 0,
+            });
+
+            if (failedIosRecording) {
+                try {
+                    failedIosRecording.setOnRecordingStatusUpdate(null);
+                    await failedIosRecording.stopAndUnloadAsync();
+                } catch (releaseError) {
+                    console.log("Release iOS recorder after stop error:", releaseError);
+                }
+            }
+
             console.log("[VOICE RECORDING DEBUG] Voice recording stop/send error:", error);
 
             Alert.alert(
@@ -5224,10 +6320,17 @@ export default function IndividualChatScreen({ navigation, route }) {
             isStoppingRecordingRef.current = false;
 
             try {
-                await setAudioModeAsync({
-                    allowsRecording: false,
-                    playsInSilentMode: true,
-                });
+                if (Platform.OS === "ios") {
+                    await LegacyAudio.setAudioModeAsync({
+                        allowsRecordingIOS: false,
+                        playsInSilentModeIOS: true,
+                    });
+                } else {
+                    await setAudioModeAsync({
+                        allowsRecording: false,
+                        playsInSilentMode: true,
+                    });
+                }
             } catch (audioModeError) {
                 console.log("[VOICE RECORDING DEBUG] Audio mode reset after stop error:", audioModeError);
             }
@@ -5236,7 +6339,7 @@ export default function IndividualChatScreen({ navigation, route }) {
 
 
     const cancelVoiceRecordingIfActive = async () => {
-        const isActuallyRecording = isRecordingRef.current || !!recorderState?.isRecording;
+        const isActuallyRecording = isRecordingRef.current || isRecordingVoice;
 
         if (!isActuallyRecording || isCancellingRecordingRef.current || isStoppingRecordingRef.current) {
             return;
@@ -5245,19 +6348,41 @@ export default function IndividualChatScreen({ navigation, route }) {
         isCancellingRecordingRef.current = true;
 
         try {
-            await audioRecorder.stop();
+            if (Platform.OS === "ios") {
+                const recording = iosRecordingRef.current;
+                iosRecordingRef.current = null;
+
+                if (recording) {
+                    recording.setOnRecordingStatusUpdate(null);
+                    await recording.stopAndUnloadAsync();
+                }
+            } else {
+                await audioRecorder.stop();
+            }
         } catch (error) {
             console.log("Voice recording cancel error:", error);
         } finally {
             isRecordingRef.current = false;
             isCancellingRecordingRef.current = false;
             isStoppingRecordingRef.current = false;
+            iosRecordingDurationRef.current = 0;
+            setIosRecordingState({
+                isRecording: false,
+                durationMillis: 0,
+            });
 
             try {
-                await setAudioModeAsync({
-                    allowsRecording: false,
-                    playsInSilentMode: true,
-                });
+                if (Platform.OS === "ios") {
+                    await LegacyAudio.setAudioModeAsync({
+                        allowsRecordingIOS: false,
+                        playsInSilentModeIOS: true,
+                    });
+                } else {
+                    await setAudioModeAsync({
+                        allowsRecording: false,
+                        playsInSilentMode: true,
+                    });
+                }
             } catch (audioModeError) {
                 console.log("Audio mode reset error:", audioModeError);
             }
@@ -5673,6 +6798,17 @@ export default function IndividualChatScreen({ navigation, route }) {
 
         const retryType = getApiMessageTypeFromLocalMessage(message);
         const retryAttachment = getRetryAttachmentFromMessage(message);
+        const retryDuration =
+            retryType === 8
+                ? getOutgoingAudioDurationSeconds({
+                    durationMillis:
+                        message?.durationMillis ??
+                        message?.duration_millis ??
+                        retryAttachment?.durationMillis ??
+                        0,
+                    duration: message?.duration,
+                })
+                : undefined;
         const retryBody = message?.text || message?.caption || message?.body || "";
         const retryReplyToMessageId =
             message?.reply_to_message_id ||
@@ -5688,6 +6824,17 @@ export default function IndividualChatScreen({ navigation, route }) {
             return;
         }
 
+        if (retryType === 8 && !retryDuration) {
+            Alert.alert(
+                tr("retryUnavailableTitle", "Retry unavailable"),
+                tr(
+                    "audioDurationMissingMessage",
+                    "This voice message cannot be retried because its duration is unavailable."
+                )
+            );
+            return;
+        }
+
         setMessageOptionsMessage(null);
 
         setMessages((prevMessages) =>
@@ -5697,6 +6844,7 @@ export default function IndividualChatScreen({ navigation, route }) {
         await sendOutgoingChatMessage({
             type: retryType,
             body: retryBody,
+            duration: retryDuration,
             attachment: retryAttachment || undefined,
             replyToMessageId: retryReplyToMessageId,
             localReplyMessage: retryReplyMessage,
@@ -5973,8 +7121,8 @@ export default function IndividualChatScreen({ navigation, route }) {
                         onMicPress={handleMicPress}
                         replyingToMessage={replyingToMessage}
                         onCancelReply={() => setReplyingToMessage(null)}
-                        disabled={cannotSendBecauseBlocked}
-                        disabledReason={blockedComposerMessage}
+                        isComposerDisabled={cannotSendBecauseBlocked}
+                        disabledMessage={blockedComposerMessage}
                         onFocusInput={() => {
                             setTimeout(() => {
                                 scrollToBottom(true);
@@ -6358,6 +7506,7 @@ function DocumentPreviewModal({
     const fileSizeText = formatFileSize(documentItem?.size);
     const canPreviewAsImage = isImageDocument(documentItem);
     const canPreviewAsPdf = isPdfDocument(documentItem);
+    const PdfViewer = canPreviewAsPdf ? getPdfViewerComponent() : null;
     const canPreviewInsideApp = canPreviewAsImage || canPreviewAsPdf;
 
     useEffect(() => {
@@ -6426,8 +7575,34 @@ function DocumentPreviewModal({
             );
         }
 
-        // Android/iOS WebView is not reliable for local PDF files.
-        // Keep real inline preview for image files, and guide PDFs to open in Google Drive/another reader.
+        if (canPreviewAsPdf && PdfViewer && localPreviewUri && !previewFailed) {
+            return (
+                <View
+                    style={[
+                        styles.documentPdfPreviewWrapper,
+                        {
+                            backgroundColor: colors.cardStrong,
+                            borderColor: colors.border,
+                        },
+                    ]}
+                >
+                    <PdfViewer
+                        key={localPreviewUri}
+                        source={{ uri: localPreviewUri, cache: true }}
+                        style={styles.documentPdfPreview}
+                        trustAllCerts={false}
+                        enablePaging={false}
+                        fitPolicy={0}
+                        spacing={8}
+                        onError={(error) => {
+                            console.log("PDF preview error:", error);
+                            setPreviewFailed(true);
+                        }}
+                    />
+                </View>
+            );
+        }
+
         if (canPreviewAsPdf) {
             return (
                 <View
@@ -6466,10 +7641,15 @@ function DocumentPreviewModal({
                         style={[styles.documentPreviewMeta, { color: colors.muted }]}
                         numberOfLines={3}
                     >
-                        {tr(
-                            "pdfExternalPreviewMessage",
-                            "PDF files open best in Google Drive, Files, Books, Adobe, or another PDF app."
-                        )}
+                        {previewFailed
+                            ? tr(
+                                "pdfPreviewUnavailableMessage",
+                                "Could not preview this PDF inside the app. You can still open it with another app or save it."
+                            )
+                            : tr(
+                                "pdfPreparingFallbackMessage",
+                                "This PDF is ready. If it does not appear, open it with another app or save it."
+                            )}
                     </Text>
                 </View>
             );
@@ -6586,7 +7766,7 @@ function DocumentPreviewModal({
                         <Ionicons name="open-outline" size={19} color={colors.darkText} />
                         <Text style={[styles.documentPreviewButtonText, { color: colors.darkText }]} numberOfLines={1}>
                             {canPreviewAsPdf
-                                ? tr("openWithApp", "Open with app")
+                                ? tr("openExternally", "Open externally")
                                 : tr("openFile", "Open file")}
                         </Text>
                     </TouchableOpacity>
@@ -7082,6 +8262,20 @@ const styles = StyleSheet.create({
         width: "100%",
         height: "100%",
         borderRadius: 18,
+    },
+
+    documentPdfPreviewWrapper: {
+        width: "100%",
+        height: "100%",
+        borderRadius: 18,
+        borderWidth: 1,
+        overflow: "hidden",
+    },
+
+    documentPdfPreview: {
+        flex: 1,
+        width: "100%",
+        height: "100%",
     },
 
     documentPreviewLoading: {

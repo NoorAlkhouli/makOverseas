@@ -1,7 +1,7 @@
 import { Feather, MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
@@ -20,6 +20,7 @@ import {
 import ChatPatternBackground from "@/src/components/ChatPatternBackground";
 import { appImages } from "@/src/constants/images";
 import { LANGUAGE_STORAGE_KEY } from "@/src/i18n";
+import apiClient from "@/src/services/api/apiClient";
 import channelEvents from "@/src/services/api/channelEvents";
 import channelService from "@/src/services/api/channelService";
 import {
@@ -42,7 +43,7 @@ export default function ChannelChat({ navigation, route }) {
 
     const styles = useMemo(
         () => createStyles(colors, isSmallScreen, isDark),
-        [colors, isSmallScreen, isDark]
+        [colors, isSmallScreen, isDark],
     );
     /**
      * البيانات جاية من شاشة Channels
@@ -54,6 +55,18 @@ export default function ChannelChat({ navigation, route }) {
     const channelType = route?.params?.channelType || 1;
     const initialFollowersCount = Number(route?.params?.followersCount || 0);
     const initialFollowing = route?.params?.initialFollowing ?? false;
+    const rawTargetPostId =
+        route?.params?.targetPostId ??
+        route?.params?.postId ??
+        route?.params?.post_id ??
+        null;
+    const targetPostId =
+        rawTargetPostId === null || rawTargetPostId === ""
+            ? null
+            : String(rawTargetPostId);
+    const targetPostKey = targetPostId
+        ? `${route?.params?.notificationId || "post"}:${targetPostId}`
+        : null;
 
     const [isFollowing, setIsFollowing] = useState(Boolean(initialFollowing));
     const [followersCount, setFollowersCount] = useState(initialFollowersCount);
@@ -84,6 +97,14 @@ export default function ChannelChat({ navigation, route }) {
     // رسالة الخطأ
     const [errorMessage, setErrorMessage] = useState("");
 
+    // البوست المفتوح من إشعار يتم تمرير الشاشة إليه وتمييزه مؤقتاً
+    const [highlightedPostId, setHighlightedPostId] = useState(null);
+    const postsScrollRef = useRef(null);
+    const postLayoutsRef = useRef(new Map());
+    const handledTargetPostRef = useRef(null);
+    const targetScrollTimerRef = useRef(null);
+    const highlightTimerRef = useRef(null);
+
     const channel = useMemo(
         () => ({
             slug: channelSlug,
@@ -92,7 +113,14 @@ export default function ChannelChat({ navigation, route }) {
             type: channelType,
             followersCount,
         }),
-        [channelSlug, channelTitle, channelImage, channelType, followersCount, isArabic]
+        [
+            channelSlug,
+            channelTitle,
+            channelImage,
+            channelType,
+            followersCount,
+            isArabic,
+        ],
     );
 
     const actionColor = isFollowing ? colors.primary : colors.blue;
@@ -133,8 +161,46 @@ export default function ChannelChat({ navigation, route }) {
                 minute: "2-digit",
             });
         },
-        [isArabic]
+        [isArabic],
     );
+
+    /**
+     * تثبيت حالة المتابعة والعدد من السيرفر بدل الاعتماد فقط على القيم الممررة
+     * من شاشة القنوات، لأنها قد تكون قديمة إذا تغيّرت من جهاز آخر.
+     */
+    const syncChannelDetails = useCallback(async () => {
+        if (!channelSlug) {
+            return null;
+        }
+
+        try {
+            const channelDetails = await channelService.showChannel(channelSlug);
+
+            if (!channelDetails) {
+                return null;
+            }
+
+            const confirmedIsFollowing = Boolean(channelDetails.is_following);
+            const confirmedFollowersCount = Math.max(
+                0,
+                Number(channelDetails.followers_count || 0),
+            );
+
+            setIsFollowing(confirmedIsFollowing);
+            setFollowersCount(confirmedFollowersCount);
+
+            channelEvents.emitFollowChanged({
+                slug: channelSlug,
+                isFollowing: confirmedIsFollowing,
+                followersCount: confirmedFollowersCount,
+            });
+
+            return channelDetails;
+        } catch (error) {
+            console.log("Show channel error:", error?.raw || error);
+            return null;
+        }
+    }, [channelSlug]);
 
     /**
      * جلب posts القناة
@@ -151,7 +217,7 @@ export default function ChannelChat({ navigation, route }) {
                 setErrorMessage(
                     isArabic
                         ? "لا يمكن تحميل المنشورات لأن رابط القناة غير موجود."
-                        : "Unable to load posts because channel slug is missing."
+                        : "Unable to load posts because channel slug is missing.",
                 );
                 return;
             }
@@ -197,7 +263,7 @@ export default function ChannelChat({ navigation, route }) {
                     error?.userMessage ||
                     (isArabic
                         ? "صار خطأ أثناء تحميل منشورات القناة. حاولي مرة ثانية."
-                        : "Something went wrong while loading channel posts.")
+                        : "Something went wrong while loading channel posts."),
                 );
             } finally {
                 setIsLoading(false);
@@ -205,7 +271,7 @@ export default function ChannelChat({ navigation, route }) {
                 setIsLoadingMore(false);
             }
         },
-        [channelSlug, isArabic, normalizePost]
+        [channelSlug, isArabic, normalizePost],
     );
 
     /**
@@ -215,6 +281,10 @@ export default function ChannelChat({ navigation, route }) {
         fetchPosts({ page: 1, fullLoading: true });
     }, [fetchPosts]);
 
+    useEffect(() => {
+        syncChannelDetails();
+    }, [syncChannelDetails]);
+
     /**
      * هل في صفحات إضافية؟
      */
@@ -223,8 +293,133 @@ export default function ChannelChat({ navigation, route }) {
             return false;
         }
 
-        return Number(postsMeta.current_page || 1) < Number(postsMeta.last_page || 1);
+        return (
+            Number(postsMeta.current_page || 1) < Number(postsMeta.last_page || 1)
+        );
     }, [postsMeta]);
+
+    const scrollToTargetPost = useCallback((postId, postKey) => {
+        const layout = postLayoutsRef.current.get(String(postId));
+
+        if (!layout || !postsScrollRef.current) {
+            return false;
+        }
+
+        postsScrollRef.current.scrollTo({
+            y: Math.max(0, Number(layout.y || 0) - 12),
+            animated: true,
+        });
+
+        handledTargetPostRef.current = postKey;
+        setHighlightedPostId(String(postId));
+
+        if (highlightTimerRef.current) {
+            clearTimeout(highlightTimerRef.current);
+        }
+
+        highlightTimerRef.current = setTimeout(() => {
+            setHighlightedPostId(null);
+        }, 2200);
+
+        return true;
+    }, []);
+
+    const scheduleTargetPostScroll = useCallback(
+        (postId, postKey) => {
+            if (targetScrollTimerRef.current) {
+                clearTimeout(targetScrollTimerRef.current);
+            }
+
+            targetScrollTimerRef.current = setTimeout(() => {
+                scrollToTargetPost(postId, postKey);
+            }, 120);
+        },
+        [scrollToTargetPost],
+    );
+
+    const handlePostLayout = useCallback(
+        (postId, layout) => {
+            const normalizedPostId = String(postId);
+            postLayoutsRef.current.set(normalizedPostId, layout);
+
+            if (
+                targetPostId === normalizedPostId &&
+                targetPostKey &&
+                handledTargetPostRef.current !== targetPostKey
+            ) {
+                scheduleTargetPostScroll(targetPostId, targetPostKey);
+            }
+        },
+        [scheduleTargetPostScroll, targetPostId, targetPostKey],
+    );
+
+    /**
+     * إذا البوست أقدم من أول صفحة، نكمل pagination تلقائياً حتى نجده.
+     */
+    useEffect(() => {
+        if (
+            !targetPostId ||
+            !targetPostKey ||
+            handledTargetPostRef.current === targetPostKey ||
+            isLoading ||
+            isRefreshing ||
+            isLoadingMore ||
+            errorMessage
+        ) {
+            return;
+        }
+
+        const targetExists = posts.some((post) => String(post.id) === targetPostId);
+
+        if (targetExists) {
+            scheduleTargetPostScroll(targetPostId, targetPostKey);
+            return;
+        }
+
+        if (canLoadMore) {
+            fetchPosts({
+                page: currentPage + 1,
+                loadMore: true,
+            });
+            return;
+        }
+
+        if (postsMeta) {
+            handledTargetPostRef.current = targetPostKey;
+            Alert.alert(
+                isArabic ? "تنبيه" : "Notice",
+                isArabic
+                    ? "تم فتح القناة، لكن المنشور المرتبط بالإشعار لم يعد موجوداً."
+                    : "The channel was opened, but the post linked to the notification is no longer available.",
+            );
+        }
+    }, [
+        canLoadMore,
+        currentPage,
+        errorMessage,
+        fetchPosts,
+        isArabic,
+        isLoading,
+        isLoadingMore,
+        isRefreshing,
+        posts,
+        postsMeta,
+        scheduleTargetPostScroll,
+        targetPostId,
+        targetPostKey,
+    ]);
+
+    useEffect(() => {
+        return () => {
+            if (targetScrollTimerRef.current) {
+                clearTimeout(targetScrollTimerRef.current);
+            }
+
+            if (highlightTimerRef.current) {
+                clearTimeout(highlightTimerRef.current);
+            }
+        };
+    }, []);
 
     const handleLoadMore = () => {
         if (isLoadingMore || isLoading || !canLoadMore) {
@@ -252,7 +447,7 @@ export default function ChannelChat({ navigation, route }) {
         const followersChange = nextIsFollowing ? 1 : -1;
         const nextFollowersCount = Math.max(
             0,
-            Number(oldFollowersCount || 0) + followersChange
+            Number(oldFollowersCount || 0) + followersChange,
         );
 
         try {
@@ -282,32 +477,38 @@ export default function ChannelChat({ navigation, route }) {
                 await channelService.followChannel(channelSlug);
             }
 
+            // Endpoint المتابعة لا يعيد channel؛ نطلب التفاصيل لتثبيت العدد الحقيقي.
+            await syncChannelDetails();
             setMenuOpen(false);
         } catch (error) {
             console.log("Channel follow error:", error);
 
-            /**
-             * إذا فشل الطلب، نرجّع صفحة الشات للحالة القديمة
-             */
-            setIsFollowing(oldIsFollowing);
-            setFollowersCount(oldFollowersCount);
+            const serverAlreadyMatchesNewState =
+                (error?.code === "ALREADY_FOLLOWING" && nextIsFollowing) ||
+                (error?.code === "NOT_FOLLOWING" && !nextIsFollowing);
 
-            /**
-             * ونرجّع صفحة Channels كمان للحالة القديمة
-             */
-            channelEvents.emitFollowChanged({
-                slug: channelSlug,
-                isFollowing: oldIsFollowing,
-                followersCount: oldFollowersCount,
-            });
+            if (serverAlreadyMatchesNewState) {
+                // هذه ليست حالة فشل فعلي؛ السيرفر أصلاً بالحالة المطلوبة.
+                setMenuOpen(false);
+                await syncChannelDetails();
+            } else {
+                setIsFollowing(oldIsFollowing);
+                setFollowersCount(oldFollowersCount);
 
-            Alert.alert(
-                isArabic ? "تنبيه" : "Notice",
-                error?.userMessage ||
-                (isArabic
-                    ? "صار خطأ أثناء تحديث المتابعة."
-                    : "Something went wrong while updating follow status.")
-            );
+                channelEvents.emitFollowChanged({
+                    slug: channelSlug,
+                    isFollowing: oldIsFollowing,
+                    followersCount: oldFollowersCount,
+                });
+
+                Alert.alert(
+                    isArabic ? "تنبيه" : "Notice",
+                    error?.userMessage ||
+                    (isArabic
+                        ? "صار خطأ أثناء تحديث المتابعة."
+                        : "Something went wrong while updating follow status."),
+                );
+            }
         } finally {
             setIsFollowLoading(false);
         }
@@ -319,6 +520,7 @@ export default function ChannelChat({ navigation, route }) {
         setMenuOpen(false);
 
         await AsyncStorage.setItem(LANGUAGE_STORAGE_KEY, nextLanguage);
+        await apiClient.setLanguage(nextLanguage);
         await i18n.changeLanguage(nextLanguage);
     };
 
@@ -401,6 +603,10 @@ export default function ChannelChat({ navigation, route }) {
                         styles={styles}
                         isArabic={isArabic}
                         formattedDate={formatPostDate(post.publishedAt)}
+                        isHighlighted={highlightedPostId === String(post.id)}
+                        onLayout={(event) =>
+                            handlePostLayout(post.id, event.nativeEvent.layout)
+                        }
                     />
                 ))}
 
@@ -455,20 +661,21 @@ export default function ChannelChat({ navigation, route }) {
                 menuOpen={menuOpen}
                 onToggleLanguage={toggleLanguage}
                 onToggleTheme={handleToggleTheme}
-                onOpenSettings={() => {
-                    setMenuOpen(false);
-                    navigation.navigate("Settings");
-                }}
                 onOpenProfile={() => {
                     setMenuOpen(false);
-                    navigation.navigate("Profile");
+                    navigation.navigate("MainTabs", {
+                        screen: "Profile",
+                    });
                 }}
                 t={t}
             />
 
-            <ChatPatternBackground topOffset={Platform.OS === "android" ? 113 : 127} />
+            <ChatPatternBackground
+                topOffset={Platform.OS === "android" ? 113 : 127}
+            />
 
             <ScrollView
+                ref={postsScrollRef}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
                 refreshControl={
@@ -493,12 +700,7 @@ export default function ChannelChat({ navigation, route }) {
                 <View style={[styles.readOnlyBox, getRowDirectionStyle(isArabic)]}>
                     <Feather name="shield" size={18} color={colors.textMuted} />
 
-                    <Text
-                        style={[
-                            styles.readOnlyText,
-                            getTextDirectionStyle(isArabic),
-                        ]}
-                    >
+                    <Text style={[styles.readOnlyText, getTextDirectionStyle(isArabic)]}>
                         {t("channelChat.readOnly")}
                     </Text>
                 </View>
@@ -522,7 +724,6 @@ function ChannelChatHeader({
     menuOpen,
     onToggleLanguage,
     onToggleTheme,
-    onOpenSettings,
     onOpenProfile,
     t,
 }) {
@@ -538,11 +739,7 @@ function ChannelChatHeader({
                     style={styles.backButton}
                     onPress={onBack}
                 >
-                    <Feather
-                        name="arrow-left"
-                        size={22}
-                        color={colors.textPrimary}
-                    />
+                    <Feather name="arrow-left" size={22} color={colors.textPrimary} />
                 </TouchableOpacity>
 
                 <View style={styles.avatarBox}>
@@ -557,20 +754,14 @@ function ChannelChatHeader({
                 <View style={styles.headerTextBox}>
                     <Text
                         numberOfLines={1}
-                        style={[
-                            styles.headerTitle,
-                            getTextDirectionStyle(isArabic),
-                        ]}
+                        style={[styles.headerTitle, getTextDirectionStyle(isArabic)]}
                     >
                         {channel.title}
                     </Text>
 
                     <Text
                         numberOfLines={1}
-                        style={[
-                            styles.headerFollowers,
-                            getTextDirectionStyle(isArabic),
-                        ]}
+                        style={[styles.headerFollowers, getTextDirectionStyle(isArabic)]}
                     >
                         {followersText}
                     </Text>
@@ -650,7 +841,6 @@ function ChannelChatHeader({
                                 onPress={onToggleLanguage}
                             />
 
-
                             <MenuItem
                                 icon={isDark ? "sun" : "moon"}
                                 label={
@@ -666,15 +856,6 @@ function ChannelChatHeader({
                                 styles={styles}
                                 isArabic={isArabic}
                                 onPress={onToggleTheme}
-                            />
-
-                            <MenuItem
-                                icon="settings"
-                                label={t("home.menuSettings")}
-                                colors={colors}
-                                styles={styles}
-                                isArabic={isArabic}
-                                onPress={onOpenSettings}
                             />
 
                             <MenuItem
@@ -698,7 +879,11 @@ function ChannelImage({ image, type, styles, actionColor }) {
 
     return (
         <View style={styles.channelImageWrapper}>
-            <Image source={imageSource} style={styles.avatarImage} resizeMode="cover" />
+            <Image
+                source={imageSource}
+                style={styles.avatarImage}
+                resizeMode="cover"
+            />
 
             {!image && (
                 <View style={styles.defaultImageOverlay}>
@@ -744,20 +929,23 @@ function ChannelPostCard({
     styles,
     isArabic,
     formattedDate,
+    isHighlighted,
+    onLayout,
 }) {
     return (
-        <View style={styles.postWrapper}>
-            <View style={styles.messageCard}>
+        <View style={styles.postWrapper} onLayout={onLayout}>
+            <View
+                style={[
+                    styles.messageCard,
+                    isHighlighted && styles.messageCardHighlighted,
+                ]}
+            >
                 <View style={[styles.messageTitleRow, getRowDirectionStyle(isArabic)]}>
                     <View style={styles.messageIcon}>
                         {channel.type === 2 ? (
                             <Feather name="activity" size={17} color={colors.blue} />
                         ) : (
-                            <MaterialIcons
-                                name="campaign"
-                                size={18}
-                                color={colors.blue}
-                            />
+                            <MaterialIcons name="campaign" size={18} color={colors.blue} />
                         )}
                     </View>
 
@@ -803,7 +991,14 @@ function ChannelPostCard({
                 )}
 
                 {!!formattedDate && (
-                    <Text style={[styles.messageTime, getAutoTextDirectionStyle(formattedDate, isArabic)]}>{formattedDate}</Text>
+                    <Text
+                        style={[
+                            styles.messageTime,
+                            getAutoTextDirectionStyle(formattedDate, isArabic),
+                        ]}
+                    >
+                        {formattedDate}
+                    </Text>
                 )}
             </View>
         </View>
@@ -1030,6 +1225,19 @@ const createStyles = (colors, isSmallScreen, isDark) =>
             overflow: "hidden",
         },
 
+        messageCardHighlighted: {
+            borderWidth: 2,
+            borderColor: colors.primary,
+            shadowColor: colors.primary,
+            shadowOpacity: 0.24,
+            shadowRadius: 10,
+            shadowOffset: {
+                width: 0,
+                height: 4,
+            },
+            elevation: 5,
+        },
+
         messageIcon: {
             width: 22,
             height: 22,
@@ -1044,7 +1252,6 @@ const createStyles = (colors, isSmallScreen, isDark) =>
             marginBottom: 18,
         },
 
-
         messageChannelTitle: {
             flex: 1,
             color: colors.blue,
@@ -1058,7 +1265,6 @@ const createStyles = (colors, isSmallScreen, isDark) =>
             lineHeight: isSmallScreen ? 24 : 26,
             fontWeight: "700",
             marginBottom: 10,
-
         },
 
         messageText: {

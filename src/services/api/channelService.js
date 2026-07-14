@@ -1,73 +1,58 @@
-import apiClient from './apiClient';
+import apiClient from "./apiClient";
 
-/**
- * Channel Service
- * كل طلبات الـ Channels تكون هون فقط
- * حتى الشاشات تضل مرتبة وما نحط روابط API داخل الواجهة
- */
+const requireSlug = (slug) => {
+    const normalizedSlug = String(slug || "").trim();
+
+    if (!normalizedSlug) {
+        throw new Error("Channel slug is required");
+    }
+
+    return encodeURIComponent(normalizedSlug);
+};
+
 const channelService = {
-    /**
-     * جلب كل القنوات
-     * GET /api/v1/channels
-     */
-    async listChannels() {
-        const response = await apiClient.get('/api/v1/channels');
+    async listChannels({ isFollowed } = {}) {
+        const params = {};
 
-        return response?.data || [];
-    },
-
-    /**
-     * جلب منشورات قناة معيّنة
-     * GET /api/v1/channels/{slug}/posts?page=1&per_page=20
-     */
-    async listChannelPosts(slug, { page = 1, perPage = 20 } = {}) {
-        if (!slug) {
-            throw new Error('Channel slug is required');
+        if (typeof isFollowed === "boolean") {
+            params.is_followed = isFollowed ? 1 : 0;
         }
 
-        const response = await apiClient.get(
-            `/api/v1/channels/${slug}/posts`,
-            {
-                page,
-                per_page: perPage,
-            },
-        );
+        const response = await apiClient.get("/api/v1/channels", params);
 
-        /**
-         * حسب الـ API، response.data يكون غالباً:
-         * {
-         *   items: [...],
-         *   meta: {...}
-         * }
-         */
+        return Array.isArray(response?.data) ? response.data : [];
+    },
+
+    async showChannel(slug) {
+        const safeSlug = requireSlug(slug);
+        const response = await apiClient.get(`/api/v1/channels/${safeSlug}`);
+
+        return response?.data || null;
+    },
+
+    async listChannelPosts(slug, { page = 1, perPage = 20 } = {}) {
+        const safeSlug = requireSlug(slug);
+        const response = await apiClient.get(`/api/v1/channels/${safeSlug}/posts`, {
+            page,
+            per_page: perPage,
+        });
+
         return {
-            items: response?.data?.items || [],
+            items: Array.isArray(response?.data?.items) ? response.data.items : [],
             meta: response?.data?.meta || null,
         };
     },
 
-    /**
-     * متابعة قناة
-     * POST /api/v1/channels/{slug}/follow
-     */
     async followChannel(slug) {
-        if (!slug) {
-            throw new Error('Channel slug is required');
-        }
+        const safeSlug = requireSlug(slug);
 
-        return apiClient.post(`/api/v1/channels/${slug}/follow`);
+        return apiClient.post(`/api/v1/channels/${safeSlug}/follow`);
     },
 
-    /**
-     * إلغاء متابعة قناة
-     * DELETE /api/v1/channels/{slug}/follow
-     */
     async unfollowChannel(slug) {
-        if (!slug) {
-            throw new Error('Channel slug is required');
-        }
+        const safeSlug = requireSlug(slug);
 
-        return apiClient.delete(`/api/v1/channels/${slug}/follow`);
+        return apiClient.delete(`/api/v1/channels/${safeSlug}/follow`);
     },
 };
 

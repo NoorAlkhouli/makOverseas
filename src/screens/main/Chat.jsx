@@ -1,5 +1,6 @@
 import MainNavBar from "@/src/components/MainNavBar";
 import CreateGroupChatModal from "@/src/components/CreateGroupChatModal";
+import EmployeeDirectoryList from "@/src/components/chat/EmployeeDirectoryList";
 import { BOTTOM_TAB_BADGE_EVENTS } from "@/src/components/BottomTabBar";
 import { appImages } from "@/src/constants/images";
 import { useAppRealtime } from "@/src/context/AppRealtimeProvider";
@@ -38,7 +39,7 @@ const CHAT_LIST_PER_PAGE = 20;
 const CUSTOMER_SEARCH_DEBOUNCE_MS = 450;
 const CUSTOMER_PHONE_REGEX = /^[0-9+]+$/;
 
-const filters = [
+const BASE_FILTERS = [
     "all",
     "groups",
     "sales",
@@ -46,8 +47,27 @@ const filters = [
     "seaFreightSales",
     "landFreightSales",
     "accounting",
-    "employees",
 ];
+
+const CUSTOMER_ONLY_FILTERS = ["employees"];
+
+const getLabel = (labels, key, fallback = "") => {
+    const value = labels?.[key];
+
+    if (value === undefined || value === null || value === "") {
+        return fallback;
+    }
+
+    return String(value);
+};
+
+const formatLabel = (template, values = {}) => {
+    return String(template || "").replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+        const value = values?.[key];
+
+        return value === undefined || value === null ? "" : String(value);
+    });
+};
 
 const getNestedValue = (object, paths, fallback = "") => {
     for (const path of paths) {
@@ -458,36 +478,76 @@ const canUserCreateGroups = (response) => {
 };
 
 const getEmployeeItems = (response) => {
-    const data =
+    const payload =
         response?.data?.data ||
-        response?.data?.items ||
-        response?.data?.employees ||
         response?.data ||
         response?.items ||
         response?.employees ||
-        response;
-
-    if (!Array.isArray(data)) {
-        return [];
-    }
+        response ||
+        null;
 
     const flattenedEmployees = [];
+    const seenEmployeeKeys = new Set();
 
-    data.forEach((item) => {
-        const employeesList =
-            item?.employees ||
-            item?.users ||
-            item?.members ||
-            item?.items ||
-            item?.data ||
-            null;
+    const pushEmployee = (employee, extraData = {}) => {
+        if (!employee || typeof employee !== "object") {
+            return;
+        }
 
-        if (Array.isArray(employeesList)) {
-            employeesList.forEach((employee) => {
-                flattenedEmployees.push({
-                    ...employee,
+        const targetUserId = normalizeId(
+            employee?.user_id ||
+            employee?.userId ||
+            employee?.user?.id ||
+            employee?.profile?.user_id ||
+            employee?.profile?.id ||
+            employee?.id
+        );
+
+        const uniqueKey = String(
+            targetUserId ||
+            employee?.uuid ||
+            employee?.id ||
+            employee?.email ||
+            `${Date.now()}-${flattenedEmployees.length}`
+        );
+
+        if (seenEmployeeKeys.has(uniqueKey)) {
+            return;
+        }
+
+        seenEmployeeKeys.add(uniqueKey);
+
+        flattenedEmployees.push({
+            ...employee,
+            ...extraData,
+            department:
+                employee?.department ||
+                extraData?.department ||
+                null,
+        });
+    };
+
+    const pushEmployeesFromList = (list, extraData = {}) => {
+        if (!Array.isArray(list)) {
+            return;
+        }
+
+        list.forEach((employee) => pushEmployee(employee, extraData));
+    };
+
+    if (Array.isArray(payload)) {
+        payload.forEach((item) => {
+            const nestedEmployees =
+                item?.employees ||
+                item?.users ||
+                item?.members ||
+                item?.items ||
+                item?.data ||
+                null;
+
+            if (Array.isArray(nestedEmployees)) {
+                pushEmployeesFromList(nestedEmployees, {
                     department:
-                        employee?.department ||
                         item?.department ||
                         {
                             id: item?.id,
@@ -495,11 +555,48 @@ const getEmployeeItems = (response) => {
                             description: item?.description,
                         },
                 });
-            });
-        } else {
-            flattenedEmployees.push(item);
-        }
+                return;
+            }
+
+            pushEmployee(item);
+        });
+
+        return flattenedEmployees;
+    }
+
+    if (!payload || typeof payload !== "object") {
+        return [];
+    }
+
+    pushEmployeesFromList(payload?.admins, {
+        department: {
+            id: "admins",
+            name: "Admin",
+            title: "Admin",
+        },
+        is_admin_directory_item: true,
     });
+
+    pushEmployeesFromList(payload?.employees || payload?.users || payload?.members || payload?.items);
+
+    if (Array.isArray(payload?.departments)) {
+        payload.departments.forEach((department) => {
+            pushEmployeesFromList(
+                department?.employees ||
+                department?.users ||
+                department?.members ||
+                department?.items,
+                {
+                    department: {
+                        id: department?.id,
+                        name: department?.name || department?.title,
+                        title: department?.title || department?.name,
+                        description: department?.description,
+                    },
+                }
+            );
+        });
+    }
 
     return flattenedEmployees;
 };
@@ -522,7 +619,36 @@ const getEmployeeDepartmentText = (employee) => {
     return getSafeText(department);
 };
 
-const normalizeEmployee = (employee, isArabic) => {
+const getEmployeeConversationPayload = (employee) => {
+    return (
+        employee?.conversation ||
+        employee?.chat ||
+        employee?.direct_conversation ||
+        employee?.directConversation ||
+        employee?.conversation_data ||
+        employee?.conversationData ||
+        employee?.user?.conversation ||
+        employee?.profile?.conversation ||
+        null
+    );
+};
+
+const getEmployeeConversationId = (employee) => {
+    const conversation = getEmployeeConversationPayload(employee);
+
+    return normalizeId(
+        conversation?.id ||
+        conversation?.conversation_id ||
+        conversation?.conversationId ||
+        employee?.conversation_id ||
+        employee?.conversationId ||
+        employee?.chat_id ||
+        employee?.chatId ||
+        null
+    );
+};
+
+const normalizeEmployee = (employee, isArabic, labels = {}) => {
     const targetUserId = normalizeId(
         employee?.user_id ||
         employee?.userId ||
@@ -544,9 +670,9 @@ const normalizeEmployee = (employee, isArabic) => {
                 "profile.full_name",
                 "profile.name",
             ],
-            isArabic ? "موظف" : "Employee"
+            getLabel(labels, "employeeFallback", isArabic ? "موظف" : "Employee")
         ),
-        isArabic ? "موظف" : "Employee"
+        getLabel(labels, "employeeFallback", isArabic ? "موظف" : "Employee")
     );
 
     const department = getEmployeeDepartmentText(employee);
@@ -598,15 +724,17 @@ const normalizeEmployee = (employee, isArabic) => {
     ]);
 
     const lastSeenAt = getEmployeeLastSeenValue(employee);
+    const employeeConversation = getEmployeeConversationPayload(employee);
+    const employeeConversationId = getEmployeeConversationId(employee);
 
     return {
         id: `employee-${String(targetUserId || employee?.id || employee?.uuid || Date.now())}`,
-        conversationId: null,
+        conversationId: employeeConversationId,
         targetUserId,
         name,
         department,
         avatar,
-        message: isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation",
+        message: getLabel(labels, "tapToStartConversation", isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation"),
         time: "",
         unread: 0,
         status: isOnline ? "online" : "offline",
@@ -614,10 +742,10 @@ const normalizeEmployee = (employee, isArabic) => {
         lastSeenAt,
         isGroup: false,
         isEmployee: true,
-        raw: employee,
+        raw: employeeConversation || employee,
+        employeeRaw: employee,
     };
 };
-
 
 const getConversationChatByTargetUserId = (conversationChats = []) => {
     const conversationsByTargetUserId = new Map();
@@ -658,7 +786,7 @@ const mergeEmployeeWithConversationChat = (employeeChat, conversationChat = null
         isEmployeeConversation: true,
         matchedConversation: conversationChat,
         raw: conversationChat.raw || employeeChat.raw,
-        employeeRaw: employeeChat.raw,
+        employeeRaw: employeeChat.employeeRaw || employeeChat.raw,
     };
 };
 
@@ -666,14 +794,15 @@ const buildEmployeeDirectoryChats = ({
     employeesResponse,
     conversationsResponse,
     isArabic,
+    labels = {},
 }) => {
     const conversationChats = getConversationItems(conversationsResponse).map((conversation) =>
-        normalizeConversation(conversation, isArabic)
+        normalizeConversation(conversation, isArabic, labels)
     );
     const conversationsByTargetUserId = getConversationChatByTargetUserId(conversationChats);
 
     return getEmployeeItems(employeesResponse).map((employee) => {
-        const employeeChat = normalizeEmployee(employee, isArabic);
+        const employeeChat = normalizeEmployee(employee, isArabic, labels);
         const targetUserId = normalizeId(employeeChat.targetUserId);
         const matchedConversation = targetUserId
             ? conversationsByTargetUserId.get(targetUserId)
@@ -683,7 +812,7 @@ const buildEmployeeDirectoryChats = ({
     });
 };
 
-const normalizeCustomer = (customer, isArabic) => {
+const normalizeCustomer = (customer, isArabic, labels = {}) => {
     const targetUserId = normalizeId(
         customer?.id ||
         customer?.user_id ||
@@ -704,9 +833,9 @@ const normalizeCustomer = (customer, isArabic) => {
                 "profile.full_name",
                 "profile.name",
             ],
-            isArabic ? "عميل" : "Customer"
+            getLabel(labels, "customerFallback", isArabic ? "عميل" : "Customer")
         ),
-        isArabic ? "عميل" : "Customer"
+        getLabel(labels, "customerFallback", isArabic ? "عميل" : "Customer")
     );
 
     const phone = getSafeText(
@@ -747,9 +876,9 @@ const normalizeCustomer = (customer, isArabic) => {
         conversationId: null,
         targetUserId,
         name,
-        department: isArabic ? "عميل" : "Customer",
+        department: getLabel(labels, "customerFallback", isArabic ? "عميل" : "Customer"),
         avatar,
-        message: phone || (isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation"),
+        message: phone || getLabel(labels, "tapToStartConversation", isArabic ? "اضغط لبدء محادثة" : "Tap to start a conversation"),
         time: "",
         unread: 0,
         status: "offline",
@@ -897,17 +1026,18 @@ const getNewestConversationTimeValue = (firstValue, secondValue) => {
     return secondValue;
 };
 
-const formatLastSeenText = (value, isArabic) => {
+const formatLastSeenText = (value, isArabic, labels = {}) => {
     if (!value) {
-        return isArabic ? "غير متصل" : "Offline";
+        return getLabel(labels, "offline", isArabic ? "غير متصل" : "Offline");
     }
 
     const date = new Date(normalizeDateInput(value));
 
     if (Number.isNaN(date.getTime())) {
-        return isArabic
-            ? `آخر ظهور ${String(value)}`
-            : `Last seen ${String(value)}`;
+        return formatLabel(
+            getLabel(labels, "lastSeenValue", isArabic ? "آخر ظهور {{value}}" : "Last seen {{value}}"),
+            { value: String(value) }
+        );
     }
 
     const now = new Date();
@@ -915,29 +1045,32 @@ const formatLastSeenText = (value, isArabic) => {
     const diffMinutes = Math.floor(diffMs / 60000);
 
     if (diffMinutes < 1) {
-        return isArabic ? "آخر ظهور الآن" : "Last seen now";
+        return getLabel(labels, "lastSeenNow", isArabic ? "آخر ظهور الآن" : "Last seen now");
     }
 
     if (diffMinutes < 60) {
-        return isArabic
-            ? `آخر ظهور منذ ${diffMinutes} دقيقة`
-            : `Last seen ${diffMinutes} min ago`;
+        return formatLabel(
+            getLabel(labels, "lastSeenMinutes", isArabic ? "آخر ظهور منذ {{count}} دقيقة" : "Last seen {{count}} min ago"),
+            { count: diffMinutes }
+        );
     }
 
     const diffHours = Math.floor(diffMinutes / 60);
 
     if (diffHours < 24) {
-        return isArabic
-            ? `آخر ظهور منذ ${diffHours} ساعة`
-            : `Last seen ${diffHours}h ago`;
+        return formatLabel(
+            getLabel(labels, "lastSeenHours", isArabic ? "آخر ظهور منذ {{count}} ساعة" : "Last seen {{count}}h ago"),
+            { count: diffHours }
+        );
     }
 
-    return isArabic
-        ? `آخر ظهور ${date.toLocaleDateString("ar")}`
-        : `Last seen ${date.toLocaleDateString("en")}`;
+    return formatLabel(
+        getLabel(labels, "lastSeenDate", isArabic ? "آخر ظهور {{date}}" : "Last seen {{date}}"),
+        { date: date.toLocaleDateString(isArabic ? "ar" : "en") }
+    );
 };
 
-const formatConversationTime = (value, isArabic) => {
+const formatConversationTime = (value, isArabic, labels = {}) => {
     if (!value) return "";
 
     const date = new Date(normalizeDateInput(value));
@@ -968,7 +1101,7 @@ const formatConversationTime = (value, isArabic) => {
         date.getDate() === yesterday.getDate();
 
     if (isYesterday) {
-        return isArabic ? "أمس" : "Yesterday";
+        return getLabel(labels, "yesterday", isArabic ? "أمس" : "Yesterday");
     }
 
     return date.toLocaleDateString(isArabic ? "ar" : "en", {
@@ -1100,7 +1233,7 @@ const getConversationMessageType = (message, attachment) => {
     return "text";
 };
 
-const getConversationMessagePreview = (conversation, isArabic) => {
+const getConversationMessagePreview = (conversation, isArabic, labels = {}) => {
     const directPreview = getNestedValue(conversation, [
         "latest_message_preview",
         "latest_message.body",
@@ -1141,29 +1274,29 @@ const getConversationMessagePreview = (conversation, isArabic) => {
     const messageType = getConversationMessageType(latestMessage, attachment);
 
     if (messageType === "image") {
-        return isArabic ? "صورة" : "Image";
+        return getLabel(labels, "imageMessage", isArabic ? "صورة" : "Image");
     }
 
     if (messageType === "video") {
-        return isArabic ? "فيديو" : "Video";
+        return getLabel(labels, "videoMessage", isArabic ? "فيديو" : "Video");
     }
 
     if (messageType === "audio") {
-        return isArabic ? "رسالة صوتية" : "Voice message";
+        return getLabel(labels, "voiceMessage", isArabic ? "رسالة صوتية" : "Voice message");
     }
 
     if (messageType === "document") {
-        return isArabic ? "ملف مرفق" : "Attachment";
+        return getLabel(labels, "attachmentMessage", isArabic ? "ملف مرفق" : "Attachment");
     }
 
     if (messageType === "quote") {
-        return isArabic ? "عرض سعر" : "Quote";
+        return getLabel(labels, "quoteMessage", isArabic ? "عرض سعر" : "Quote");
     }
 
     return "";
 };
 
-const normalizeConversation = (conversation, isArabic) => {
+const normalizeConversation = (conversation, isArabic, labels = {}) => {
     const id = getNestedValue(conversation, ["id", "conversation_id"]);
 
     const name = getNestedValue(
@@ -1178,10 +1311,10 @@ const normalizeConversation = (conversation, isArabic) => {
             "other_participant.name",
             "user.name",
         ],
-        isArabic ? "محادثة" : "Conversation"
+        getLabel(labels, "conversationFallback", isArabic ? "محادثة" : "Conversation")
     );
 
-    const message = getConversationMessagePreview(conversation, isArabic);
+    const message = getConversationMessagePreview(conversation, isArabic, labels);
     const time = getConversationRawTimeValue(conversation);
 
     const unread = Number(
@@ -1358,11 +1491,11 @@ const normalizeConversation = (conversation, isArabic) => {
         id: String(id || conversation?.uuid || conversation?.key || Date.now()),
         conversationId: id,
         targetUserId,
-        name: String(name || (isArabic ? "محادثة" : "Conversation")),
+        name: String(name || getLabel(labels, "conversationFallback", isArabic ? "محادثة" : "Conversation")),
         department: getDepartmentText(conversation),
         avatar,
         message: String(message || ""),
-        time: formatConversationTime(time, isArabic),
+        time: formatConversationTime(time, isArabic, labels),
         unread: Number.isFinite(unread) ? unread : 0,
         status: isBlocked ? "blocked" : isOnline ? "online" : "offline",
         isOnline: isBlocked ? false : isOnline,
@@ -1439,6 +1572,106 @@ const getRealtimeConversationId = (payload, conversationPayload) => {
     );
 };
 
+const getRealtimeEventName = (payload) => {
+    return String(
+        payload?.event ||
+        payload?.event_name ||
+        payload?.eventName ||
+        payload?.name ||
+        payload?.type ||
+        payload?.action ||
+        payload?.data?.event ||
+        payload?.data?.event_name ||
+        payload?.data?.eventName ||
+        payload?.data?.name ||
+        payload?.data?.type ||
+        payload?.data?.action ||
+        ""
+    )
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_]+/g, ".");
+};
+
+const getRealtimeAffectedUserId = (payload) => {
+    return normalizeId(
+        getNestedValue(payload, [
+            "user_id",
+            "userId",
+            "participant_user_id",
+            "participantUserId",
+            "removed_user_id",
+            "removedUserId",
+            "left_user_id",
+            "leftUserId",
+            "participant.user_id",
+            "participant.userId",
+            "participant.user.id",
+            "user.id",
+            "data.user_id",
+            "data.userId",
+            "data.participant_user_id",
+            "data.participantUserId",
+            "data.removed_user_id",
+            "data.removedUserId",
+            "data.left_user_id",
+            "data.leftUserId",
+            "data.participant.user_id",
+            "data.participant.userId",
+            "data.participant.user.id",
+            "data.user.id",
+        ], null)
+    );
+};
+
+const isRealtimeConversationRemovedEvent = (payload, conversationPayload, currentUserId) => {
+    const eventName = getRealtimeEventName(payload);
+    const normalizedCurrentUserId = normalizeId(currentUserId);
+    const affectedUserId = getRealtimeAffectedUserId(payload);
+
+    const isConversationDeleted =
+        eventName.includes("groupdeleted") ||
+        eventName.includes("group.deleted") ||
+        eventName.includes("conversationremoved") ||
+        eventName.includes("conversation.removed") ||
+        eventName.includes("conversationdeleted") ||
+        eventName.includes("conversation.deleted") ||
+        conversationPayload?.deleted_at ||
+        conversationPayload?.deletedAt ||
+        conversationPayload?.is_deleted === true ||
+        conversationPayload?.isDeleted === true ||
+        payload?.deleted_at ||
+        payload?.deletedAt ||
+        payload?.is_deleted === true ||
+        payload?.isDeleted === true ||
+        payload?.data?.deleted_at ||
+        payload?.data?.deletedAt ||
+        payload?.data?.is_deleted === true ||
+        payload?.data?.isDeleted === true;
+
+    if (isConversationDeleted) {
+        return true;
+    }
+
+    const isParticipantRemovedOrLeft =
+        eventName.includes("groupparticipantremoved") ||
+        eventName.includes("group.participant.removed") ||
+        eventName.includes("groupparticipantleft") ||
+        eventName.includes("group.participant.left") ||
+        eventName.includes("participantremoved") ||
+        eventName.includes("participant.removed") ||
+        eventName.includes("participantleft") ||
+        eventName.includes("participant.left");
+
+    return !!(
+        isParticipantRemovedOrLeft &&
+        normalizedCurrentUserId &&
+        affectedUserId &&
+        String(affectedUserId) === String(normalizedCurrentUserId)
+    );
+};
+
+
 const getRealtimeSenderId = (payload, conversationPayload) => {
     const message = getRealtimeMessagePayload(payload, conversationPayload);
 
@@ -1492,7 +1725,7 @@ const getRealtimeUnreadValue = (payload, conversationPayload) => {
     return Number.isFinite(numericValue) ? numericValue : null;
 };
 
-const mergeChatKeepingNewestTime = (existingChat, nextChat, isArabic) => {
+const mergeChatKeepingNewestTime = (existingChat, nextChat, isArabic, labels = {}) => {
     if (!existingChat) {
         return nextChat;
     }
@@ -1526,14 +1759,12 @@ const mergeChatKeepingNewestTime = (existingChat, nextChat, isArabic) => {
         message: shouldKeepExistingLatestData
             ? existingChat.message
             : nextChat.message,
-        time: formatConversationTime(newestTimeValue, isArabic),
+        time: formatConversationTime(newestTimeValue, isArabic, labels),
         raw: mergedRaw,
     };
 };
 
-
-
-const mergePreparedChatsWithCurrent = (currentChats, preparedChats, isArabic) => {
+const mergePreparedChatsWithCurrent = (currentChats, preparedChats, isArabic, labels = {}) => {
     return preparedChats.map((preparedChat) => {
         const existingChat = currentChats.find((chat) => {
             return (
@@ -1542,7 +1773,7 @@ const mergePreparedChatsWithCurrent = (currentChats, preparedChats, isArabic) =>
             );
         });
 
-        return mergeChatKeepingNewestTime(existingChat, preparedChat, isArabic);
+        return mergeChatKeepingNewestTime(existingChat, preparedChat, isArabic, labels);
     });
 };
 
@@ -1550,6 +1781,34 @@ export default function Chat({ navigation }) {
     const { height: screenHeight } = useWindowDimensions();
     const { t, i18n } = useTranslation();
     const isArabic = i18n.language === "ar";
+
+    const chatLabels = useMemo(() => ({
+        employeeFallback: t("chat.employeeFallback", { defaultValue: "Employee" }),
+        customerFallback: t("chat.customerFallback", { defaultValue: "Customer" }),
+        conversationFallback: t("chat.conversationFallback", { defaultValue: "Conversation" }),
+        groupFallback: t("chat.groupFallback", { defaultValue: "Group" }),
+        tapToStartConversation: t("chat.tapToStartConversation", { defaultValue: "Tap to start a conversation" }),
+        offline: t("chat.offline", { defaultValue: "Offline" }),
+        blocked: t("chat.blocked", { defaultValue: "Blocked" }),
+        onlineNow: t("chat.onlineNow", { defaultValue: "Online" }),
+        lastSeenValue: t("chat.lastSeenValue", { defaultValue: "Last seen {{value}}" }),
+        lastSeenNow: t("chat.lastSeenNow", { defaultValue: "Last seen now" }),
+        lastSeenMinutes: t("chat.lastSeenMinutes", { defaultValue: "Last seen {{count}} min ago" }),
+        lastSeenHours: t("chat.lastSeenHours", { defaultValue: "Last seen {{count}}h ago" }),
+        lastSeenDate: t("chat.lastSeenDate", { defaultValue: "Last seen {{date}}" }),
+        yesterday: t("chat.yesterday", { defaultValue: "Yesterday" }),
+        imageMessage: t("chat.imageMessage", { defaultValue: "Image" }),
+        videoMessage: t("chat.videoMessage", { defaultValue: "Video" }),
+        voiceMessage: t("chat.voiceMessage", { defaultValue: "Voice message" }),
+        attachmentMessage: t("chat.attachmentMessage", { defaultValue: "Attachment" }),
+        quoteMessage: t("chat.quoteMessage", { defaultValue: "Quote" }),
+        searchCustomerMinDigits: t("chat.searchCustomerMinDigits", { defaultValue: "Enter at least 3 digits to search for a customer." }),
+        searchingCustomers: t("chat.searchingCustomers", { defaultValue: "Searching customers" }),
+        customerSearchError: t("chat.customerSearchError", { defaultValue: "Something went wrong while searching customers." }),
+        noCustomersFound: t("chat.noCustomersFound", { defaultValue: "No customers found for this phone." }),
+        searchCustomerPlaceholder: t("chat.searchCustomerPlaceholder", { defaultValue: "Search customers by phone..." }),
+        employeesFilter: t("chat.filters.employees", { defaultValue: "Employees" }),
+    }), [t]);
 
     const {
         currentUserId,
@@ -1583,6 +1842,7 @@ export default function Chat({ navigation }) {
     const [errorMessage, setErrorMessage] = useState("");
     const [canSearchCustomers, setCanSearchCustomers] = useState(false);
     const [canCreateGroups, setCanCreateGroups] = useState(false);
+    const [currentUserRole, setCurrentUserRole] = useState(null);
     const [customerSearchResults, setCustomerSearchResults] = useState([]);
     const [isSearchingCustomers, setIsSearchingCustomers] = useState(false);
     const [customerSearchError, setCustomerSearchError] = useState("");
@@ -1625,6 +1885,25 @@ export default function Chat({ navigation }) {
         return Math.min(currentKeyboardHeight + bottomSafeSpace, maxPadding);
     }, [isSearchFocused, keyboardHeight, screenHeight]);
 
+    const visibleFilters = useMemo(() => {
+        const role = Number(currentUserRole);
+
+        if (role === 1) {
+            return [...BASE_FILTERS, ...CUSTOMER_ONLY_FILTERS];
+        }
+
+        return BASE_FILTERS;
+    }, [currentUserRole]);
+
+    useEffect(() => {
+        if (
+            activeFilter === "employees" &&
+            Number(currentUserRole) !== 1
+        ) {
+            setActiveFilter("all");
+        }
+    }, [activeFilter, currentUserRole]);
+
     const unreadTotal = useMemo(() => {
         return chats.reduce((total, chat) => total + Number(chat.unread || 0), 0);
     }, [chats]);
@@ -1640,14 +1919,18 @@ export default function Chat({ navigation }) {
                     return;
                 }
 
-                setCanSearchCustomers(canUserSearchCustomers(response));
-                setCanCreateGroups(canUserCreateGroups(response));
+                const role = getUserRoleFromProfile(response);
+
+                setCurrentUserRole(role);
+                setCanSearchCustomers(role === 2 || role === 3);
+                setCanCreateGroups(role === 2 || role === 3);
             } catch (error) {
                 console.log("Load profile permissions error:", error?.raw || error);
 
                 if (isMounted) {
                     setCanSearchCustomers(false);
                     setCanCreateGroups(false);
+                    setCurrentUserRole(null);
                 }
             }
         };
@@ -1696,7 +1979,7 @@ export default function Chat({ navigation }) {
                     }
 
                     const preparedCustomers = getCustomerItems(response).map((customer) =>
-                        normalizeCustomer(customer, isArabic)
+                        normalizeCustomer(customer, isArabic, chatLabels)
                     );
 
                     setCustomerSearchResults(preparedCustomers);
@@ -1706,10 +1989,7 @@ export default function Chat({ navigation }) {
                     if (!isCancelled) {
                         setCustomerSearchResults([]);
                         setCustomerSearchError(
-                            error?.userMessage ||
-                            (isArabic
-                                ? "صار خطأ أثناء البحث عن العملاء."
-                                : "Something went wrong while searching customers.")
+                            error?.userMessage || chatLabels.customerSearchError
                         );
                     }
                 } finally {
@@ -1729,7 +2009,7 @@ export default function Chat({ navigation }) {
                 clearTimeout(timeoutId);
             }
         };
-    }, [canSearchCustomers, cleanSearch, isArabic, isValidCustomerPhoneSearch]);
+    }, [canSearchCustomers, chatLabels, cleanSearch, isArabic, isValidCustomerPhoneSearch]);
 
     const fetchConversations = useCallback(
         async ({
@@ -1768,6 +2048,7 @@ export default function Chat({ navigation }) {
                         employeesResponse,
                         conversationsResponse,
                         isArabic,
+                        labels: chatLabels,
                     });
 
                     setPaginationMeta(null);
@@ -1778,7 +2059,7 @@ export default function Chat({ navigation }) {
                     });
 
                     preparedChats = getConversationItems(response).map((conversation) =>
-                        normalizeConversation(conversation, isArabic)
+                        normalizeConversation(conversation, isArabic, chatLabels)
                     );
                     setPaginationMeta(getPaginationMeta(response));
                 }
@@ -1799,7 +2080,7 @@ export default function Chat({ navigation }) {
 
                 setChats((currentChats) => {
                     if (page === 1) {
-                        return mergePreparedChatsWithCurrent(currentChats, preparedChats, isArabic);
+                        return mergePreparedChatsWithCurrent(currentChats, preparedChats, isArabic, chatLabels);
                     }
 
                     const existingIds = new Set(currentChats.map((chat) => String(chat.id)));
@@ -1814,9 +2095,9 @@ export default function Chat({ navigation }) {
                 console.log("List conversations error:", error?.raw || error);
                 setErrorMessage(
                     error?.userMessage ||
-                    (isArabic
-                        ? "صار خطأ أثناء تحميل المحادثات. حاولي مرة ثانية."
-                        : "Something went wrong while loading conversations.")
+                    t("chat.loadConversationsError", {
+                        defaultValue: "Something went wrong while loading conversations.",
+                    })
                 );
             } finally {
                 setIsLoading(false);
@@ -1824,8 +2105,38 @@ export default function Chat({ navigation }) {
                 setIsLoadingMore(false);
             }
         },
-        [activeFilter, isArabic]
+        [activeFilter, chatLabels, isArabic, t]
     );
+
+    const removeConversationFromLocalState = useCallback((conversationIdValue) => {
+        const normalizedConversationId = normalizeId(conversationIdValue);
+
+        if (!normalizedConversationId) {
+            fetchConversations({ page: 1 }).catch((error) => {
+                console.log("Realtime remove fallback fetch error:", error?.raw || error);
+            });
+            return;
+        }
+
+        setChats((currentChats) =>
+            currentChats.filter((chat) => {
+                const chatConversationId = normalizeId(chat?.conversationId || chat?.id);
+
+                return !(
+                    chatConversationId &&
+                    String(chatConversationId) === String(normalizedConversationId)
+                );
+            })
+        );
+
+        setSelectedConversationIds((currentIds) =>
+            currentIds.filter((id) => String(id) !== String(normalizedConversationId))
+        );
+
+        DeviceEventEmitter.emit(BOTTOM_TAB_BADGE_EVENTS.CLEAR_CHAT_CONVERSATION, {
+            conversationId: normalizedConversationId,
+        });
+    }, [fetchConversations]);
 
     const applyRealtimeConversationUpdate = useCallback((payload) => {
         console.log(
@@ -1836,6 +2147,21 @@ export default function Chat({ navigation }) {
         const conversationPayload = getRealtimeConversationPayload(payload);
         const conversationId = getRealtimeConversationId(payload, conversationPayload);
         const messagePayload = getRealtimeMessagePayload(payload, conversationPayload);
+        const shouldRemoveConversation = isRealtimeConversationRemovedEvent(
+            payload,
+            conversationPayload,
+            currentUserId
+        );
+
+        if (shouldRemoveConversation) {
+            console.log("[Chat Realtime] Removing conversation from list:", {
+                conversationId,
+                eventName: getRealtimeEventName(payload),
+            });
+
+            removeConversationFromLocalState(conversationId);
+            return;
+        }
 
         console.log(
             "[Chat Realtime] Conversation payload:",
@@ -1864,7 +2190,8 @@ export default function Chat({ navigation }) {
             return;
         }
 
-        const normalizedConversation = normalizeConversation(conversationPayload, isArabic);
+        const normalizedConversation = normalizeConversation(conversationPayload, isArabic, chatLabels);
+        const realtimeTargetUserId = normalizeId(normalizedConversation.targetUserId);
         const senderId = getRealtimeSenderId(payload, conversationPayload);
         const unreadFromPayload = getRealtimeUnreadValue(payload, conversationPayload);
         const hasUnreadFromPayload = unreadFromPayload !== null;
@@ -1875,10 +2202,16 @@ export default function Chat({ navigation }) {
 
         setChats((currentChats) => {
             const existingIndex = currentChats.findIndex((chat) => {
-                return (
+                const sameConversation =
                     String(chat.conversationId || "") === String(conversationId) ||
-                    String(chat.id || "") === String(conversationId)
-                );
+                    String(chat.id || "") === String(conversationId);
+
+                const sameTargetUser =
+                    realtimeTargetUserId &&
+                    chat.targetUserId &&
+                    String(chat.targetUserId) === String(realtimeTargetUserId);
+
+                return sameConversation || sameTargetUser;
             });
 
             const existingChat = existingIndex >= 0 ? currentChats[existingIndex] : null;
@@ -1951,7 +2284,7 @@ export default function Chat({ navigation }) {
             const nextChat = {
                 ...(existingChat || {}),
                 ...normalizedConversation,
-                id: String(normalizedConversation.id || conversationId),
+                id: String(existingChat?.id || normalizedConversation.id || conversationId),
                 conversationId: normalizedConversation.conversationId || conversationId,
 
                 name: shouldKeepExistingName
@@ -1971,7 +2304,7 @@ export default function Chat({ navigation }) {
                     : normalizedConversation.avatar,
 
                 unread: Number.isFinite(nextUnread) ? nextUnread : previousUnread,
-                time: formatConversationTime(newestTimeValue, isArabic),
+                time: formatConversationTime(newestTimeValue, isArabic, chatLabels),
 
                 raw: nextRaw,
             };
@@ -1983,7 +2316,7 @@ export default function Chat({ navigation }) {
 
             return [nextChat, ...remainingChats];
         });
-    }, [currentUserId, fetchConversations, isArabic]);
+    }, [chatLabels, currentUserId, fetchConversations, isArabic, removeConversationFromLocalState]);
 
     useEffect(() => {
         if (!latestConversationEvent) {
@@ -2335,6 +2668,9 @@ export default function Chat({ navigation }) {
             selectedChat.raw?.employee?.user?.avatar ||
             selectedChat.raw?.customer?.avatar ||
             selectedChat.raw?.customer?.user?.avatar ||
+            selectedChat.employeeRaw?.avatar ||
+            selectedChat.employeeRaw?.user?.avatar ||
+            selectedChat.employeeRaw?.profile?.avatar ||
             null;
 
         console.log("[CHAT ONLINE DEBUG] Open chat press:", {
@@ -2460,8 +2796,8 @@ export default function Chat({ navigation }) {
                     createdConversation?.display_name ||
                     createdConversation?.title ||
                     createdConversation?.name ||
-                    (isArabic ? "مجموعة" : "Group"),
-                department: isArabic ? "مجموعة" : "Group",
+                    chatLabels.groupFallback,
+                department: chatLabels.groupFallback,
                 conversation_id: createdConversationId,
                 is_group: true,
                 isGroup: true,
@@ -2473,8 +2809,8 @@ export default function Chat({ navigation }) {
         {
             key: "selectChats",
             label: selectMode
-                ? t("chat.menuCancelSelect")
-                : t("chat.menuSelectChats"),
+                ? t("chat.menuCancelSelect", { defaultValue: "Cancel Selection" })
+                : t("chat.menuSelectChats", { defaultValue: "Select Chats" }),
             iconType: "feather",
             iconName: selectMode ? "x-square" : "check-square",
             onPress: handleSelectChats,
@@ -2483,8 +2819,8 @@ export default function Chat({ navigation }) {
             key: "readAll",
             label:
                 selectMode && selectedConversationIds.length > 0
-                    ? `${t("chat.menuReadAll")} (${selectedConversationIds.length})`
-                    : t("chat.menuReadAll"),
+                    ? `${t("chat.menuReadAll", { defaultValue: "Read All" })} (${selectedConversationIds.length})`
+                    : t("chat.menuReadAll", { defaultValue: "Read All" }),
             iconType: "feather",
             iconName: "check-circle",
             onPress: handleReadAll,
@@ -2497,9 +2833,7 @@ export default function Chat({ navigation }) {
                 <View style={styles.loadingBox}>
                     <Feather name="search" size={30} color={colors.textMuted} />
                     <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
-                        {isArabic
-                            ? "اكتبي 3 أرقام على الأقل للبحث عن عميل."
-                            : "Enter at least 3 digits to search for a customer."}
+                        {chatLabels.searchCustomerMinDigits}
                     </Text>
                 </View>
             );
@@ -2510,7 +2844,7 @@ export default function Chat({ navigation }) {
                 <View style={styles.loadingBox}>
                     <ActivityIndicator size="large" color={colors.primary} />
                     <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
-                        {isArabic ? "جاري البحث عن العملاء..." : "Searching customers..."}
+                        {chatLabels.searchingCustomers}
                     </Text>
                 </View>
             );
@@ -2529,7 +2863,7 @@ export default function Chat({ navigation }) {
                         onPress={handleRetryCustomerSearch}
                     >
                         <Text style={styles.retryButtonText}>
-                            {isArabic ? "إعادة المحاولة" : "Try again"}
+                            {t("chat.tryAgain", { defaultValue: "Try again" })}
                         </Text>
                     </TouchableOpacity>
                 </View>
@@ -2541,7 +2875,7 @@ export default function Chat({ navigation }) {
                 <View style={styles.loadingBox}>
                     <ActivityIndicator size="large" color={colors.primary} />
                     <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
-                        {isArabic ? "جاري تحميل المحادثات..." : "Loading conversations..."}
+                        {t("chat.loadingConversations", { defaultValue: "Loading conversations..." })}
                     </Text>
                 </View>
             );
@@ -2560,7 +2894,7 @@ export default function Chat({ navigation }) {
                         onPress={() => fetchConversations({ fullLoading: true })}
                     >
                         <Text style={styles.retryButtonText}>
-                            {isArabic ? "إعادة المحاولة" : "Try again"}
+                            {t("chat.tryAgain", { defaultValue: "Try again" })}
                         </Text>
                     </TouchableOpacity>
                 </View>
@@ -2573,14 +2907,33 @@ export default function Chat({ navigation }) {
                     <Feather name="message-circle" size={30} color={colors.textMuted} />
                     <Text style={[styles.stateText, getTextDirectionStyle(isArabic)]}>
                         {isCustomerSearchMode
-                            ? isArabic
-                                ? "لا يوجد عملاء بهذا الرقم."
-                                : "No customers found for this phone."
-                            : isArabic
-                                ? "لا توجد محادثات حالياً."
-                                : "No conversations yet."}
+                            ? chatLabels.noCustomersFound
+                            : t("chat.noConversations", { defaultValue: "No conversations yet." })}
                     </Text>
                 </View>
+            );
+        }
+
+        if (!isCustomerSearchMode && activeFilter === "employees") {
+            return (
+                <EmployeeDirectoryList
+                    chats={visibleChats}
+                    styles={styles}
+                    colors={colors}
+                    isArabic={isArabic}
+                    chatLabels={chatLabels}
+                    selectedConversationIds={selectedConversationIds}
+                    selectMode={selectMode}
+                    onlineUserIds={onlineUserIds}
+                    isUserOnline={isUserOnline}
+                    normalizeId={normalizeId}
+                    formatLastSeenText={formatLastSeenText}
+                    getRowDirectionStyle={getRowDirectionStyle}
+                    getTextDirectionStyle={getTextDirectionStyle}
+                    getAutoTextDirectionStyle={getAutoTextDirectionStyle}
+                    onPressEmployee={handleChatPress}
+                    t={t}
+                />
             );
         }
 
@@ -2607,10 +2960,10 @@ export default function Chat({ navigation }) {
                         (!normalizedTargetUserId && chat.isOnline === true)
                     );
                     const statusText = chatIsBlocked
-                        ? (isArabic ? "محظور" : "Blocked")
+                        ? chatLabels.blocked
                         : chatIsOnline
-                            ? (isArabic ? "متصل الآن" : "Online")
-                            : formatLastSeenText(chat.lastSeenAt, isArabic);
+                            ? chatLabels.onlineNow
+                            : formatLastSeenText(chat.lastSeenAt, isArabic, chatLabels);
                     const statusColor = chatIsBlocked
                         ? colors.danger
                         : chatIsOnline
@@ -2672,8 +3025,8 @@ export default function Chat({ navigation }) {
                                         />
                                     ) : (
                                         <Feather
-                                            name="user"
-                                            size={28}
+                                            name={chat.isGroup ? "users" : "user"}
+                                            size={chat.isGroup ? 27 : 28}
                                             color={colors.textPrimary}
                                         />
                                     )}
@@ -2741,7 +3094,7 @@ export default function Chat({ navigation }) {
                                     ]}
                                     numberOfLines={2}
                                 >
-                                    {chat.message || (isArabic ? "لا توجد رسائل بعد" : "No messages yet")}
+                                    {chat.message || t("chat.noMessagesYet", { defaultValue: "No messages yet" })}
                                 </Text>
                             </View>
 
@@ -2765,7 +3118,7 @@ export default function Chat({ navigation }) {
                             <ActivityIndicator size="small" color={colors.darkText} />
                         ) : (
                             <Text style={styles.loadMoreText}>
-                                {isArabic ? "تحميل المزيد" : "Load more"}
+                                {t("chat.loadMore", { defaultValue: "Load more" })}
                             </Text>
                         )}
                     </TouchableOpacity>
@@ -2790,7 +3143,7 @@ export default function Chat({ navigation }) {
                 <View style={styles.overlay}>
                     <MainNavBar
                         navigation={navigation}
-                        title={t("chat.title")}
+                        title={t("chat.title", { defaultValue: "Chats" })}
                         showTitle={showNavTitle}
                         notificationCount={unreadTotal}
                         onToggleLanguage={toggleLanguage}
@@ -2815,11 +3168,11 @@ export default function Chat({ navigation }) {
                     <View style={styles.content}>
                         <View style={styles.headerBox}>
                             <Text style={[styles.title, getTextDirectionStyle(isArabic)]}>
-                                {t("chat.title")}
+                                {t("chat.title", { defaultValue: "Chats" })}
                             </Text>
 
                             <Text style={[styles.subtitle, getTextDirectionStyle(isArabic)]}>
-                                {t("chat.subtitle")}
+                                {t("chat.subtitle", { defaultValue: "Stay connected with our team." })}
                             </Text>
                         </View>
 
@@ -2836,11 +3189,7 @@ export default function Chat({ navigation }) {
                                         }
                                     }}
                                     onChangeText={setSearch}
-                                    placeholder={
-                                        isArabic
-                                            ? "ابحثي عن عميل برقم الهاتف..."
-                                            : "Search customers by phone..."
-                                    }
+                                    placeholder={chatLabels.searchCustomerPlaceholder}
                                     placeholderTextColor={colors.textMuted}
                                     style={[
                                         styles.searchInput,
@@ -2884,7 +3233,7 @@ export default function Chat({ navigation }) {
                                 }
                             }}
                         >
-                            {filters.map((filter) => {
+                            {visibleFilters.map((filter) => {
                                 const isActive = activeFilter === filter;
 
                                 return (
@@ -2903,11 +3252,11 @@ export default function Chat({ navigation }) {
                                                 isActive && styles.filterChipTextActive,
                                             ]}
                                         >
-                                            {filter === "employees"
-                                                ? isArabic
-                                                    ? "الموظفون"
-                                                    : "Employees"
-                                                : t(`chat.filters.${filter}`)}
+                                            {t(`chat.filters.${filter}`, {
+                                                defaultValue: filter === "employees"
+                                                    ? chatLabels.employeesFilter
+                                                    : filter,
+                                            })}
                                         </Text>
                                     </TouchableOpacity>
                                 );

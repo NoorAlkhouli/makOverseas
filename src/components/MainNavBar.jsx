@@ -15,13 +15,13 @@ import {
     getRowDirectionStyle,
     getTextDirectionStyle,
 } from "@/src/styles/globalStyles";
+import { useNotificationCount } from "@/src/context/NotificationCountProvider";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 
 export default function MainNavBar({
     navigation,
     title,
     showTitle = false,
-    notificationCount = 0,
     onToggleLanguage,
     onCreateGroupPress = null,
     menuItems = [],
@@ -33,6 +33,7 @@ export default function MainNavBar({
     const [menuOpen, setMenuOpen] = useState(false);
 
     const { colors, isDark, toggleTheme } = useAppTheme();
+    const { notificationCount } = useNotificationCount();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
     const closeMenu = () => {

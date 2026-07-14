@@ -47,6 +47,18 @@ const normalizeParams = (params = {}) => {
     return normalized;
 };
 
+const normalizeUserIds = (userIds = []) => {
+    const ids = Array.isArray(userIds) ? userIds : [userIds];
+
+    return Array.from(
+        new Set(
+            ids
+                .map((id) => Number(id))
+                .filter((id) => Number.isInteger(id) && id > 0)
+        )
+    );
+};
+
 const getFileExtension = (fileName = "", uri = "") => {
     const source = String(fileName || uri || "").split("?")[0];
     const dotIndex = source.lastIndexOf(".");
@@ -86,24 +98,35 @@ const ensureFileNameExtension = (fileName = "", fallbackExtension = "") => {
     return `${cleanFileName}.${fallbackExtension}`;
 };
 
-const getAttachmentDurationMillis = (attachment = {}) => {
-    const durationValue =
-        attachment.duration_millis ||
-        attachment.durationMillis ||
-        attachment.audio_duration_millis ||
-        attachment.audioDurationMillis ||
-        attachment.duration ||
-        0;
+const normalizeDurationSeconds = (duration, attachment = {}) => {
+    const explicitDuration = Number(duration);
 
-    const numericDuration = Number(durationValue || 0);
-
-    if (!Number.isFinite(numericDuration) || numericDuration <= 0) {
-        return 0;
+    if (Number.isFinite(explicitDuration) && explicitDuration > 0) {
+        return Number(explicitDuration.toFixed(3));
     }
 
-    return numericDuration > 0 && numericDuration < 1000
-        ? Math.round(numericDuration * 1000)
-        : Math.round(numericDuration);
+    const durationMillis = Number(
+        attachment.durationMillis ??
+        attachment.duration_millis ??
+        attachment.audioDurationMillis ??
+        attachment.audio_duration_millis ??
+        0
+    );
+
+    if (Number.isFinite(durationMillis) && durationMillis > 0) {
+        return Number((durationMillis / 1000).toFixed(3));
+    }
+
+    const attachmentDurationSeconds = Number(attachment.duration || 0);
+
+    if (
+        Number.isFinite(attachmentDurationSeconds) &&
+        attachmentDurationSeconds > 0
+    ) {
+        return Number(attachmentDurationSeconds.toFixed(3));
+    }
+
+    return 0;
 };
 
 const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
@@ -135,6 +158,13 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
         if (extension === "ogg" || extension === "oga") return "audio/ogg";
         if (extension === "webm") return "audio/webm";
         if (extension === "amr") return "audio/amr";
+        if (extension === "awb") return "audio/amr-wb";
+        if (extension === "opus") return "audio/opus";
+        if (extension === "3gp" || extension === "3gpp") return "audio/3gpp";
+        if (extension === "caf") return "audio/x-caf";
+        if (extension === "aif" || extension === "aiff") return "audio/aiff";
+        if (extension === "flac") return "audio/flac";
+        if (extension === "mka") return "audio/x-matroska";
 
         if (rawType === "audio/x-m4a") return "audio/mp4";
         if (rawType === "audio/mpeg") return "audio/mpeg";
@@ -144,6 +174,10 @@ const normalizeAttachmentMimeType = (attachment = {}, messageType = 1) => {
         if (rawType === "audio/x-wav") return "audio/x-wav";
         if (rawType === "audio/webm") return "audio/webm";
         if (rawType === "audio/ogg") return "audio/ogg";
+
+        if (rawType.startsWith("audio/")) {
+            return rawType;
+        }
 
         return "audio/mp4";
     }
@@ -357,48 +391,27 @@ const buildAttachmentPayload = (attachment = {}, messageType = 1) => {
         ...payload,
         messageType: normalizedMessageType,
         size: attachment.size || attachment.fileSize || attachment.file_size || 0,
-        durationMillis: getAttachmentDurationMillis(attachment),
+        durationSeconds: normalizeDurationSeconds(undefined, attachment),
     });
 
     return payload;
-};
-
-const appendAttachmentMetadata = (formData, attachment, messageType) => {
-    const normalizedMessageType = Number(messageType);
-
-    if (!attachment) {
-        return;
-    }
-
-    const size = Number(attachment.size || attachment.fileSize || attachment.file_size || 0);
-
-    if (Number.isFinite(size) && size > 0) {
-        formData.append("file_size", String(Math.round(size)));
-        formData.append("size", String(Math.round(size)));
-    }
-
-    if (normalizedMessageType === 8) {
-        const durationMillis = getAttachmentDurationMillis(attachment);
-
-        if (durationMillis > 0) {
-            formData.append("duration_millis", String(durationMillis));
-            formData.append("audio_duration_millis", String(durationMillis));
-            formData.append("duration", String(Math.round(durationMillis / 1000)));
-        }
-
-        formData.append("mime_type", normalizeAttachmentMimeType(attachment, normalizedMessageType));
-    }
 };
 
 const buildMessageFormData = ({
     type = 1,
     body = "",
     attachment,
+    duration,
     replyToMessageId,
     targetUserId,
 } = {}) => {
     const formData = new FormData();
     const messageType = Number(type);
+    const allowedMessageTypes = [1, 2, 3, 4, 8];
+
+    if (!allowedMessageTypes.includes(messageType)) {
+        throw new Error("A valid message type is required.");
+    }
 
     if (targetUserId) {
         formData.append("target_user_id", String(targetUserId));
@@ -407,6 +420,10 @@ const buildMessageFormData = ({
     formData.append("type", String(messageType));
 
     const cleanBody = String(body || "").trim();
+
+    if (messageType === 1 && !cleanBody) {
+        throw new Error("Message body is required for text messages.");
+    }
 
     if (cleanBody) {
         formData.append("body", cleanBody);
@@ -418,9 +435,24 @@ const buildMessageFormData = ({
 
     const attachmentPayload = buildAttachmentPayload(attachment, messageType);
 
+    if ([2, 3, 4, 8].includes(messageType) && !attachmentPayload) {
+        throw new Error("Attachment is required for this message type.");
+    }
+
     if (attachmentPayload) {
         formData.append("attachment", attachmentPayload);
-        appendAttachmentMetadata(formData, attachment, messageType);
+    }
+
+    if (messageType === 8) {
+        const durationSeconds = normalizeDurationSeconds(duration, attachment);
+
+        if (durationSeconds <= 0 || durationSeconds > 3600) {
+            throw new Error(
+                "Audio duration must be greater than 0 and no more than 3600 seconds."
+            );
+        }
+
+        formData.append("duration", String(durationSeconds));
     }
 
     return formData;
@@ -430,12 +462,17 @@ const buildFetchHeaders = async () => {
     const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
     const deviceId = await AsyncStorage.getItem(STORAGE_KEYS.DEVICE_ID);
     const language = await AsyncStorage.getItem(STORAGE_KEYS.APP_LANGUAGE);
+    const socketId =
+        typeof apiClient.getSocketId === "function"
+            ? apiClient.getSocketId()
+            : null;
 
     return {
         Accept: "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(deviceId ? { "X-Device-ID": deviceId } : {}),
         ...(language ? { "Accept-Language": language } : {}),
+        ...(socketId ? { "X-Socket-ID": socketId } : {}),
     };
 };
 
@@ -521,6 +558,26 @@ export const chatService = {
         return response;
     },
 
+    async searchUsers(query, params = {}) {
+        const cleanQuery = String(query || "").trim();
+
+        if (!cleanQuery) {
+            return {
+                success: true,
+                data: {
+                    admins: { items: [], has_more: false },
+                    employees: { items: [], has_more: false },
+                    customers: { items: [], has_more: false },
+                },
+            };
+        }
+
+        return apiClient.get("/api/v1/users/search", {
+            q: cleanQuery,
+            per_group: params?.per_group || params?.perGroup || 10,
+        });
+    },
+
     async listConversations(params = {}) {
         return apiClient.get("/api/v1/conversations", normalizeParams(params));
     },
@@ -546,6 +603,54 @@ export const chatService = {
         }
 
         return apiClient.post(`/api/v1/conversations/${conversationId}/clear`);
+    },
+
+    async deleteConversation(conversationId) {
+        if (!conversationId) {
+            throw new Error("conversationId is required to delete conversation.");
+        }
+
+        return apiClient.delete(`/api/v1/conversations/${conversationId}`);
+    },
+
+    async addGroupParticipants(conversationId, userIds = []) {
+        if (!conversationId) {
+            throw new Error("conversationId is required to add group participants.");
+        }
+
+        const normalizedUserIds = normalizeUserIds(userIds);
+
+        if (normalizedUserIds.length === 0) {
+            throw new Error("At least one user id is required to add group participants.");
+        }
+
+        return apiClient.post(`/api/v1/conversations/${conversationId}/participants`, {
+            user_ids: normalizedUserIds,
+        });
+    },
+
+    async removeGroupParticipant(conversationId, userId) {
+        if (!conversationId) {
+            throw new Error("conversationId is required to remove group participant.");
+        }
+
+        const normalizedUserId = Number(userId);
+
+        if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+            throw new Error("A valid userId is required to remove group participant.");
+        }
+
+        return apiClient.delete(
+            `/api/v1/conversations/${conversationId}/participants/${normalizedUserId}`
+        );
+    },
+
+    async leaveGroup(conversationId) {
+        if (!conversationId) {
+            throw new Error("conversationId is required to leave group.");
+        }
+
+        return apiClient.post(`/api/v1/conversations/${conversationId}/leave`);
     },
 
     async blockConversationCustomer(conversationId) {
@@ -590,6 +695,7 @@ export const chatService = {
             type = 1,
             body = "",
             attachment,
+            duration,
             replyToMessageId,
         } = {}
     ) {
@@ -601,6 +707,7 @@ export const chatService = {
             type,
             body,
             attachment,
+            duration,
             replyToMessageId,
         });
 
@@ -616,7 +723,7 @@ export const chatService = {
             type = 1,
             body = "",
             attachment,
-            replyToMessageId,
+            duration,
         } = {}
     ) {
         if (!targetUserId) {
@@ -627,7 +734,7 @@ export const chatService = {
             type,
             body,
             attachment,
-            replyToMessageId,
+            duration,
             targetUserId,
         });
 
@@ -679,6 +786,52 @@ export const chatService = {
         }
 
         return apiClient.patch(`/api/v1/quotes/${quoteId}/cancel`);
+    },
+
+    async listConversationMedia(conversationId, params = {}) {
+        if (!conversationId) {
+            throw new Error("conversationId is required to list conversation media.");
+        }
+
+        return apiClient.get(
+            `/api/v1/conversations/${conversationId}/media`,
+            normalizeParams(params)
+        );
+    },
+
+    async getConversationMedia(conversationId, params = {}) {
+        return this.listConversationMedia(conversationId, params);
+    },
+
+    async listMedia(conversationId, params = {}) {
+        return this.listConversationMedia(conversationId, params);
+    },
+
+    async searchConversationMessages(conversationId, params = {}) {
+        if (!conversationId) {
+            throw new Error("conversationId is required to search conversation messages.");
+        }
+
+        const cleanQuery = String(params?.q || params?.search || "").trim();
+
+        if (cleanQuery.length < 2) {
+            return {
+                success: true,
+                data: [],
+            };
+        }
+
+        return apiClient.get(
+            `/api/v1/conversations/${conversationId}/messages/search`,
+            normalizeParams({
+                ...params,
+                q: cleanQuery,
+            })
+        );
+    },
+
+    async searchMessages(conversationId, params = {}) {
+        return this.searchConversationMessages(conversationId, params);
     },
 
     async deleteMessage(messageId) {

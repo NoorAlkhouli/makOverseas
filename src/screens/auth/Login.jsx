@@ -48,6 +48,10 @@ export default function Login({ navigation }) {
 
     const scrollRef = useRef(null);
     const keyboardAnim = useRef(new Animated.Value(0)).current;
+    const keyboardVisibleRef = useRef(false);
+    const focusScrollTimeoutRef = useRef(null);
+    const keyboardScrollTimeoutRef = useRef(null);
+    const resetScrollTimeoutRef = useRef(null);
 
     const { height } = useWindowDimensions();
 
@@ -63,6 +67,33 @@ export default function Login({ navigation }) {
 
     const imageSource = isDark ? appImages.splashDark : appImages.splashLight;
 
+    const scrollLoginFormForKeyboard = (animated = Platform.OS === "ios") => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                scrollRef.current?.scrollTo({
+                    y: Platform.OS === "android" ? 86 : 76,
+                    animated,
+                });
+            });
+        });
+    };
+
+    const handleInputFocus = () => {
+        // أول فتحة للكيبورد على Android بتكون المقاسات لسا عم تنحسب،
+        // لذلك ما منعمل scroll من الفوكس إلا إذا الكيبورد مفتوح فعلاً.
+        if (!keyboardVisibleRef.current) {
+            return;
+        }
+
+        if (focusScrollTimeoutRef.current) {
+            clearTimeout(focusScrollTimeoutRef.current);
+        }
+
+        focusScrollTimeoutRef.current = setTimeout(() => {
+            scrollLoginFormForKeyboard(false);
+        }, Platform.OS === "android" ? 80 : 60);
+    };
+
     useEffect(() => {
         const showEvent =
             Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
@@ -70,41 +101,76 @@ export default function Login({ navigation }) {
             Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
 
         const showSubscription = Keyboard.addListener(showEvent, (event) => {
+            keyboardVisibleRef.current = true;
+
+            if (resetScrollTimeoutRef.current) {
+                clearTimeout(resetScrollTimeoutRef.current);
+                resetScrollTimeoutRef.current = null;
+            }
+
             setKeyboardOpen(true);
 
             Animated.timing(keyboardAnim, {
                 toValue: 1,
-                duration: Platform.OS === "ios" ? event?.duration || 260 : 220,
+                duration: Platform.OS === "ios" ? event?.duration || 260 : 160,
                 useNativeDriver: true,
             }).start();
 
-            setTimeout(() => {
-                requestAnimationFrame(() => {
-                    scrollRef.current?.scrollTo({
-                        y: Platform.OS === "android" ? 60 : 80,
-                        animated: Platform.OS === "ios",
-                    });
-                });
-            }, Platform.OS === "android" ? 220 : 120);
+            if (keyboardScrollTimeoutRef.current) {
+                clearTimeout(keyboardScrollTimeoutRef.current);
+            }
+
+            keyboardScrollTimeoutRef.current = setTimeout(() => {
+                scrollLoginFormForKeyboard(false);
+            }, Platform.OS === "android" ? 280 : 120);
         });
 
         const hideSubscription = Keyboard.addListener(hideEvent, (event) => {
+            keyboardVisibleRef.current = false;
+
+            if (focusScrollTimeoutRef.current) {
+                clearTimeout(focusScrollTimeoutRef.current);
+                focusScrollTimeoutRef.current = null;
+            }
+
+            if (keyboardScrollTimeoutRef.current) {
+                clearTimeout(keyboardScrollTimeoutRef.current);
+                keyboardScrollTimeoutRef.current = null;
+            }
+
             Animated.timing(keyboardAnim, {
                 toValue: 0,
-                duration: Platform.OS === "ios" ? event?.duration || 260 : 220,
+                duration: Platform.OS === "ios" ? event?.duration || 260 : 140,
                 useNativeDriver: true,
             }).start();
 
-            setTimeout(() => {
+            setKeyboardOpen(false);
+
+            if (resetScrollTimeoutRef.current) {
+                clearTimeout(resetScrollTimeoutRef.current);
+            }
+
+            resetScrollTimeoutRef.current = setTimeout(() => {
                 scrollRef.current?.scrollTo({
                     y: 0,
-                    animated: Platform.OS === "ios",
+                    animated: false,
                 });
-                setKeyboardOpen(false);
-            }, Platform.OS === "android" ? 120 : 80);
+            }, Platform.OS === "android" ? 180 : 80);
         });
 
         return () => {
+            if (focusScrollTimeoutRef.current) {
+                clearTimeout(focusScrollTimeoutRef.current);
+            }
+
+            if (keyboardScrollTimeoutRef.current) {
+                clearTimeout(keyboardScrollTimeoutRef.current);
+            }
+
+            if (resetScrollTimeoutRef.current) {
+                clearTimeout(resetScrollTimeoutRef.current);
+            }
+
             showSubscription.remove();
             hideSubscription.remove();
         };
@@ -295,7 +361,7 @@ export default function Login({ navigation }) {
                             >
                                 <View style={styles.formBox}>
                                     <Text style={[styles.title, getTextDirectionStyle(isArabic)]}>
-                                        {t("login.titleWelcome")} {" "}
+                                        {t("login.titleWelcome")}{" "}
                                         <Text style={styles.green}>
                                             {t("login.titleBack")}
                                         </Text>
@@ -321,6 +387,7 @@ export default function Login({ navigation }) {
                                             textAlign={isArabic ? "right" : "left"}
                                             returnKeyType="next"
                                             blurOnSubmit={false}
+                                            onFocus={handleInputFocus}
                                         />
                                     </View>
 
@@ -334,6 +401,7 @@ export default function Login({ navigation }) {
                                         })}
                                         disabled={loading}
                                         isArabic={isArabic}
+                                        onFocus={handleInputFocus}
                                     />
 
                                     <TouchableOpacity
@@ -406,21 +474,11 @@ const createStyles = (colors, height, keyboardOpen) => {
     const logoTop = Platform.OS === "android" ? 105 : 118;
     const logoHeight = 120;
 
-    const activeLogoScale = keyboardOpen ? 0.62 : 1;
-    const activeLogoTranslateY = keyboardOpen
-        ? Platform.OS === "android"
-            ? -54
-            : -62
-        : 0;
-
-    const logoVisualBottom =
-        logoTop +
-        activeLogoTranslateY +
-        logoHeight / 2 +
-        (logoHeight * activeLogoScale) / 2;
-
-    const headerGap = keyboardOpen ? 10 : isSmallScreen ? 14 : 20;
-    const dynamicHeaderHeight = Math.ceil(logoVisualBottom + headerGap);
+    // Keep the header height stable. The logo can still animate with transform,
+    // but changing real layout height while the Android keyboard resizes the screen
+    // causes the visible jitter / stuck scroll.
+    const headerGap = isSmallScreen ? 14 : 20;
+    const dynamicHeaderHeight = Math.ceil(logoTop + logoHeight + headerGap);
 
     return StyleSheet.create({
         root: {
@@ -484,14 +542,8 @@ const createStyles = (colors, height, keyboardOpen) => {
         scrollContent: {
             flexGrow: 1,
             paddingHorizontal: isTinyScreen ? 24 : 34,
-            paddingTop: keyboardOpen ? 0 : isSmallScreen ? 4 : 8,
-            paddingBottom: keyboardOpen
-                ? Platform.OS === "android"
-                    ? 14
-                    : 18
-                : Platform.OS === "android"
-                    ? 28
-                    : 44,
+            paddingTop: isSmallScreen ? 4 : 8,
+            paddingBottom: Platform.OS === "android" ? 28 : 44,
             justifyContent: "flex-end",
         },
 
@@ -501,9 +553,9 @@ const createStyles = (colors, height, keyboardOpen) => {
 
         title: {
             color: colors.textPrimary,
-            fontSize: keyboardOpen ? (isTinyScreen ? 29 : 31) : isSmallScreen ? 34 : 38,
+            fontSize: isSmallScreen ? 34 : 38,
             fontWeight: "900",
-            marginBottom: keyboardOpen ? 8 : 8,
+            marginBottom: 8,
         },
 
         green: {
@@ -512,14 +564,14 @@ const createStyles = (colors, height, keyboardOpen) => {
 
         subtitle: {
             color: colors.textPrimary,
-            fontSize: keyboardOpen ? 16 : isSmallScreen ? 17 : 19,
-            lineHeight: keyboardOpen ? 24 : isSmallScreen ? 25 : 28,
+            fontSize: isSmallScreen ? 17 : 19,
+            lineHeight: isSmallScreen ? 25 : 28,
             fontWeight: "600",
-            marginBottom: keyboardOpen ? 18 : isSmallScreen ? 18 : 22,
+            marginBottom: isSmallScreen ? 18 : 22,
         },
 
         inputBox: {
-            height: keyboardOpen && isTinyScreen ? 60 : 66,
+            height: 66,
             borderWidth: 1.3,
             borderColor: colors.inputBorder,
             borderRadius: 20,
@@ -527,7 +579,7 @@ const createStyles = (colors, height, keyboardOpen) => {
             flexDirection: "row",
             alignItems: "center",
             paddingHorizontal: 24,
-            marginBottom: keyboardOpen ? 12 : 16,
+            marginBottom: 16,
         },
 
         input: {
@@ -539,9 +591,9 @@ const createStyles = (colors, height, keyboardOpen) => {
         },
 
         buttonWrapper: {
-            height: keyboardOpen && isTinyScreen ? 60 : 66,
+            height: 66,
             borderRadius: 21,
-            marginTop: keyboardOpen ? 10 : 12,
+            marginTop: 12,
             shadowColor: colors.primary,
             shadowOffset: { width: 0, height: 0 },
             shadowOpacity: 0.85,

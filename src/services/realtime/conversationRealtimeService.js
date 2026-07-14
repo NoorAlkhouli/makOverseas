@@ -29,6 +29,25 @@ const getMessageFromPayload = (payload) => {
     return candidates.find(isPlainObject) || null;
 };
 
+const getGroupEventPayload = (payload) => {
+    if (!payload) return null;
+
+    const candidates = [
+        payload?.conversation,
+        payload?.data?.conversation,
+        payload?.group,
+        payload?.data?.group,
+        payload?.participant,
+        payload?.data?.participant,
+        payload?.item,
+        payload?.data?.item,
+        payload?.data,
+        payload,
+    ];
+
+    return candidates.find(isPlainObject) || payload;
+};
+
 const getMessageDebugInfo = (message) => {
     if (!message) {
         return {
@@ -68,6 +87,179 @@ const getDeletePayloadDebugInfo = (payload) => {
         data_id: payload?.data?.id,
         data_message_id: payload?.data?.message_id,
         data_messageId: payload?.data?.messageId,
+    };
+};
+
+const normalizeMessagesReadEvent = (payload = {}, conversationId = null) => {
+    const data = isPlainObject(payload?.data) ? payload.data : payload;
+
+    const rawConversationId =
+        data?.conversation_id ||
+        data?.conversationId ||
+        payload?.conversation_id ||
+        payload?.conversationId ||
+        conversationId ||
+        null;
+
+    const rawReaderId =
+        data?.reader_id ||
+        data?.readerId ||
+        data?.user_id ||
+        data?.userId ||
+        data?.read_by_id ||
+        data?.readById ||
+        payload?.reader_id ||
+        payload?.readerId ||
+        payload?.user_id ||
+        payload?.userId ||
+        null;
+
+    const messageIds =
+        data?.message_ids ||
+        data?.messageIds ||
+        data?.messages_ids ||
+        data?.messagesIds ||
+        payload?.message_ids ||
+        payload?.messageIds ||
+        [];
+
+    const lastReadMessageId =
+        data?.last_read_message_id ||
+        data?.lastReadMessageId ||
+        data?.last_message_id ||
+        data?.lastMessageId ||
+        payload?.last_read_message_id ||
+        payload?.lastReadMessageId ||
+        payload?.last_message_id ||
+        payload?.lastMessageId ||
+        null;
+
+    const readAt =
+        data?.read_at ||
+        data?.readAt ||
+        data?.seen_at ||
+        data?.seenAt ||
+        payload?.read_at ||
+        payload?.readAt ||
+        payload?.seen_at ||
+        payload?.seenAt ||
+        new Date().toISOString();
+
+    return {
+        ...payload,
+        ...data,
+
+        conversation_id: rawConversationId ? String(rawConversationId) : null,
+        conversationId: rawConversationId ? String(rawConversationId) : null,
+
+        reader_id: rawReaderId ? String(rawReaderId) : null,
+        readerId: rawReaderId ? String(rawReaderId) : null,
+
+        user_id: rawReaderId ? String(rawReaderId) : null,
+        userId: rawReaderId ? String(rawReaderId) : null,
+
+        message_ids: Array.isArray(messageIds) ? messageIds : [],
+        messageIds: Array.isArray(messageIds) ? messageIds : [],
+
+        last_read_message_id: lastReadMessageId,
+        lastReadMessageId: lastReadMessageId,
+
+        read_at: readAt,
+        readAt: readAt,
+    };
+};
+
+const normalizeGroupEvent = (payload = {}, conversationId = null) => {
+    const data = isPlainObject(payload?.data) ? payload.data : payload;
+    const groupPayload = getGroupEventPayload(payload) || {};
+
+    const rawConversationId =
+        data?.conversation_id ||
+        data?.conversationId ||
+        data?.conversation?.id ||
+        groupPayload?.conversation_id ||
+        groupPayload?.conversationId ||
+        groupPayload?.conversation?.id ||
+        payload?.conversation_id ||
+        payload?.conversationId ||
+        payload?.conversation?.id ||
+        conversationId ||
+        null;
+
+    const rawUserId =
+        data?.user_id ||
+        data?.userId ||
+        data?.participant_user_id ||
+        data?.participantUserId ||
+        data?.participant?.user_id ||
+        data?.participant?.userId ||
+        data?.participant?.user?.id ||
+        data?.user?.id ||
+        groupPayload?.user_id ||
+        groupPayload?.userId ||
+        groupPayload?.participant_user_id ||
+        groupPayload?.participantUserId ||
+        groupPayload?.participant?.user_id ||
+        groupPayload?.participant?.userId ||
+        groupPayload?.participant?.user?.id ||
+        groupPayload?.user?.id ||
+        payload?.user_id ||
+        payload?.userId ||
+        payload?.participant_user_id ||
+        payload?.participantUserId ||
+        null;
+
+    const rawActorId =
+        data?.actor_id ||
+        data?.actorId ||
+        data?.performed_by_id ||
+        data?.performedById ||
+        data?.admin_id ||
+        data?.adminId ||
+        data?.actor?.id ||
+        groupPayload?.actor_id ||
+        groupPayload?.actorId ||
+        groupPayload?.performed_by_id ||
+        groupPayload?.performedById ||
+        groupPayload?.admin_id ||
+        groupPayload?.adminId ||
+        groupPayload?.actor?.id ||
+        payload?.actor_id ||
+        payload?.actorId ||
+        null;
+
+    return {
+        ...payload,
+        ...data,
+
+        conversation_id: rawConversationId ? String(rawConversationId) : null,
+        conversationId: rawConversationId ? String(rawConversationId) : null,
+
+        user_id: rawUserId ? String(rawUserId) : null,
+        userId: rawUserId ? String(rawUserId) : null,
+
+        actor_id: rawActorId ? String(rawActorId) : null,
+        actorId: rawActorId ? String(rawActorId) : null,
+
+        conversation:
+            data?.conversation ||
+            groupPayload?.conversation ||
+            payload?.conversation ||
+            null,
+
+        participant:
+            data?.participant ||
+            groupPayload?.participant ||
+            payload?.participant ||
+            null,
+
+        user:
+            data?.user ||
+            groupPayload?.user ||
+            payload?.user ||
+            null,
+
+        rawPayload: payload,
     };
 };
 
@@ -224,9 +416,49 @@ const bindDeleteMessageEvent = (channelState, eventName, logName, handlerKey) =>
             getDeletePayloadDebugInfo(payload)
         );
 
-        // Delete events can arrive as a full message object OR only { id/message_id }.
-        // Do not ignore the event just because a nested message object is missing.
         channelState.handlers?.[handlerKey]?.(deletePayload, payload);
+    });
+};
+
+const bindMessagesReadEvent = (channelState, eventName, logName) => {
+    channelState.channel.listen(eventName, (payload) => {
+        const normalizedReadEvent = normalizeMessagesReadEvent(
+            payload,
+            channelState.conversationId
+        );
+
+        console.log(
+            `[Conversation Realtime] ${logName} RAW PAYLOAD:`,
+            safeStringify(payload)
+        );
+
+        console.log(
+            `[Conversation Realtime] ${logName} NORMALIZED:`,
+            normalizedReadEvent
+        );
+
+        channelState.handlers?.onMessagesRead?.(normalizedReadEvent, payload);
+    });
+};
+
+const bindGroupEvent = (channelState, eventName, logName, handlerKey) => {
+    channelState.channel.listen(eventName, (payload) => {
+        const normalizedGroupEvent = normalizeGroupEvent(
+            payload,
+            channelState.conversationId
+        );
+
+        console.log(
+            `[Conversation Realtime] ${logName} RAW PAYLOAD:`,
+            safeStringify(payload)
+        );
+
+        console.log(
+            `[Conversation Realtime] ${logName} NORMALIZED:`,
+            normalizedGroupEvent
+        );
+
+        channelState.handlers?.[handlerKey]?.(normalizedGroupEvent, payload);
     });
 };
 
@@ -259,14 +491,32 @@ const buildHandlers = ({
     onMessageDeleted,
     onMessageRemoved,
     onMessageDeletedForEveryone,
+    onMessagesRead,
     onTyping,
+
+    onGroupParticipantAdded,
+    onGroupParticipantRemoved,
+    onGroupParticipantLeft,
+    onGroupDeleted,
+    onGroupOwnershipTransferred,
+    onConversationRemoved,
+    onConversationUpdated,
 }) => ({
     onMessageSent,
     onMessageUpdated,
     onMessageDeleted,
     onMessageRemoved,
     onMessageDeletedForEveryone,
+    onMessagesRead,
     onTyping,
+
+    onGroupParticipantAdded,
+    onGroupParticipantRemoved,
+    onGroupParticipantLeft,
+    onGroupDeleted,
+    onGroupOwnershipTransferred,
+    onConversationRemoved,
+    onConversationUpdated,
 });
 
 export function subscribeToConversationChannel({
@@ -276,7 +526,16 @@ export function subscribeToConversationChannel({
     onMessageDeleted,
     onMessageRemoved,
     onMessageDeletedForEveryone,
+    onMessagesRead,
     onTyping,
+
+    onGroupParticipantAdded,
+    onGroupParticipantRemoved,
+    onGroupParticipantLeft,
+    onGroupDeleted,
+    onGroupOwnershipTransferred,
+    onConversationRemoved,
+    onConversationUpdated,
 }) {
     const echo = getEcho();
 
@@ -300,7 +559,16 @@ export function subscribeToConversationChannel({
             onMessageDeleted,
             onMessageRemoved,
             onMessageDeletedForEveryone,
+            onMessagesRead,
             onTyping,
+
+            onGroupParticipantAdded,
+            onGroupParticipantRemoved,
+            onGroupParticipantLeft,
+            onGroupDeleted,
+            onGroupOwnershipTransferred,
+            onConversationRemoved,
+            onConversationUpdated,
         });
 
         console.log(
@@ -333,7 +601,16 @@ export function subscribeToConversationChannel({
             onMessageDeleted,
             onMessageRemoved,
             onMessageDeletedForEveryone,
+            onMessagesRead,
             onTyping,
+
+            onGroupParticipantAdded,
+            onGroupParticipantRemoved,
+            onGroupParticipantLeft,
+            onGroupDeleted,
+            onGroupOwnershipTransferred,
+            onConversationRemoved,
+            onConversationUpdated,
         }),
     };
 
@@ -385,6 +662,60 @@ export function subscribeToConversationChannel({
     bindDeleteMessageEvent(channelState, 'message.deleted_for_everyone', 'message.deleted_for_everyone(no-dot)', 'onMessageDeletedForEveryone');
     bindDeleteMessageEvent(channelState, '.message.deleted.for.everyone', 'message.deleted.for.everyone', 'onMessageDeletedForEveryone');
     bindDeleteMessageEvent(channelState, 'message.deleted.for.everyone', 'message.deleted.for.everyone(no-dot)', 'onMessageDeletedForEveryone');
+
+    bindMessagesReadEvent(channelState, '.MessagesRead', 'MessagesRead');
+    bindMessagesReadEvent(channelState, 'MessagesRead', 'MessagesRead(no-dot)');
+    bindMessagesReadEvent(channelState, '.messages.read', 'messages.read');
+    bindMessagesReadEvent(channelState, 'messages.read', 'messages.read(no-dot)');
+
+    bindGroupEvent(channelState, '.GroupParticipantAdded', 'GroupParticipantAdded', 'onGroupParticipantAdded');
+    bindGroupEvent(channelState, 'GroupParticipantAdded', 'GroupParticipantAdded(no-dot)', 'onGroupParticipantAdded');
+    bindGroupEvent(channelState, '.group.participant.added', 'group.participant.added', 'onGroupParticipantAdded');
+    bindGroupEvent(channelState, 'group.participant.added', 'group.participant.added(no-dot)', 'onGroupParticipantAdded');
+    bindGroupEvent(channelState, '.group_participant_added', 'group_participant_added', 'onGroupParticipantAdded');
+    bindGroupEvent(channelState, 'group_participant_added', 'group_participant_added(no-dot)', 'onGroupParticipantAdded');
+
+    bindGroupEvent(channelState, '.GroupParticipantRemoved', 'GroupParticipantRemoved', 'onGroupParticipantRemoved');
+    bindGroupEvent(channelState, 'GroupParticipantRemoved', 'GroupParticipantRemoved(no-dot)', 'onGroupParticipantRemoved');
+    bindGroupEvent(channelState, '.group.participant.removed', 'group.participant.removed', 'onGroupParticipantRemoved');
+    bindGroupEvent(channelState, 'group.participant.removed', 'group.participant.removed(no-dot)', 'onGroupParticipantRemoved');
+    bindGroupEvent(channelState, '.group_participant_removed', 'group_participant_removed', 'onGroupParticipantRemoved');
+    bindGroupEvent(channelState, 'group_participant_removed', 'group_participant_removed(no-dot)', 'onGroupParticipantRemoved');
+
+    bindGroupEvent(channelState, '.GroupParticipantLeft', 'GroupParticipantLeft', 'onGroupParticipantLeft');
+    bindGroupEvent(channelState, 'GroupParticipantLeft', 'GroupParticipantLeft(no-dot)', 'onGroupParticipantLeft');
+    bindGroupEvent(channelState, '.group.participant.left', 'group.participant.left', 'onGroupParticipantLeft');
+    bindGroupEvent(channelState, 'group.participant.left', 'group.participant.left(no-dot)', 'onGroupParticipantLeft');
+    bindGroupEvent(channelState, '.group_participant_left', 'group_participant_left', 'onGroupParticipantLeft');
+    bindGroupEvent(channelState, 'group_participant_left', 'group_participant_left(no-dot)', 'onGroupParticipantLeft');
+
+    bindGroupEvent(channelState, '.GroupDeleted', 'GroupDeleted', 'onGroupDeleted');
+    bindGroupEvent(channelState, 'GroupDeleted', 'GroupDeleted(no-dot)', 'onGroupDeleted');
+    bindGroupEvent(channelState, '.group.deleted', 'group.deleted', 'onGroupDeleted');
+    bindGroupEvent(channelState, 'group.deleted', 'group.deleted(no-dot)', 'onGroupDeleted');
+    bindGroupEvent(channelState, '.group_deleted', 'group_deleted', 'onGroupDeleted');
+    bindGroupEvent(channelState, 'group_deleted', 'group_deleted(no-dot)', 'onGroupDeleted');
+
+    bindGroupEvent(channelState, '.GroupOwnershipTransferred', 'GroupOwnershipTransferred', 'onGroupOwnershipTransferred');
+    bindGroupEvent(channelState, 'GroupOwnershipTransferred', 'GroupOwnershipTransferred(no-dot)', 'onGroupOwnershipTransferred');
+    bindGroupEvent(channelState, '.group.ownership.transferred', 'group.ownership.transferred', 'onGroupOwnershipTransferred');
+    bindGroupEvent(channelState, 'group.ownership.transferred', 'group.ownership.transferred(no-dot)', 'onGroupOwnershipTransferred');
+    bindGroupEvent(channelState, '.group_ownership_transferred', 'group_ownership_transferred', 'onGroupOwnershipTransferred');
+    bindGroupEvent(channelState, 'group_ownership_transferred', 'group_ownership_transferred(no-dot)', 'onGroupOwnershipTransferred');
+
+    bindGroupEvent(channelState, '.ConversationRemoved', 'ConversationRemoved', 'onConversationRemoved');
+    bindGroupEvent(channelState, 'ConversationRemoved', 'ConversationRemoved(no-dot)', 'onConversationRemoved');
+    bindGroupEvent(channelState, '.conversation.removed', 'conversation.removed', 'onConversationRemoved');
+    bindGroupEvent(channelState, 'conversation.removed', 'conversation.removed(no-dot)', 'onConversationRemoved');
+    bindGroupEvent(channelState, '.conversation_removed', 'conversation_removed', 'onConversationRemoved');
+    bindGroupEvent(channelState, 'conversation_removed', 'conversation_removed(no-dot)', 'onConversationRemoved');
+
+    bindGroupEvent(channelState, '.ConversationUpdated', 'ConversationUpdated', 'onConversationUpdated');
+    bindGroupEvent(channelState, 'ConversationUpdated', 'ConversationUpdated(no-dot)', 'onConversationUpdated');
+    bindGroupEvent(channelState, '.conversation.updated', 'conversation.updated', 'onConversationUpdated');
+    bindGroupEvent(channelState, 'conversation.updated', 'conversation.updated(no-dot)', 'onConversationUpdated');
+    bindGroupEvent(channelState, '.conversation_updated', 'conversation_updated', 'onConversationUpdated');
+    bindGroupEvent(channelState, 'conversation_updated', 'conversation_updated(no-dot)', 'onConversationUpdated');
 
     bindTypingWhisperEvent(channelState);
 
@@ -519,6 +850,37 @@ export function leaveConversationChannel(conversationId) {
 
     console.log('[Conversation Realtime] Leaving:', channelName);
 
-    echo.leave(channelName);
+    try {
+        echo.leave(channelName);
+    } catch (error) {
+        console.log('[Conversation Realtime] Leave ignored after error:', {
+            channelName,
+            error,
+        });
+    }
+
     conversationChannels.delete(normalizedConversationId);
+}
+
+export function leaveAllConversationChannels() {
+    const echo = getEcho({ silent: true });
+
+    if (!echo) {
+        conversationChannels.clear();
+        return;
+    }
+
+    conversationChannels.forEach((channelState, conversationId) => {
+        try {
+            echo.leave(channelState.channelName);
+        } catch (error) {
+            console.log('[Conversation Realtime] Leave all ignored after error:', {
+                conversationId,
+                channelName: channelState.channelName,
+                error,
+            });
+        }
+    });
+
+    conversationChannels.clear();
 }

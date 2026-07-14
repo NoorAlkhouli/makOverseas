@@ -310,6 +310,15 @@ const isHighlightedMessage = (message, highlightedMessageId) => {
 function MessageStatusIcon({ item, colors }) {
     const sendState = getMessageSendState(item);
 
+    const isRead =
+        item?.is_read === true ||
+        item?.isRead === true ||
+        !!item?.read_at ||
+        !!item?.readAt ||
+        item?.delivery_status === "read" ||
+        item?.deliveryStatus === "read" ||
+        item?.status === "read";
+
     if (sendState === "failed") {
         return (
             <Ionicons
@@ -330,11 +339,21 @@ function MessageStatusIcon({ item, colors }) {
         );
     }
 
+    if (isRead) {
+        return (
+            <Ionicons
+                name="checkmark-done"
+                size={15}
+                color={colors.blue}
+            />
+        );
+    }
+
     return (
         <Ionicons
             name="checkmark-done"
             size={15}
-            color={colors.blue}
+            color={colors.muted}
         />
     );
 }
@@ -859,24 +878,59 @@ const getSafeAudioCacheName = (item = {}, uri = "") => {
 
 
 const getAudioDurationMillisFromStatus = (status = {}) => {
-    const durationValue =
-        status?.durationMillis ||
-        status?.duration_millis ||
-        status?.totalDurationMillis ||
-        status?.total_duration_millis ||
-        status?.duration ||
-        status?.totalDuration ||
-        0;
+    const durationMillis = Number(
+        status?.durationMillis ??
+        status?.duration_millis ??
+        status?.totalDurationMillis ??
+        status?.total_duration_millis ??
+        0
+    );
 
-    const numericDuration = Number(durationValue || 0);
+    if (Number.isFinite(durationMillis) && durationMillis > 0) {
+        return Math.round(durationMillis);
+    }
 
-    if (!Number.isFinite(numericDuration) || numericDuration <= 0) {
+    const durationSeconds = Number(
+        status?.duration ?? status?.totalDuration ?? 0
+    );
+
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
         return 0;
     }
 
-    return numericDuration > 0 && numericDuration < 1000
-        ? Math.round(numericDuration * 1000)
-        : Math.round(numericDuration);
+    return Math.round(durationSeconds * 1000);
+};
+
+const getAudioDurationMillisFromItem = (item = {}) => {
+    const attachment = getFirstDocumentAttachment(item);
+    const durationMillis = Number(
+        item?.durationMillis ??
+        item?.duration_millis ??
+        item?.audioDurationMillis ??
+        item?.audio_duration_millis ??
+        attachment?.durationMillis ??
+        attachment?.duration_millis ??
+        attachment?.audioDurationMillis ??
+        attachment?.audio_duration_millis ??
+        0
+    );
+
+    if (Number.isFinite(durationMillis) && durationMillis > 0) {
+        return Math.round(durationMillis);
+    }
+
+    const durationSeconds = Number(
+        item?.duration ??
+        item?.raw?.duration ??
+        attachment?.duration ??
+        0
+    );
+
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+        return 0;
+    }
+
+    return Math.round(durationSeconds * 1000);
 };
 
 const getPlayableAudioUri = async (item = {}) => {
@@ -914,6 +968,49 @@ const getPlayableAudioUri = async (item = {}) => {
     }
 };
 
+let activeAudioController = null;
+
+const getAudioMessageId = (item = {}) => {
+    return String(
+        getDisplayMessageId(item) ||
+        item?.raw?.id ||
+        item?.message_id ||
+        item?.id ||
+        item?.uuid ||
+        item?.uri ||
+        `audio-${Date.now()}`
+    );
+};
+
+const pauseAudioPlayerSafely = (player) => {
+    if (!player) {
+        return;
+    }
+
+    try {
+        if (typeof player.pause === "function") {
+            player.pause();
+        }
+
+        if (typeof player.seekTo === "function") {
+            player.seekTo(0);
+        }
+    } catch (error) {
+        console.log("Stop active chat audio error:", error);
+    }
+};
+
+export const stopActiveChatAudioPlayback = () => {
+    const controller = activeAudioController;
+    activeAudioController = null;
+
+    if (!controller?.stop) {
+        return;
+    }
+
+    controller.stop();
+};
+
 function AudioMessage({
     item,
     colors,
@@ -927,12 +1024,16 @@ function AudioMessage({
     isHighlighted = false,
 }) {
     const isMine = item.side === "me";
+    const audioMessageId = getAudioMessageId(item);
     const [playableAudioUri, setPlayableAudioUri] = useState(() => getAudioUri(item));
-    const player = useAudioPlayer(playableAudioUri ? { uri: playableAudioUri } : null);
+    const player = useAudioPlayer(playableAudioUri || null);
     const playerStatus = useAudioPlayerStatus(player);
     const isPlaying = !!playerStatus?.playing;
+    const itemDurationMillis = getAudioDurationMillisFromItem(item);
     const statusDurationMillis = getAudioDurationMillisFromStatus(playerStatus);
-    const durationText = formatAudioDuration(item.durationMillis || statusDurationMillis || 0);
+    const durationText = formatAudioDuration(
+        itemDurationMillis || statusDurationMillis || 0
+    );
 
     useEffect(() => {
         let isMounted = true;
@@ -953,31 +1054,55 @@ function AudioMessage({
     }, [item?.id, item?.uri, item?.fileName, item?.raw?.id]);
 
     useEffect(() => {
-        if (!playableAudioUri || typeof player?.replace !== "function") {
-            return;
-        }
-
-        try {
-            player.replace({ uri: playableAudioUri });
-        } catch (error) {
-            console.log("Audio player replace source error:", error);
-        }
-    }, [player, playableAudioUri]);
+        return () => {
+            if (activeAudioController?.messageId === audioMessageId) {
+                activeAudioController = null;
+            }
+        };
+    }, [audioMessageId]);
 
     const handleTogglePlayback = () => {
-        if (!playableAudioUri) {
+        if (!playableAudioUri || !player) {
             return;
         }
 
         try {
             if (isPlaying) {
-                player.pause();
+                if (typeof player.pause === "function") {
+                    player.pause();
+                }
+
+                if (activeAudioController?.messageId === audioMessageId) {
+                    activeAudioController = null;
+                }
+
                 return;
             }
 
-            player.seekTo(0);
-            player.play();
+            if (
+                activeAudioController?.stop &&
+                activeAudioController.messageId !== audioMessageId
+            ) {
+                stopActiveChatAudioPlayback();
+            }
+
+            activeAudioController = {
+                messageId: audioMessageId,
+                stop: () => pauseAudioPlayerSafely(player),
+            };
+
+            if (typeof player.seekTo === "function") {
+                player.seekTo(0);
+            }
+
+            if (typeof player.play === "function") {
+                player.play();
+            }
         } catch (error) {
+            if (activeAudioController?.messageId === audioMessageId) {
+                activeAudioController = null;
+            }
+
             console.log("Audio playback error:", error);
         }
     };

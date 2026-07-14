@@ -1,10 +1,10 @@
-// src/screens/Channels.jsx
 
 import { Feather, MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useFocusEffect } from "@react-navigation/native";
 import {
     ActivityIndicator,
     Alert,
@@ -25,6 +25,7 @@ import {
 import MainNavBar from "@/src/components/MainNavBar";
 import { appImages } from "@/src/constants/images";
 import { LANGUAGE_STORAGE_KEY } from "@/src/i18n";
+import apiClient from "@/src/services/api/apiClient";
 import channelService from "@/src/services/api/channelService";
 import {
     getRowDirectionStyle,
@@ -66,7 +67,7 @@ const animateChannelMove = () => {
     });
 };
 
-export default function Channels({ navigation }) {
+export default function Channels({ navigation, route }) {
     const { t, i18n } = useTranslation();
     const { width } = useWindowDimensions();
 
@@ -85,6 +86,9 @@ export default function Channels({ navigation }) {
     // Loading للسحب لتحديث البيانات فقط
     const [isRefreshing, setIsRefreshing] = useState(false);
 
+    // يمنع معالجة deep-link قبل اكتمال أحدث طلب للقنوات
+    const [isFetchingChannels, setIsFetchingChannels] = useState(false);
+
     // رسالة الخطأ إذا فشل تحميل القنوات
     const [errorMessage, setErrorMessage] = useState("");
 
@@ -92,12 +96,15 @@ export default function Channels({ navigation }) {
     const [loadingChannelSlug, setLoadingChannelSlug] = useState(null);
 
     const mainScrollRef = useRef(null);
+    const hasLoadedChannelsRef = useRef(false);
+    const handledNotificationRef = useRef(null);
+    const isFetchingChannelsRef = useRef(false);
 
     const { colors, isDark } = useAppTheme();
 
     const styles = useMemo(
         () => createStyles(colors, isSmallScreen),
-        [colors, isSmallScreen]
+        [colors, isSmallScreen],
     );
 
     /**
@@ -127,6 +134,9 @@ export default function Channels({ navigation }) {
     const fetchChannels = useCallback(
         async ({ fullLoading = false, refreshLoading = false } = {}) => {
             try {
+                isFetchingChannelsRef.current = true;
+                setIsFetchingChannels(true);
+
                 if (fullLoading) {
                     setIsLoading(true);
                 }
@@ -152,14 +162,16 @@ export default function Channels({ navigation }) {
                     error?.userMessage ||
                     (isArabic
                         ? "صار خطأ أثناء تحميل القنوات. تأكدي من الاتصال وحاولي مرة ثانية."
-                        : "Something went wrong while loading channels. Please try again.")
+                        : "Something went wrong while loading channels. Please try again."),
                 );
             } finally {
+                isFetchingChannelsRef.current = false;
+                setIsFetchingChannels(false);
                 setIsLoading(false);
                 setIsRefreshing(false);
             }
         },
-        [isArabic, normalizeChannel]
+        [isArabic, normalizeChannel],
     );
 
     useEffect(() => {
@@ -183,7 +195,7 @@ export default function Channels({ navigation }) {
                         isFollowing: Boolean(isFollowing),
                         followersCount: Math.max(0, Number(followersCount || 0)),
                     };
-                })
+                }),
             );
         });
 
@@ -191,11 +203,26 @@ export default function Channels({ navigation }) {
     }, []);
 
     /**
-     * أول ما تفتح الشاشة، جيبي القنوات من السيرفر
+     * جلب أحدث القنوات كل مرة تصير الشاشة active.
+     * أول مرة فقط نظهر شاشة التحميل الكاملة، وبعدها يتحدث المحتوى بهدوء.
      */
-    useEffect(() => {
-        fetchChannels({ fullLoading: true });
-    }, [fetchChannels]);
+    useFocusEffect(
+        useCallback(() => {
+            let isActive = true;
+
+            fetchChannels({
+                fullLoading: !hasLoadedChannelsRef.current,
+            }).finally(() => {
+                if (isActive) {
+                    hasLoadedChannelsRef.current = true;
+                }
+            });
+
+            return () => {
+                isActive = false;
+            };
+        }, [fetchChannels]),
+    );
 
     /**
      * البحث محلياً داخل القنوات المحملة
@@ -257,6 +284,7 @@ export default function Channels({ navigation }) {
         resetMainScrollPosition();
 
         await AsyncStorage.setItem(LANGUAGE_STORAGE_KEY, nextLanguage);
+        await apiClient.setLanguage(nextLanguage);
         await i18n.changeLanguage(nextLanguage);
 
         setTimeout(() => {
@@ -267,27 +295,118 @@ export default function Channels({ navigation }) {
     /**
      * فتح صفحة القناة
      */
-    const openChannelChat = (channel) => {
-        const params = {
-            channelId: channel.id,
-            channelKey: channel.key,
-            channelSlug: channel.slug,
-            channelTitle: channel.title,
-            channelImage: channel.image,
-            channelType: channel.type,
-            followersCount: channel.followersCount,
-            initialFollowing: channel.isFollowing,
-        };
+    const openChannelChat = useCallback(
+        (channel, { targetPostId = null, notificationId = null } = {}) => {
+            const params = {
+                channelId: channel.id,
+                channelKey: channel.key,
+                channelSlug: channel.slug,
+                channelTitle: channel.title,
+                channelImage: channel.image,
+                channelType: channel.type,
+                followersCount: channel.followersCount,
+                initialFollowing: channel.isFollowing,
+                targetPostId,
+                postId: targetPostId,
+                post_id: targetPostId,
+                notificationId,
+            };
 
-        const parentNavigation = navigation.getParent();
+            const parentNavigation = navigation.getParent();
 
-        if (parentNavigation) {
-            parentNavigation.navigate("ChannelChat", params);
+            if (parentNavigation) {
+                parentNavigation.navigate("ChannelChat", params);
+                return;
+            }
+
+            navigation.navigate("ChannelChat", params);
+        },
+        [navigation],
+    );
+
+    /**
+     * إشعار القناة يحمل channel_id وليس slug.
+     * لذلك ننتظر قائمة القنوات، نحوّل الـ id إلى slug، ثم نفتح البوست المطلوب.
+     */
+    const notificationChannelId =
+        route?.params?.channelId ?? route?.params?.channel_id ?? null;
+    const notificationChannelSlug =
+        route?.params?.channelSlug ?? route?.params?.channel_slug ?? null;
+    const notificationPostId =
+        route?.params?.postId ?? route?.params?.post_id ?? null;
+    const notificationId = route?.params?.notificationId ?? null;
+
+    useEffect(() => {
+        if (
+            (notificationChannelId === null && !notificationChannelSlug) ||
+            isLoading ||
+            isFetchingChannelsRef.current ||
+            isFetchingChannels ||
+            errorMessage
+        ) {
             return;
         }
 
-        navigation.navigate("ChannelChat", params);
-    };
+        const notificationKey = [
+            notificationId || "channel",
+            notificationChannelId || notificationChannelSlug,
+            notificationPostId || "",
+        ].join(":");
+
+        if (handledNotificationRef.current === notificationKey) {
+            return;
+        }
+
+        const targetChannel = channels.find((channel) => {
+            const matchesId =
+                notificationChannelId !== null &&
+                String(channel.id) === String(notificationChannelId);
+            const matchesSlug =
+                notificationChannelSlug && channel.slug === notificationChannelSlug;
+
+            return matchesId || matchesSlug;
+        });
+
+        handledNotificationRef.current = notificationKey;
+
+        navigation.setParams({
+            channelId: undefined,
+            channel_id: undefined,
+            channelSlug: undefined,
+            channel_slug: undefined,
+            postId: undefined,
+            post_id: undefined,
+            notificationId: undefined,
+            notificationAction: undefined,
+        });
+
+        if (!targetChannel) {
+            Alert.alert(
+                isArabic ? "تنبيه" : "Notice",
+                isArabic
+                    ? "تعذّر العثور على القناة المرتبطة بهذا الإشعار."
+                    : "The channel linked to this notification could not be found.",
+            );
+            return;
+        }
+
+        openChannelChat(targetChannel, {
+            targetPostId: notificationPostId,
+            notificationId,
+        });
+    }, [
+        channels,
+        errorMessage,
+        isArabic,
+        isFetchingChannels,
+        isLoading,
+        navigation,
+        notificationChannelId,
+        notificationChannelSlug,
+        notificationId,
+        notificationPostId,
+        openChannelChat,
+    ]);
 
     /**
      * تحويل أخطاء الـ API لرسالة مفهومة
@@ -354,14 +473,52 @@ export default function Channels({ navigation }) {
                         isFollowing,
                         followersCount: Math.max(
                             0,
-                            Number(item.followersCount || 0) + followersChange
+                            Number(item.followersCount || 0) + followersChange,
                         ),
                     };
-                })
+                }),
             );
         },
-        []
+        [],
     );
+
+    const syncSingleChannel = useCallback(async (slug) => {
+        try {
+            const channelDetails = await channelService.showChannel(slug);
+
+            if (!channelDetails) {
+                return;
+            }
+
+            const confirmedIsFollowing = Boolean(channelDetails.is_following);
+            const confirmedFollowersCount = Math.max(
+                0,
+                Number(channelDetails.followers_count || 0),
+            );
+
+            animateChannelMove();
+            setChannels((currentChannels) =>
+                currentChannels.map((item) =>
+                    item.slug === slug
+                        ? {
+                            ...item,
+                            isFollowing: confirmedIsFollowing,
+                            followersCount: confirmedFollowersCount,
+                        }
+                        : item,
+                ),
+            );
+
+            channelEvents.emitFollowChanged({
+                slug,
+                isFollowing: confirmedIsFollowing,
+                followersCount: confirmedFollowersCount,
+            });
+        } catch (error) {
+            // التحديث المتفائل يبقى صحيحاً؛ فشل طلب التأكيد لا يلغي نجاح follow.
+            console.log("Show channel after follow error:", error?.raw || error);
+        }
+    }, []);
 
     /**
      * Follow / Unfollow
@@ -405,6 +562,8 @@ export default function Channels({ navigation }) {
             } else {
                 await channelService.followChannel(channel.slug);
             }
+
+            await syncSingleChannel(channel.slug);
         } catch (error) {
             console.log("Follow/unfollow error:", error?.raw || error);
 
@@ -416,8 +575,12 @@ export default function Channels({ navigation }) {
              * لذلك لا نعمل rollback بهذه الحالات
              */
             const shouldKeepOptimisticState =
-                error?.code === "ALREADY_FOLLOWING" ||
-                error?.code === "NOT_FOLLOWING";
+                (error?.code === "ALREADY_FOLLOWING" && nextIsFollowing) ||
+                (error?.code === "NOT_FOLLOWING" && !nextIsFollowing);
+
+            if (shouldKeepOptimisticState) {
+                await syncSingleChannel(channel.slug);
+            }
 
             if (!shouldKeepOptimisticState) {
                 /**
@@ -431,7 +594,7 @@ export default function Channels({ navigation }) {
 
                 Alert.alert(
                     isArabic ? "تنبيه" : "Notice",
-                    getFollowErrorMessage(error)
+                    getFollowErrorMessage(error),
                 );
             }
         } finally {
@@ -454,11 +617,7 @@ export default function Channels({ navigation }) {
     const renderError = () => {
         return (
             <View style={styles.errorBox}>
-                <Feather
-                    name="alert-circle"
-                    size={34}
-                    color={colors.danger}
-                />
+                <Feather name="alert-circle" size={34} color={colors.danger} />
 
                 <Text style={[styles.errorTitle, getTextDirectionStyle(isArabic)]}>
                     {isArabic ? "تعذر تحميل القنوات" : "Unable to load channels"}
@@ -577,16 +736,8 @@ export default function Channels({ navigation }) {
                 navigation={navigation}
                 title={t("channels.navTitle")}
                 showTitle={showNavTitle}
-                notificationCount={3}
                 onToggleLanguage={toggleLanguage}
                 menuItems={[
-                    {
-                        key: "settings",
-                        label: t("home.menuSettings"),
-                        iconType: "feather",
-                        iconName: "settings",
-                        onPress: () => navigation.navigate("Settings"),
-                    },
                     {
                         key: "profile",
                         label: t("bottomTabs.profile"),
@@ -740,10 +891,7 @@ function ChannelCard({
 
                 <Text
                     numberOfLines={2}
-                    style={[
-                        styles.channelDescription,
-                        getTextDirectionStyle(isArabic),
-                    ]}
+                    style={[styles.channelDescription, getTextDirectionStyle(isArabic)]}
                 >
                     {channel.description}
                 </Text>
@@ -751,12 +899,7 @@ function ChannelCard({
                 <View style={[styles.followersRow, getRowDirectionStyle(isArabic)]}>
                     <Feather name="users" size={13} color={colors.textMuted} />
 
-                    <Text
-                        style={[
-                            styles.followersText,
-                            getTextDirectionStyle(isArabic),
-                        ]}
-                    >
+                    <Text style={[styles.followersText, getTextDirectionStyle(isArabic)]}>
                         {followersText}
                     </Text>
                 </View>

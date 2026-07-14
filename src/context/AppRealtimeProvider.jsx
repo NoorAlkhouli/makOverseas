@@ -16,6 +16,7 @@ import {
     unsubscribeLivePresenceListener,
 } from '../services/realtime/livePresenceService';
 import {
+    leaveCurrentUserChannel,
     subscribeToUserChannel,
     unsubscribeUserChannelListener,
 } from '../services/realtime/userRealtimeService';
@@ -49,7 +50,7 @@ const getUserIdFromProfile = (response) => {
     );
 };
 
-const prependLimited = (items, item) => {
+const prependLimited = (items = [], item) => {
     return [item, ...items].slice(0, MAX_STORED_EVENTS);
 };
 
@@ -143,6 +144,7 @@ export function AppRealtimeProvider({ children }) {
 
     const listenerKeyRef = useRef(`app-realtime-${Date.now()}-${Math.random()}`);
     const livePresenceListenerKeyRef = useRef(`live-presence-${Date.now()}-${Math.random()}`);
+
     const isMountedRef = useRef(false);
     const subscribedUserIdRef = useRef(null);
 
@@ -166,27 +168,36 @@ export function AppRealtimeProvider({ children }) {
         let isCancelled = false;
 
         const cleanupRealtime = () => {
-            if (listenerKeyRef.current) {
-                unsubscribeUserChannelListener(listenerKeyRef.current);
+            try {
+                if (listenerKeyRef.current) {
+                    unsubscribeUserChannelListener(listenerKeyRef.current);
+                }
+
+                if (livePresenceListenerKeyRef.current) {
+                    unsubscribeLivePresenceListener(livePresenceListenerKeyRef.current);
+                }
+
+                leaveLivePresenceChannel();
+                leaveCurrentUserChannel();
+            } catch (error) {
+                console.log('[AppRealtime] Cleanup ignored after error:', error);
+            } finally {
+                subscribedUserIdRef.current = null;
+
+                updateState(() => INITIAL_REALTIME_STATE);
             }
-
-            if (livePresenceListenerKeyRef.current) {
-                unsubscribeLivePresenceListener(livePresenceListenerKeyRef.current);
-            }
-
-            leaveLivePresenceChannel();
-
-            subscribedUserIdRef.current = null;
-
-            updateState(() => INITIAL_REALTIME_STATE);
         };
 
         const initializeRealtime = async () => {
             try {
                 console.log('[REALTIME DEBUG 01] AppRealtimeProvider initializeRealtime STARTED');
-                const [token, deviceId] = await Promise.all([
+
+                const [token, deviceId, language] = await Promise.all([
                     apiClient.getToken(),
                     apiClient.getDeviceId(),
+                    typeof apiClient.getLanguage === 'function'
+                        ? apiClient.getLanguage()
+                        : Promise.resolve('en'),
                 ]);
 
                 console.log('[REALTIME DEBUG 02] Token / DeviceId loaded:', {
@@ -194,6 +205,7 @@ export function AppRealtimeProvider({ children }) {
                     tokenLength: token ? String(token).length : 0,
                     hasDeviceId: Boolean(deviceId),
                     deviceId,
+                    language,
                 });
 
                 if (isCancelled) {
@@ -205,6 +217,8 @@ export function AppRealtimeProvider({ children }) {
                         hasToken: Boolean(token),
                         hasDeviceId: Boolean(deviceId),
                     });
+
+                    updateState(() => INITIAL_REALTIME_STATE);
                     return;
                 }
 
@@ -227,15 +241,18 @@ export function AppRealtimeProvider({ children }) {
 
                 if (!userId) {
                     console.log('[AppRealtime] Skipped: userId missing from profile.');
+                    updateState(() => INITIAL_REALTIME_STATE);
                     return;
                 }
+
+                const normalizedUserId = String(userId);
 
                 console.log('[REALTIME DEBUG 06] Calling initEcho...');
 
                 const echo = initEcho({
                     token,
                     deviceId,
-                    language: 'en',
+                    language: language || 'en',
                 });
 
                 console.log('[REALTIME DEBUG 07] Echo initialized:', {
@@ -245,7 +262,9 @@ export function AppRealtimeProvider({ children }) {
                     socketId: echo?.socketId?.(),
                 });
 
-                const normalizedUserId = String(userId);
+                if (isCancelled) {
+                    return;
+                }
 
                 subscribedUserIdRef.current = normalizedUserId;
 
@@ -263,6 +282,10 @@ export function AppRealtimeProvider({ children }) {
                     listenerKey: livePresenceListenerKeyRef.current,
 
                     onHere: (users) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[REALTIME DEBUG 09] LIVE .here raw users:', users);
 
                         const normalizedUsers = normalizeRealtimeUsers(users);
@@ -287,6 +310,10 @@ export function AppRealtimeProvider({ children }) {
                     },
 
                     onJoining: (user) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[REALTIME DEBUG 11] LIVE .joining raw user:', user);
 
                         const normalizedUser = normalizeRealtimeUser(user);
@@ -333,6 +360,10 @@ export function AppRealtimeProvider({ children }) {
                     },
 
                     onLeaving: (user) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[REALTIME DEBUG 13] LIVE .leaving raw user:', user);
 
                         const normalizedUser = normalizeRealtimeUser(user);
@@ -387,6 +418,10 @@ export function AppRealtimeProvider({ children }) {
                     listenerKey: listenerKeyRef.current,
 
                     onConversationUpdated: (payload) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[AppRealtime] ConversationUpdated:', payload);
 
                         updateState((currentState) => ({
@@ -401,6 +436,10 @@ export function AppRealtimeProvider({ children }) {
                     },
 
                     onConversationBlockUpdated: (payload) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[AppRealtime] ConversationBlockUpdated:', payload);
 
                         updateState((currentState) => ({
@@ -411,6 +450,10 @@ export function AppRealtimeProvider({ children }) {
                     },
 
                     onNotificationReceived: (payload) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[AppRealtime] notification.received:', payload);
 
                         updateState((currentState) => ({
@@ -425,6 +468,10 @@ export function AppRealtimeProvider({ children }) {
                     },
 
                     onNotificationReadStateChanged: (payload) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[AppRealtime] notification.read_state_changed:', payload);
 
                         updateState((currentState) => ({
@@ -435,6 +482,10 @@ export function AppRealtimeProvider({ children }) {
                     },
 
                     onCallInitiated: (payload) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[AppRealtime] call.initiated:', payload);
 
                         updateState((currentState) => ({
@@ -449,6 +500,10 @@ export function AppRealtimeProvider({ children }) {
                     },
 
                     onCallStatusUpdated: (payload) => {
+                        if (isCancelled) {
+                            return;
+                        }
+
                         console.log('[AppRealtime] call.status_updated:', payload);
 
                         updateState((currentState) => ({
@@ -469,6 +524,10 @@ export function AppRealtimeProvider({ children }) {
                     listenerKeyRef.current = subscription.listenerKey;
                 }
             } catch (error) {
+                if (isCancelled) {
+                    return;
+                }
+
                 console.log('[AppRealtime] Init failed:', {
                     message: error?.message,
                     userMessage: error?.userMessage,
@@ -477,6 +536,8 @@ export function AppRealtimeProvider({ children }) {
                     raw: error?.raw,
                     error,
                 });
+
+                updateState(() => INITIAL_REALTIME_STATE);
             }
         };
 

@@ -2,6 +2,8 @@
 
 import Echo from 'laravel-echo';
 import * as PusherPackage from 'pusher-js/react-native';
+
+import apiClient from '../api/apiClient';
 import { API_BASE_URL, REVERB } from '../../constants/config/apiConfig';
 
 let echoInstance = null;
@@ -123,7 +125,7 @@ function attachConnectionLogs(echo) {
 
     pusherConnection.bind('connected', () => {
         logRealtime('Socket connected ✅');
-        logRealtime('Socket ID:', echo.socketId?.());
+        logRealtime('Socket ID:', getSocketId());
     });
 
     pusherConnection.bind('unavailable', () => {
@@ -152,6 +154,33 @@ function attachConnectionLogs(echo) {
     });
 }
 
+/**
+ * Socket id آمن للـ apiClient
+ * بيرجع null إذا Echo مو جاهز أو socketId مو متوفر بعد.
+ */
+export function getSocketId() {
+    try {
+        return echoInstance?.socketId?.() || null;
+    } catch (error) {
+        return null;
+    }
+}
+
+/**
+ * Alias واضح للاستخدام بملفات تانية إذا احتجناه.
+ */
+export function getEchoSocketId() {
+    return getSocketId();
+}
+
+function registerSocketIdProvider() {
+    apiClient.setSocketIdProvider(() => getSocketId());
+}
+
+function clearSocketIdProvider() {
+    apiClient.clearSocketIdProvider();
+}
+
 export function initEcho({ token, deviceId, language = 'en' }) {
     if (!token) {
         throw new Error('initEcho failed: token is required.');
@@ -162,6 +191,7 @@ export function initEcho({ token, deviceId, language = 'en' }) {
     }
 
     if (echoInstance) {
+        registerSocketIdProvider();
         logRealtime('Echo already initialized. Current socket id:', getSocketId());
         return echoInstance;
     }
@@ -220,9 +250,20 @@ export function initEcho({ token, deviceId, language = 'en' }) {
                 }),
             },
 
+            channelAuthorization: {
+                endpoint: BROADCASTING_AUTH_ENDPOINT,
+                headers: buildAuthHeaders({
+                    token,
+                    deviceId,
+                    language,
+                }),
+                transport: 'ajax',
+            },
+
             client: pusherInstance,
         });
 
+        registerSocketIdProvider();
         attachConnectionLogs(echoInstance);
 
         logRealtime('Echo initialized ✅');
@@ -230,6 +271,8 @@ export function initEcho({ token, deviceId, language = 'en' }) {
         return echoInstance;
     } catch (error) {
         echoInstance = null;
+        clearSocketIdProvider();
+
         isManualDisconnectInProgress = false;
         wasEchoManuallyDisconnected = false;
 
@@ -263,10 +306,6 @@ export function getEcho({ silent = false } = {}) {
     return echoInstance;
 }
 
-export function getSocketId() {
-    return echoInstance?.socketId?.() || null;
-}
-
 export function leaveChannel(channelName) {
     if (!echoInstance || !channelName) {
         return;
@@ -284,6 +323,7 @@ export function disconnectEcho() {
     if (!echoInstance) {
         wasEchoManuallyDisconnected = true;
         isManualDisconnectInProgress = false;
+        clearSocketIdProvider();
         return;
     }
 
@@ -299,6 +339,7 @@ export function disconnectEcho() {
     } finally {
         echoInstance = null;
         isManualDisconnectInProgress = false;
+        clearSocketIdProvider();
         logRealtime('Echo disconnected and cleared.');
     }
 }
